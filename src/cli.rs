@@ -55,10 +55,45 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = GuideTopicArg::All)]
         topic: GuideTopicArg,
     },
+    Add {
+        email: String,
+        name: Option<String>,
+    },
+    Accounts,
+    Use {
+        name: String,
+    },
+    Whoami,
+    Status {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    Login {
+        service: Option<AuthServiceArg>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, hide = true)]
+        client_id: Option<String>,
+        #[arg(long)]
+        env_var: Option<String>,
+        #[arg(long)]
+        app_password: Option<String>,
+        #[arg(long, hide = true)]
+        code: Option<String>,
+        #[arg(long, hide = true)]
+        login_hint: Option<String>,
+    },
+    Logout {
+        service: Option<AuthServiceArg>,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    #[command(hide = true)]
     Account {
         #[command(subcommand)]
         action: AccountCommand,
     },
+    #[command(hide = true)]
     Auth {
         #[command(subcommand)]
         action: AuthCommand,
@@ -122,23 +157,23 @@ pub enum AuthCommand {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, value_enum)]
-        service: AuthServiceArg,
-        #[arg(long)]
+        service: Option<AuthServiceArg>,
+        #[arg(long, hide = true)]
         client_id: Option<String>,
         #[arg(long)]
         env_var: Option<String>,
         #[arg(long)]
         app_password: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         code: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         login_hint: Option<String>,
     },
     Logout {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, value_enum)]
-        service: AuthServiceArg,
+        service: Option<AuthServiceArg>,
     },
 }
 

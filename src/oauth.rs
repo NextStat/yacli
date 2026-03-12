@@ -14,6 +14,7 @@ use crate::error::{Result, YacliError};
 
 pub const DEFAULT_OAUTH_BASE_URL: &str = "https://oauth.yandex.ru";
 pub const DEFAULT_REDIRECT_URI: &str = "https://oauth.yandex.ru/verification_code";
+pub const DEFAULT_YACLI_CLIENT_ID: &str = "babbe3ab2e254d5abee427890e2a5a8f";
 pub const DISK_SCOPES: &[&str] = &[
     "cloud_api:disk.app_folder",
     "cloud_api:disk.info",
@@ -76,18 +77,28 @@ pub fn oauth_base_url() -> String {
     std::env::var("YACLI_OAUTH_BASE_URL").unwrap_or_else(|_| DEFAULT_OAUTH_BASE_URL.to_string())
 }
 
+pub const fn default_yacli_client_id() -> &'static str {
+    DEFAULT_YACLI_CLIENT_ID
+}
+
 pub fn start_pkce_authorization(
-    service: OauthService,
+    services: &[OauthService],
     client_id: &str,
     login_hint: Option<&str>,
 ) -> Result<AuthorizationSession> {
+    if services.is_empty() {
+        return Err(YacliError::Config(
+            "OAuth authorization requires at least one target service".to_string(),
+        ));
+    }
     let code_verifier = random_token(32);
     let code_challenge = pkce_challenge(&code_verifier);
     let state = random_token(16);
+    let scopes = deduped_scopes(services);
     let request = AuthorizationRequest {
         authorization_url: build_authorize_url(
             &oauth_base_url(),
-            service,
+            &scopes,
             client_id,
             &state,
             &code_challenge,
@@ -144,7 +155,7 @@ pub fn unix_timestamp_now() -> u64 {
 
 fn build_authorize_url(
     base_url: &str,
-    service: OauthService,
+    scopes: &[&str],
     client_id: &str,
     state: &str,
     code_challenge: &str,
@@ -156,7 +167,7 @@ fn build_authorize_url(
         query.append_pair("response_type", "code");
         query.append_pair("client_id", client_id);
         query.append_pair("redirect_uri", DEFAULT_REDIRECT_URI);
-        query.append_pair("scope", &service.scopes().join(" "));
+        query.append_pair("scope", &scopes.join(" "));
         query.append_pair("state", state);
         query.append_pair("code_challenge", code_challenge);
         query.append_pair("code_challenge_method", "S256");
@@ -181,6 +192,18 @@ fn oauth_endpoint(base_url: &str, path: &str) -> Result<Url> {
         .map_err(|err| YacliError::Config(format!("invalid OAuth base URL: {err}")))?
         .join(path)
         .map_err(|err| YacliError::Config(format!("invalid OAuth endpoint: {err}")))
+}
+
+fn deduped_scopes(services: &[OauthService]) -> Vec<&'static str> {
+    let mut scopes = Vec::new();
+    for service in services {
+        for scope in service.scopes() {
+            if !scopes.contains(scope) {
+                scopes.push(*scope);
+            }
+        }
+    }
+    scopes
 }
 
 fn pkce_challenge(code_verifier: &str) -> String {
