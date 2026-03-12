@@ -78,20 +78,30 @@ jobs:
       - name: Assemble release checksums
         shell: bash
         run: |
-          find dist -type f -name 'SHA256SUMS-*' -print0 | xargs -0 cat | sort > dist/SHA256SUMS
+          find dist -type f -name 'SHA256SUMS-*' -print0 \
+            | xargs -0 cat \
+            | tr -d '\r' \
+            | sort > dist/SHA256SUMS
       - name: Generate package-manager assets
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
           base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          sha_linux_x64="$(awk '$2 == "yacli-x86_64-unknown-linux-gnu.tar.gz" { print $1 }' dist/SHA256SUMS)"
           sha_macos_arm64="$(awk '$2 == "yacli-aarch64-apple-darwin.tar.gz" { print $1 }' dist/SHA256SUMS)"
           sha_macos_x64="$(awk '$2 == "yacli-x86_64-apple-darwin.tar.gz" { print $1 }' dist/SHA256SUMS)"
           sha_windows_x64="$(awk '$2 == "yacli-x86_64-pc-windows-msvc.zip" { print $1 }' dist/SHA256SUMS)"
+
+          test -n "$sha_linux_x64"
+          test -n "$sha_macos_arm64"
+          test -n "$sha_macos_x64"
+          test -n "$sha_windows_x64"
 
           sh ./scripts/generate-homebrew-formula.sh \
             --version "$version" \
             --base-url "$base_url" \
             --output dist/yacli.rb \
+            --sha256-linux-x64 "$sha_linux_x64" \
             --sha256-macos-arm64 "$sha_macos_arm64" \
             --sha256-macos-x64 "$sha_macos_x64"
 
