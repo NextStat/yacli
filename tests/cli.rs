@@ -262,7 +262,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.23");
+    assert_eq!(value["version"], "0.1.24");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
