@@ -166,6 +166,31 @@ fn account_add_and_list_work() {
 }
 
 #[test]
+fn simple_add_sets_current_account_and_derived_name() {
+    let temp = tempdir().expect("tempdir");
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["add", "me@yandex.ru"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"operation\":\"account.add\""));
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["whoami"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["account"], "me");
+    assert_eq!(value["email"], "me@yandex.ru");
+}
+
+#[test]
 fn guide_lists_stable_commands_and_workflows() {
     let output = yacli()
         .args(["guide"])
@@ -178,9 +203,17 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.20");
+    assert_eq!(value["version"], "0.1.21");
 
     let commands = value["commands"].as_array().expect("commands array");
+    assert!(commands.iter().any(|entry| entry["path"] == "add"));
+    assert!(commands.iter().any(|entry| entry["path"] == "accounts"));
+    assert!(commands.iter().any(|entry| entry["path"] == "use"));
+    assert!(commands.iter().any(|entry| entry["path"] == "whoami"));
+    assert!(commands.iter().any(|entry| entry["path"] == "status"));
+    assert!(commands.iter().any(|entry| entry["path"] == "login"));
+    assert!(commands.iter().any(|entry| entry["path"] == "login calendar"));
+    assert!(commands.iter().any(|entry| entry["path"] == "logout"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail read"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail search"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail reply"));
@@ -298,6 +331,28 @@ fn guide_topic_mail_filters_to_mail_commands() {
             .iter()
             .any(|entry| entry["id"] == "mail_send_flow")
     );
+}
+
+#[test]
+fn guide_topic_auth_filters_to_simple_login_commands() {
+    let output = yacli()
+        .args(["guide", "--topic", "auth"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["topic"], "auth");
+
+    let commands = value["commands"].as_array().expect("commands array");
+    assert!(!commands.is_empty());
+    assert!(commands.iter().all(|entry| entry["topic"] == "auth"));
+    assert!(commands.iter().any(|entry| entry["path"] == "status"));
+    assert!(commands.iter().any(|entry| entry["path"] == "login"));
+    assert!(commands.iter().any(|entry| entry["path"] == "login calendar"));
+    assert!(commands.iter().any(|entry| entry["path"] == "logout"));
 }
 
 #[test]
@@ -625,6 +680,65 @@ fn auth_login_stores_disk_token_and_updates_account_ref() {
 }
 
 #[test]
+fn simple_login_uses_builtin_client_and_connects_mail_and_disk() {
+    let temp = tempdir().expect("tempdir");
+    let mut oauth = Server::new();
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        None,
+        None,
+    );
+
+    let _token = oauth
+        .mock("POST", "/token")
+        .match_body(Matcher::Regex(
+            "grant_type=authorization_code&code=confirm-123&client_id=babbe3ab2e254d5abee427890e2a5a8f&code_verifier=.+".to_string(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "access_token": "access-123",
+  "token_type": "bearer",
+  "expires_in": 3600,
+  "scope": "mail:imap_full mail:smtp cloud_api:disk.app_folder cloud_api:disk.info cloud_api:disk.read cloud_api:disk.write"
+}"#,
+        )
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_OAUTH_BASE_URL", oauth.url())
+        .args(["login", "--code", "confirm-123"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "auth.login");
+    assert_eq!(value["client_id_source"], "built_in");
+    assert_eq!(value["services"][0], "mail");
+    assert_eq!(value["services"][1], "disk");
+    let authorization_url = value["authorization"]["authorization_url"]
+        .as_str()
+        .expect("authorization url");
+    assert!(authorization_url.contains("client_id=babbe3ab2e254d5abee427890e2a5a8f"));
+    assert!(authorization_url.contains("mail%3Aimap_full"));
+    assert!(authorization_url.contains("cloud_api%3Adisk.read"));
+
+    let accounts = fs::read_to_string(temp.path().join("accounts.toml")).expect("accounts");
+    assert!(accounts.contains("[accounts.mock.mail]"));
+    assert!(accounts.contains("[accounts.mock.disk]"));
+    assert!(accounts.contains("credential_ref = \"store:mail\""));
+    assert!(accounts.contains("credential_ref = \"store:disk\""));
+}
+
+#[test]
 fn auth_login_stores_mail_token_and_updates_account_ref() {
     let temp = tempdir().expect("tempdir");
     let mut oauth = Server::new();
@@ -694,6 +808,28 @@ fn auth_login_stores_mail_token_and_updates_account_ref() {
         fs::read_to_string(temp.path().join("credentials.toml")).expect("credentials");
     assert!(credentials.contains("[accounts.mock.services.mail]"));
     assert!(credentials.contains("access_token = \"mail-access-123\""));
+}
+
+#[test]
+fn simple_login_with_app_password_defaults_to_calendar() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_calendar_refs(temp.path(), "https://caldav.yandex.ru", None);
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["login", "--app-password", "calendar-secret"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "auth.login");
+    assert_eq!(value["service"], "calendar");
+    assert_eq!(value["credential_ref"], "store:calendar");
+    assert_eq!(value["mode"], "app_password_store");
 }
 
 #[test]

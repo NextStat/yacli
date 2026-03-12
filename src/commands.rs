@@ -30,19 +30,126 @@ use crate::mail::{
 };
 use crate::model::{AccountConfig, CalendarAuthMode, MailAuthMode, NewAccountInput};
 use crate::oauth::{
-    OauthService, exchange_authorization_code, start_pkce_authorization, unix_timestamp_now,
+    OauthService, default_yacli_client_id, exchange_authorization_code,
+    start_pkce_authorization, unix_timestamp_now,
 };
 use crate::output::RenderedOutput;
 
 pub fn execute(cli: Cli) -> Result<RenderedOutput> {
     match cli.command {
         Command::Guide { topic } => execute_guide(cli.format, topic),
+        Command::Add { email, name } => execute_simple_add(cli.format, email, name),
+        Command::Accounts => execute_account(cli.format, AccountCommand::List),
+        Command::Use { name } => execute_account(cli.format, AccountCommand::Use { name }),
+        Command::Whoami => execute_account(cli.format, AccountCommand::Current),
+        Command::Status { account } => execute_auth(cli.format, AuthCommand::Status { account }),
+        Command::Login {
+            service,
+            account,
+            client_id,
+            env_var,
+            app_password,
+            code,
+            login_hint,
+        } => execute_auth(
+            cli.format,
+            AuthCommand::Login {
+                account,
+                service,
+                client_id,
+                env_var,
+                app_password,
+                code,
+                login_hint,
+            },
+        ),
+        Command::Logout { service, account } => execute_simple_logout(cli.format, account, service),
         Command::Account { action } => execute_account(cli.format, action),
         Command::Auth { action } => execute_auth(cli.format, action),
         Command::Disk { action } => execute_disk(cli.format, action),
         Command::Calendar { action } => execute_calendar(cli.format, action),
         Command::Mail { action } => execute_mail(cli.format, action),
     }
+}
+
+fn execute_simple_add(
+    format: OutputFormat,
+    email: String,
+    name: Option<String>,
+) -> Result<RenderedOutput> {
+    let name = name.unwrap_or_else(|| derive_account_name_from_email(&email));
+    execute_account(
+        format,
+        AccountCommand::Add {
+            name,
+            email,
+            use_as_current: true,
+            mail_auth_mode: crate::cli::MailAuthModeArg::OauthXoauth2,
+            calendar_auth_mode: crate::cli::CalendarAuthModeArg::AppPassword,
+            disk_auth_mode: crate::cli::DiskAuthModeArg::Oauth,
+            mail_credential_ref: None,
+            calendar_credential_ref: None,
+            disk_credential_ref: None,
+        },
+    )
+}
+
+fn execute_simple_logout(
+    format: OutputFormat,
+    account: Option<String>,
+    service: Option<AuthServiceArg>,
+) -> Result<RenderedOutput> {
+    let services = match service {
+        Some(service) => vec![service],
+        None => vec![
+            AuthServiceArg::Mail,
+            AuthServiceArg::Disk,
+            AuthServiceArg::Calendar,
+        ],
+    };
+
+    let mut items = Vec::with_capacity(services.len());
+    for service in services {
+        let output = execute_auth(
+            OutputFormat::Json,
+            AuthCommand::Logout {
+                account: account.clone(),
+                service: Some(service),
+            },
+        )?;
+        items.push(output.json);
+    }
+
+    let account_name = items
+        .first()
+        .and_then(|item| item.get("account"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let table = if items.is_empty() {
+        "No services logged out".to_string()
+    } else {
+        let mut lines = vec!["SERVICE\tREMOVED\tCLEARED_ACCOUNT_REF".to_string()];
+        for item in &items {
+            lines.push(format!(
+                "{}\t{}\t{}",
+                item["service"].as_str().unwrap_or_default(),
+                item["removed"].as_bool().unwrap_or(false),
+                item["cleared_account_ref"].as_bool().unwrap_or(false)
+            ));
+        }
+        lines.join("\n")
+    };
+
+    ok_output(
+        format,
+        "logout",
+        json!({
+            "account": account_name,
+            "items": items,
+        }),
+        table,
+    )
 }
 
 fn execute_guide(format: OutputFormat, topic: GuideTopicArg) -> Result<RenderedOutput> {
@@ -294,18 +401,23 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
         } => {
             let mut account_store = AccountStore::load()?;
             let account_name = account_store.resolved_account_name(account.as_deref())?;
-            match service {
-                AuthServiceArg::Calendar => {
+            let requested_service = if service.is_none() && (env_var.is_some() || app_password.is_some()) {
+                Some(AuthServiceArg::Calendar)
+            } else {
+                service
+            };
+            match requested_service {
+                Some(AuthServiceArg::Calendar) => {
                     let account = account_store.get_account(&account_name)?;
                     ensure_calendar_supports_app_password(account)?;
                     if client_id.is_some() || code.is_some() || login_hint.is_some() {
                         return Err(YacliError::Validation(
-                            "calendar auth login uses app password auth; rerun with `--app-password VALUE` or `--env-var NAME` and without OAuth flags".to_string(),
+                            "calendar login uses app password auth; rerun with `yacli login calendar --app-password <app-password>` or `yacli login calendar --env-var NAME`".to_string(),
                         ));
                     }
                     if env_var.is_some() && app_password.is_some() {
                         return Err(YacliError::Validation(
-                            "calendar auth login accepts either `--app-password` or `--env-var`, but not both".to_string(),
+                            "calendar login accepts either `--app-password` or `--env-var`, but not both".to_string(),
                         ));
                     }
 
@@ -326,7 +438,7 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                         (None, Some(env_var)) => (format!("env:{env_var}"), "app_password_env"),
                         (None, None) => {
                             return Err(YacliError::Validation(
-                                "calendar auth login requires `--app-password VALUE` or `--env-var NAME`".to_string(),
+                                "calendar login requires `--app-password <app-password>` or `--env-var NAME`".to_string(),
                             ));
                         }
                         (Some(_), Some(_)) => unreachable!(),
@@ -357,24 +469,36 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                         ]),
                     )
                 }
-                AuthServiceArg::Mail | AuthServiceArg::Disk => {
-                    let service = oauth_service(service)?;
+                Some(AuthServiceArg::Mail) | Some(AuthServiceArg::Disk) | None => {
                     let account = account_store.get_account(&account_name)?;
-                    ensure_service_supports_oauth(account, service)?;
+                    let services = oauth_login_services(account, requested_service)?;
                     if env_var.is_some() || app_password.is_some() {
-                        return Err(YacliError::Validation(format!(
-                            "{} auth login supports only OAuth flags; use `--client-id`",
-                            service.as_str()
-                        )));
+                        let command_hint = match requested_service {
+                            Some(AuthServiceArg::Mail) => {
+                                "mail login uses built-in OAuth by default; run `yacli login mail`"
+                            }
+                            Some(AuthServiceArg::Disk) => {
+                                "disk login uses built-in OAuth by default; run `yacli login disk`"
+                            }
+                            None => {
+                                "plain `yacli login` connects Почту и Диск; calendar still requires `yacli login calendar --app-password <app-password>` or `--env-var`"
+                            }
+                            Some(AuthServiceArg::Calendar) => unreachable!(),
+                        };
+                        return Err(YacliError::Validation(command_hint.to_string()));
                     }
-                    let client_id = client_id.ok_or_else(|| {
-                        YacliError::Validation(format!(
-                            "{} auth login requires `--client-id`",
-                            service.as_str()
-                        ))
-                    })?;
+                    let client_id_source = if client_id.is_some() {
+                        "override"
+                    } else {
+                        "built_in"
+                    };
+                    let client_id =
+                        client_id.unwrap_or_else(|| default_yacli_client_id().to_string());
+                    let resolved_login_hint = login_hint
+                        .as_deref()
+                        .or(Some(account.email.as_str()));
                     let session =
-                        start_pkce_authorization(service, &client_id, login_hint.as_deref())?;
+                        start_pkce_authorization(&services, &client_id, resolved_login_hint)?;
                     let code = match code {
                         Some(code) => code,
                         None => read_confirmation_code(&session.request.authorization_url)?,
@@ -382,27 +506,65 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                     let login = exchange_authorization_code(session, &code)?;
 
                     let mut credential_store = CredentialStore::load()?;
-                    credential_store.set_oauth(
-                        account_name.clone(),
-                        service.as_str().to_string(),
-                        login.credential.clone(),
-                    );
+                    let credential_refs: Vec<_> = services
+                        .iter()
+                        .map(|service| {
+                            credential_store.set_oauth(
+                                account_name.clone(),
+                                service.as_str().to_string(),
+                                login.credential.clone(),
+                            );
+                            account_store.set_service_credential_ref(
+                                &account_name,
+                                service.as_str(),
+                                Some(service.store_ref().to_string()),
+                            )?;
+                            Ok((service.as_str().to_string(), service.store_ref().to_string()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     credential_store.save()?;
-
-                    account_store.set_service_credential_ref(
-                        &account_name,
-                        service.as_str(),
-                        Some(service.store_ref().to_string()),
-                    )?;
                     account_store.save()?;
+
+                    if services.len() == 1 {
+                        let service = services[0];
+                        let credential_ref = service.store_ref().to_string();
+                        return ok_output(
+                            format,
+                            "auth.login",
+                            json!({
+                                "account": account_name,
+                                "service": service.as_str(),
+                                "credential_ref": credential_ref,
+                                "client_id_source": client_id_source,
+                                "authorization": login.authorization,
+                                "token": {
+                                    "token_type": login.credential.token_type,
+                                    "expires_at_epoch_secs": login.credential.expires_at_epoch_secs,
+                                    "scope": login.credential.scope,
+                                }
+                            }),
+                            render_key_value_table(&[
+                                ("operation", "auth.login".to_string()),
+                                ("account", account_name),
+                                ("service", service.as_str().to_string()),
+                                ("credential_ref", credential_ref),
+                                ("client_id_source", client_id_source.to_string()),
+                                (
+                                    "expires_at_epoch_secs",
+                                    login.credential.expires_at_epoch_secs.to_string(),
+                                ),
+                            ]),
+                        );
+                    }
 
                     ok_output(
                         format,
                         "auth.login",
                         json!({
                             "account": account_name,
-                            "service": service.as_str(),
-                            "credential_ref": service.store_ref(),
+                            "services": services.iter().map(|service| service.as_str()).collect::<Vec<_>>(),
+                            "credential_refs": credential_refs,
+                            "client_id_source": client_id_source,
                             "authorization": login.authorization,
                             "token": {
                                 "token_type": login.credential.token_type,
@@ -413,8 +575,9 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                         render_key_value_table(&[
                             ("operation", "auth.login".to_string()),
                             ("account", account_name),
-                            ("service", service.as_str().to_string()),
-                            ("credential_ref", service.store_ref().to_string()),
+                            ("services", services.iter().map(|service| service.as_str()).collect::<Vec<_>>().join(",")),
+                            ("credential_refs", credential_refs.iter().map(|(service, credential_ref)| format!("{service}={credential_ref}")).collect::<Vec<_>>().join(",")),
+                            ("client_id_source", client_id_source.to_string()),
                             (
                                 "expires_at_epoch_secs",
                                 login.credential.expires_at_epoch_secs.to_string(),
@@ -425,6 +588,11 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
             }
         }
         AuthCommand::Logout { account, service } => {
+            let service = service.ok_or_else(|| {
+                YacliError::Validation(
+                    "logout without service is handled by the top-level `yacli logout`; internal `auth logout` still requires an explicit service".to_string(),
+                )
+            })?;
             let mut account_store = AccountStore::load()?;
             let account_name = account_store.resolved_account_name(account.as_deref())?;
             match service {
@@ -1168,9 +1336,7 @@ fn auth_state(
                             CredentialState {
                                 credential_ref: Some(raw.to_string()),
                                 credential_state: "store_expired",
-                                detail: format!(
-                                    "stored OAuth token expired or is near expiry; run `yacli auth login --service {service}` again"
-                                ),
+                                detail: "stored OAuth token expired or is near expiry; run `yacli login` again".to_string(),
                             }
                         }
                     }
@@ -1233,95 +1399,60 @@ fn guide_workflows(topic: GuideTopicArg) -> Vec<GuideWorkflowEntry> {
 fn all_guide_commands() -> Vec<GuideCommandEntry> {
     vec![
         GuideCommandEntry {
-            path: "account add",
+            path: "add",
             topic: "account",
-            summary: "Добавить новый аккаунт Яндекса по имени и email.",
+            summary: "Добавить аккаунт Яндекса и сразу сделать его текущим.",
             requires_account: false,
-            examples: vec!["yacli account add personal me@yandex.ru --use"],
+            examples: vec!["yacli add me@yandex.ru"],
         },
         GuideCommandEntry {
-            path: "account list",
+            path: "accounts",
             topic: "account",
             summary: "Показать все настроенные аккаунты.",
             requires_account: false,
-            examples: vec!["yacli account list"],
+            examples: vec!["yacli accounts"],
         },
         GuideCommandEntry {
-            path: "account show",
+            path: "use",
             topic: "account",
-            summary: "Показать конфигурацию одного аккаунта или текущего по умолчанию.",
-            requires_account: true,
-            examples: vec!["yacli account show personal"],
-        },
-        GuideCommandEntry {
-            path: "account validate",
-            topic: "account",
-            summary: "Проверить корректность одного аккаунта или текущего по умолчанию.",
-            requires_account: true,
-            examples: vec!["yacli account validate personal"],
-        },
-        GuideCommandEntry {
-            path: "account use",
-            topic: "account",
-            summary: "Сделать аккаунт текущим для последующих команд без `--account`.",
+            summary: "Сделать аккаунт текущим для последующих команд.",
             requires_account: false,
-            examples: vec!["yacli account use work"],
+            examples: vec!["yacli use work"],
         },
         GuideCommandEntry {
-            path: "account current",
+            path: "whoami",
             topic: "account",
             summary: "Показать текущий активный аккаунт.",
             requires_account: false,
-            examples: vec!["yacli account current"],
+            examples: vec!["yacli whoami"],
         },
         GuideCommandEntry {
-            path: "auth status",
+            path: "status",
             topic: "auth",
-            summary: "Проверить состояние учетных данных по сервисам.",
+            summary: "Показать, что подключено у текущего аккаунта.",
             requires_account: true,
-            examples: vec!["yacli auth status"],
+            examples: vec!["yacli status"],
         },
         GuideCommandEntry {
-            path: "auth login --service mail",
+            path: "login",
             topic: "auth",
-            summary: "Получить OAuth-токен для Яндекс Почты через PKCE.",
+            summary: "Подключить Почту и Диск одной OAuth-командой через встроенное приложение yacli.",
             requires_account: true,
-            examples: vec!["yacli auth login --service mail --client-id <client-id>"],
+            examples: vec!["yacli login", "yacli login mail", "yacli login disk"],
         },
         GuideCommandEntry {
-            path: "auth logout --service mail",
+            path: "logout",
             topic: "auth",
-            summary: "Удалить сохраненный OAuth-токен Почты только у выбранного аккаунта.",
+            summary: "Отключить все сервисы у текущего аккаунта или только один выбранный сервис.",
             requires_account: true,
-            examples: vec!["yacli auth logout --service mail"],
+            examples: vec!["yacli logout", "yacli logout mail", "yacli logout calendar"],
         },
         GuideCommandEntry {
-            path: "auth login --service calendar",
+            path: "login calendar",
             topic: "auth",
-            summary: "Сохранить app password для CalDAV-календаря или привязать env-переменную.",
+            summary: "Подключить Календарь через пароль приложения Яндекс ID или env-переменную.",
             requires_account: true,
-            examples: vec!["yacli auth login --service calendar --app-password <app-password>"],
-        },
-        GuideCommandEntry {
-            path: "auth logout --service calendar",
-            topic: "auth",
-            summary: "Очистить credential_ref календаря у выбранного аккаунта.",
-            requires_account: true,
-            examples: vec!["yacli auth logout --service calendar"],
-        },
-        GuideCommandEntry {
-            path: "auth login --service disk",
-            topic: "auth",
-            summary: "Получить OAuth-токен для Яндекс Диска через PKCE.",
-            requires_account: true,
-            examples: vec!["yacli auth login --service disk --client-id <client-id>"],
-        },
-        GuideCommandEntry {
-            path: "auth logout --service disk",
-            topic: "auth",
-            summary: "Удалить сохраненный OAuth-токен Диска только у выбранного аккаунта.",
-            requires_account: true,
-            examples: vec!["yacli auth logout --service disk"],
+            examples: vec!["yacli login calendar --app-password <app-password>"],
         },
         GuideCommandEntry {
             path: "mail folders",
@@ -1467,8 +1598,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Прочитать письмо из Яндекс Почты",
             summary: "Полный поток от добавления аккаунта и логина до чтения письма по UID.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service mail --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli mail list --folder INBOX --limit 10",
                 "yacli mail read --folder INBOX --uid <uid>",
             ],
@@ -1479,8 +1610,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Найти письмо по тексту",
             summary: "Поток от OAuth логина до поиска письма и открытия результата по UID.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service mail --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli mail search --folder INBOX --query \"Budget\" --limit 5",
                 "yacli mail read --folder INBOX --uid <uid>",
             ],
@@ -1491,8 +1622,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Ответить на письмо",
             summary: "Поток от поиска письма до отправки ответа в тот же thread.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service mail --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli mail search --folder INBOX --query \"Budget\" --limit 5",
                 "yacli mail reply --folder INBOX --uid <uid> --text \"Принято\"",
             ],
@@ -1503,8 +1634,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Переслать письмо",
             summary: "Поток от поиска письма до inline-forward новому получателю.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service mail --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli mail search --folder INBOX --query \"Budget\" --limit 5",
                 "yacli mail forward --folder INBOX --uid <uid> --to person@example.com --text \"FYI\"",
             ],
@@ -1525,8 +1656,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Просмотреть приватный Яндекс Диск",
             summary: "Поток добавления аккаунта, OAuth-логина и просмотра содержимого папки.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service disk --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli disk list --path disk:/ --limit 50",
             ],
         },
@@ -1536,8 +1667,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Создать папку и загрузить файл на Диск",
             summary: "Поток от OAuth-логина до создания директории и загрузки локального файла.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service disk --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli disk mkdir --path disk:/docs/archive",
                 "yacli disk upload --source ./report.pdf --path disk:/docs/archive/report.pdf",
                 "yacli disk list --path disk:/docs/archive --limit 50",
@@ -1549,8 +1680,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Подключить приватный Яндекс Диск",
             summary: "Поток добавления аккаунта и OAuth для приватного Диска.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service disk --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli disk info",
                 "yacli disk list --path disk:/ --limit 50",
                 "yacli disk mkdir --path disk:/docs/archive",
@@ -1561,16 +1692,16 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             id: "multi_account_mail_flow",
             topic: "mail",
             title: "Работать с несколькими почтовыми аккаунтами",
-            summary: "Независимый доступ к нескольким ящикам через именованные аккаунты и `account use`.",
+            summary: "Независимый доступ к нескольким ящикам через именованные аккаунты и `use`.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli account add work me@company.ru",
-                "yacli auth login --service mail --client-id <client-id>",
-                "yacli account use work",
-                "yacli auth login --service mail --client-id <client-id>",
-                "yacli account use personal",
+                "yacli add personal@yandex.ru",
+                "yacli add work@company.ru",
+                "yacli login",
+                "yacli use work",
+                "yacli login",
+                "yacli use personal",
                 "yacli mail list --folder INBOX --limit 5",
-                "yacli account use work",
+                "yacli use work",
                 "yacli mail list --folder INBOX --limit 5",
             ],
         },
@@ -1580,8 +1711,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Отправить письмо",
             summary: "Поток от OAuth логина до отправки письма через SMTP.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service mail --client-id <client-id>",
+                "yacli add me@yandex.ru",
+                "yacli login",
                 "yacli mail send --to person@example.com --subject \"Синк\" --text \"Привет\"",
             ],
         },
@@ -1591,8 +1722,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Посмотреть календари и события",
             summary: "Поток от сохранения app password до чтения событий через CalDAV.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service calendar --app-password <app-password>",
+                "yacli add me@yandex.ru",
+                "yacli login calendar --app-password <app-password>",
                 "yacli calendar calendars",
                 "yacli calendar events --calendar default --from 2026-03-12 --to 2026-03-19 --limit 20",
             ],
@@ -1603,8 +1734,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             title: "Создать и удалить событие",
             summary: "Поток от логина до create/delete календарного события.",
             steps: vec![
-                "yacli account add personal me@yandex.ru --use",
-                "yacli auth login --service calendar --app-password <app-password>",
+                "yacli add me@yandex.ru",
+                "yacli login calendar --app-password <app-password>",
                 "yacli calendar create --calendar default --summary \"Синк\" --start 2026-03-12T09:00:00Z --end 2026-03-12T10:00:00Z",
                 "yacli calendar delete --calendar default --uid <uid>",
             ],
@@ -1630,10 +1761,39 @@ fn ensure_service_supports_oauth(account: &AccountConfig, service: OauthService)
     }
 }
 
+fn oauth_login_services(
+    account: &AccountConfig,
+    requested: Option<AuthServiceArg>,
+) -> Result<Vec<OauthService>> {
+    let services = match requested {
+        Some(AuthServiceArg::Mail) => vec![OauthService::Mail],
+        Some(AuthServiceArg::Disk) => vec![OauthService::Disk],
+        Some(AuthServiceArg::Calendar) => {
+            return Err(YacliError::UnsupportedOperation(
+                "calendar does not use OAuth login in the stable surface; use `yacli login calendar --app-password <app-password>`".to_string(),
+            ));
+        }
+        None => {
+            let mut services = Vec::new();
+            if matches!(account.mail.auth_mode, MailAuthMode::OauthXoauth2) {
+                services.push(OauthService::Mail);
+            }
+            services.push(OauthService::Disk);
+            services
+        }
+    };
+
+    for service in &services {
+        ensure_service_supports_oauth(account, *service)?;
+    }
+
+    Ok(services)
+}
+
 fn ensure_calendar_supports_app_password(account: &AccountConfig) -> Result<()> {
     if !matches!(account.calendar.auth_mode, CalendarAuthMode::AppPassword) {
         return Err(YacliError::UnsupportedOperation(
-            "calendar auth login currently supports only account.calendar.auth_mode=app_password"
+            "calendar login currently supports only account.calendar.auth_mode=app_password"
                 .to_string(),
         ));
     }
@@ -1646,9 +1806,43 @@ fn oauth_service(value: AuthServiceArg) -> Result<OauthService> {
         AuthServiceArg::Mail => Ok(OauthService::Mail),
         AuthServiceArg::Disk => Ok(OauthService::Disk),
         AuthServiceArg::Calendar => Err(YacliError::UnsupportedOperation(
-            "calendar does not use OAuth login in the stable surface; use `yacli auth login --service calendar --app-password <app-password>` or `--env-var NAME`"
+            "calendar does not use OAuth login in the stable surface; use `yacli login calendar --app-password <app-password>`"
                 .to_string(),
         )),
+    }
+}
+
+fn derive_account_name_from_email(email: &str) -> String {
+    let local = email.split('@').next().unwrap_or(email);
+    let mut derived = String::with_capacity(local.len());
+    let mut last_was_dash = false;
+
+    for character in local.chars() {
+        let normalized = match character {
+            'a'..='z' | '0'..='9' => Some(character),
+            'A'..='Z' => Some(character.to_ascii_lowercase()),
+            '.' | '_' | '-' => Some(character),
+            _ => Some('-'),
+        };
+
+        if let Some(value) = normalized {
+            if value == '-' {
+                if !last_was_dash {
+                    derived.push(value);
+                }
+                last_was_dash = true;
+            } else {
+                derived.push(value);
+                last_was_dash = false;
+            }
+        }
+    }
+
+    let trimmed = derived.trim_matches('-');
+    if trimmed.is_empty() {
+        "account".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -1779,11 +1973,10 @@ fn resolve_oauth_access_token(
 
             if stored.expires_at_epoch_secs <= unix_timestamp_now().saturating_add(60) {
                 return Err(YacliError::Auth(format!(
-                    "stored OAuth token expired for account {} service {}; run `yacli auth login --account {} --service {}` again",
+                    "stored OAuth token expired for account {} service {}; run `yacli login --account {}` again",
                     account_name,
                     service.as_str(),
-                    account_name,
-                    service.as_str()
+                    account_name
                 )));
             }
 

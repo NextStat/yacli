@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install
 Конкретная версия:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.20
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.21
 ```
 
 По умолчанию бинарь ставится в `~/.local/bin`.
@@ -90,7 +90,7 @@ irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | 
 Конкретная версия:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.20
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.21
 ```
 
 По умолчанию бинарь ставится в `%LOCALAPPDATA%\Programs\yacli\bin`.
@@ -113,7 +113,7 @@ winget install --manifest (Join-Path $tmp "NextStat.yacli") --accept-package-agr
 $tmp = Join-Path $env:TEMP "yacli-winget"
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-Invoke-WebRequest https://github.com/NextStat/yacli/releases/download/v0.1.20/winget-manifests.zip -OutFile (Join-Path $tmp "winget-manifests.zip")
+Invoke-WebRequest https://github.com/NextStat/yacli/releases/download/v0.1.21/winget-manifests.zip -OutFile (Join-Path $tmp "winget-manifests.zip")
 Expand-Archive -Path (Join-Path $tmp "winget-manifests.zip") -DestinationPath $tmp -Force
 winget settings --enable LocalManifestFiles
 winget install --manifest (Join-Path $tmp "NextStat.yacli") --accept-package-agreements --disable-interactivity
@@ -134,12 +134,11 @@ cargo install --path .
 
 ## С чего начать
 
-Перед работой лучше сначала открыть встроенную справку. Это самый простой способ понять, какие команды уже поддерживаются и как ими пользоваться.
+Если хочешь быстро понять, что вообще умеет `yacli`, начни с живой справки:
 
 ```bash
 yacli guide
 yacli guide --topic account
-yacli guide --topic auth
 yacli guide --topic mail
 yacli guide --topic calendar
 yacli guide --topic disk
@@ -147,35 +146,44 @@ yacli guide --topic disk
 
 ## Быстрый старт
 
+Обычному пользователю нужны четыре вещи:
+
+1. добавить аккаунт
+2. одной командой подключить Почту и Диск
+3. отдельно подключить Календарь паролем приложения
+4. проверить, что все взлетело
+
 ### 1. Добавить аккаунт
 
 ```bash
-yacli account add personal me@yandex.ru --use
-yacli account current
+yacli add me@yandex.ru
+yacli whoami
 ```
 
-### 2. Подключить Почту
+`yacli` сам создаст короткое имя аккаунта из email и сделает его текущим.
+
+### 2. Подключить Почту и Диск
 
 ```bash
-yacli auth login --service mail --client-id <client-id>
+yacli login
 ```
+
+Важно:
+
+- никакой `--client-id` для обычного сценария не нужен
+- `yacli` использует встроенное OAuth-приложение по умолчанию
+- команда выше подключает сразу Почту и приватный Диск
 
 ### 3. Подключить Календарь
 
 ```bash
-yacli auth login --service calendar --app-password <app-password>
+yacli login calendar --app-password <app-password>
 ```
 
-### 4. Подключить приватный Диск
+### 4. Проверить, что все работает
 
 ```bash
-yacli auth login --service disk --client-id <client-id>
-```
-
-### 5. Проверить, что все работает
-
-```bash
-yacli auth status
+yacli status
 
 yacli mail folders
 yacli mail list --folder INBOX --limit 10
@@ -190,15 +198,21 @@ yacli disk list --path disk:/ --limit 50
 
 ## Основные команды
 
-### Аккаунты
+### Базовые
 
 ```bash
-yacli account add personal me@yandex.ru --use
-yacli account list
-yacli account show
-yacli account validate
-yacli account current
-yacli account use personal
+yacli add me@yandex.ru
+yacli accounts
+yacli use work
+yacli whoami
+yacli status
+yacli login
+yacli login mail
+yacli login disk
+yacli login calendar --app-password <app-password>
+yacli logout
+yacli logout mail
+yacli logout calendar
 ```
 
 ### Почта
@@ -285,52 +299,50 @@ yacli disk public download \
 Пример:
 
 ```bash
-yacli account add personal me@yandex.ru --use
-yacli auth login --service mail --client-id <client-id>
+yacli add personal@yandex.ru
+yacli login
 
-yacli account add work me@company.ru
-yacli account use work
-yacli auth login --service mail --client-id <client-id>
+yacli add work@company.ru
+yacli use work
+yacli login
 
-yacli account use personal
+yacli use personal
 yacli mail folders
 
-yacli account use work
+yacli use work
 yacli mail search --folder INBOX --query "invoice" --limit 5
 ```
 
 Что важно:
 
 - у каждого аккаунта свои учетные данные
-- `account use` переключает текущий аккаунт
+- `use` переключает текущий аккаунт
 - если нужно, можно явно указать аккаунт через `--account <name>`
-- `auth logout --account <name> --service <service>` удаляет данные только у выбранного аккаунта
+- `logout --account <name>` удаляет подключение только у выбранного аккаунта
 
 ## Как устроен вход
 
 ### Почта и Диск
 
-Для Почты и Диска используется OAuth с PKCE.
+Для Почты и Диска используется OAuth с PKCE, но в обычном сценарии это скрыто внутри одной команды.
 
 ```bash
-yacli auth login --service mail --client-id <client-id>
-yacli auth login --service disk --client-id <client-id>
+yacli login
 ```
 
-Если код подтверждения уже известен, его можно передать сразу:
+Если нужно подключить только один сервис:
 
 ```bash
-yacli auth login \
-  --service disk \
-  --client-id <client-id> \
-  --code <confirmation-code>
+yacli login mail
+yacli login disk
 ```
 
 Выход:
 
 ```bash
-yacli auth logout --service mail
-yacli auth logout --service disk
+yacli logout
+yacli logout mail
+yacli logout disk
 ```
 
 ### Календарь
@@ -340,9 +352,7 @@ yacli auth logout --service disk
 Обычный вариант:
 
 ```bash
-yacli auth login \
-  --service calendar \
-  --app-password <app-password>
+yacli login calendar --app-password <app-password>
 ```
 
 После этого пароль приложения сохраняется локально, и команды календаря можно запускать без дополнительных переменных окружения.
@@ -350,7 +360,7 @@ yacli auth login \
 Выход:
 
 ```bash
-yacli auth logout --service calendar
+yacli logout calendar
 ```
 
 ### Если не хочешь хранить пароль локально
@@ -360,9 +370,7 @@ yacli auth logout --service calendar
 ```bash
 export YACLI_CALENDAR_APP_PASSWORD='<app-password>'
 
-yacli auth login \
-  --service calendar \
-  --env-var YACLI_CALENDAR_APP_PASSWORD
+yacli login calendar --env-var YACLI_CALENDAR_APP_PASSWORD
 ```
 
 Этот вариант удобен для автоматических сценариев и CI.
@@ -408,7 +416,7 @@ export YACLI_CONFIG_DIR=/path/to/config-dir
 Если нужен табличный вид:
 
 ```bash
-yacli --format table account list
+yacli --format table accounts
 ```
 
 Поддерживаются два варианта:
@@ -418,22 +426,19 @@ yacli --format table account list
 
 ## Поддерживаемые команды
 
-В `v0.1.20` к поддерживаемым относятся:
+В `v0.1.21` к поддерживаемым относятся:
 
 - `yacli guide`
-- `yacli account add`
-- `yacli account list`
-- `yacli account show`
-- `yacli account validate`
-- `yacli account use`
-- `yacli account current`
-- `yacli auth login --service mail`
-- `yacli auth login --service calendar`
-- `yacli auth login --service disk`
-- `yacli auth logout --service mail`
-- `yacli auth logout --service calendar`
-- `yacli auth logout --service disk`
-- `yacli auth status`
+- `yacli add`
+- `yacli accounts`
+- `yacli use`
+- `yacli whoami`
+- `yacli status`
+- `yacli login`
+- `yacli login mail`
+- `yacli login disk`
+- `yacli login calendar`
+- `yacli logout`
 - `yacli mail folders`
 - `yacli mail list`
 - `yacli mail search`
@@ -452,7 +457,7 @@ yacli --format table account list
 - `yacli disk public show`
 - `yacli disk public download`
 
-Стабильные каналы установки в `v0.1.20`:
+Стабильные каналы установки в `v0.1.21`:
 
 - `Homebrew` tap `NextStat/yacli`
 - `winget` архив с manifest-файлами из GitHub Release assets
@@ -463,8 +468,8 @@ yacli --format table account list
 
 ## Что полезно знать заранее
 
-- `auth status` показывает, настроен ли доступ к Почте, Календарю и Диску
-- если OAuth-токен для Почты или Диска истек, нужно заново выполнить `auth login`
+- `status` показывает, настроен ли доступ к Почте, Календарю и Диску
+- если OAuth-токен для Почты или Диска истек, нужно заново выполнить `login`
 - `mail list` и `mail search` принимают `--limit` от `1` до `100`
 - `mail read` ограничивает размер письма через `--max-bytes`
 - `mail reply` отвечает на `Reply-To`, а если его нет, то на `From`
