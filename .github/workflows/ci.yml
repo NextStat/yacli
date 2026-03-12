@@ -76,13 +76,6 @@ jobs:
           python3 -m http.server 8877 --bind 127.0.0.1 --directory dist >/tmp/yacli-install-smoke.log 2>&1 &
           echo $! > server.pid
           sleep 2
-      - name: Start local asset server (Windows)
-        if: matrix.package_kind == 'windows'
-        shell: pwsh
-        run: |
-          $process = Start-Process python -ArgumentList '-m','http.server','8877','--bind','127.0.0.1','--directory','dist' -PassThru
-          $process.Id | Out-File server.pid -Encoding ascii
-          Start-Sleep -Seconds 2
       - name: Smoke Unix installer
         if: matrix.package_kind == 'unix'
         shell: bash
@@ -95,8 +88,36 @@ jobs:
         shell: pwsh
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP "bin"
-          ./scripts/install.ps1 -BaseUrl http://127.0.0.1:8877 -InstallDir $installDir
-          & (Join-Path $installDir "yacli.exe") --format json guide --topic disk
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "yacli-install-smoke.stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "yacli-install-smoke.stderr.log"
+          $process = Start-Process python -WorkingDirectory (Resolve-Path .) -ArgumentList '-m','http.server','8877','--bind','127.0.0.1','--directory','dist' -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 20; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri "http://127.0.0.1:8877/SHA256SUMS" -UseBasicParsing | Out-Null
+                $ready = $true
+                break
+              }
+              catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $ready) {
+              if (Test-Path $stdoutLog) {
+                Get-Content $stdoutLog
+              }
+              if (Test-Path $stderrLog) {
+                Get-Content $stderrLog
+              }
+              throw "Local asset server did not become ready on Windows."
+            }
+            ./scripts/install.ps1 -BaseUrl http://127.0.0.1:8877 -InstallDir $installDir
+            & (Join-Path $installDir "yacli.exe") --format json guide --topic disk
+          }
+          finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
 
   homebrew-smoke:
     runs-on: macos-latest
@@ -121,6 +142,11 @@ jobs:
           tap_dir="$RUNNER_TEMP/homebrew-yacli-smoke"
           mkdir -p "$tap_dir/Formula"
           cp dist/yacli.rb "$tap_dir/Formula/yacli.rb"
+          git -C "$tap_dir" init -b main
+          git -C "$tap_dir" config user.name "GitHub Actions"
+          git -C "$tap_dir" config user.email "actions@github.com"
+          git -C "$tap_dir" add Formula/yacli.rb
+          git -C "$tap_dir" commit -m "Add yacli formula"
           echo "TAP_DIR=$tap_dir" >> "$GITHUB_ENV"
       - name: Start local asset server
         shell: bash
@@ -187,6 +213,6 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path server.pid) {
-            $pid = Get-Content server.pid
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            $serverPid = Get-Content server.pid
+            Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
           }

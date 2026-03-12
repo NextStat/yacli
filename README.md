@@ -72,14 +72,30 @@ curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install
 Конкретная версия:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.19
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.20
 ```
 
 По умолчанию бинарь ставится в `~/.local/bin`.
 
 ### Windows
 
-Через `winget`:
+Основной путь для Windows без `cargo` и без `winget`-танцев:
+
+Последний опубликованный релиз:
+
+```powershell
+irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | iex
+```
+
+Конкретная версия:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.20
+```
+
+По умолчанию бинарь ставится в `%LOCALAPPDATA%\Programs\yacli\bin`.
+
+Если нужен `winget`, он тоже поддерживается, но сейчас это дополнительный путь через manifest bundle из релиза:
 
 ```powershell
 $tmp = Join-Path $env:TEMP "yacli-winget"
@@ -97,27 +113,11 @@ winget install --manifest (Join-Path $tmp "NextStat.yacli") --accept-package-agr
 $tmp = Join-Path $env:TEMP "yacli-winget"
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-Invoke-WebRequest https://github.com/NextStat/yacli/releases/download/v0.1.19/winget-manifests.zip -OutFile (Join-Path $tmp "winget-manifests.zip")
+Invoke-WebRequest https://github.com/NextStat/yacli/releases/download/v0.1.20/winget-manifests.zip -OutFile (Join-Path $tmp "winget-manifests.zip")
 Expand-Archive -Path (Join-Path $tmp "winget-manifests.zip") -DestinationPath $tmp -Force
 winget settings --enable LocalManifestFiles
 winget install --manifest (Join-Path $tmp "NextStat.yacli") --accept-package-agreements --disable-interactivity
 ```
-
-Если нужен более короткий путь без ручной распаковки manifest-файлов, используй `install.ps1`.
-
-Последний опубликованный релиз:
-
-```powershell
-irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | iex
-```
-
-Конкретная версия:
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.19
-```
-
-По умолчанию бинарь ставится в `%LOCALAPPDATA%\Programs\yacli\bin`.
 
 Текущие release-артефакты собираются для:
 
@@ -418,7 +418,7 @@ yacli --format table account list
 
 ## Поддерживаемые команды
 
-В `v0.1.19` к поддерживаемым относятся:
+В `v0.1.20` к поддерживаемым относятся:
 
 - `yacli guide`
 - `yacli account add`
@@ -452,7 +452,7 @@ yacli --format table account list
 - `yacli disk public show`
 - `yacli disk public download`
 
-Стабильные каналы установки в `v0.1.19`:
+Стабильные каналы установки в `v0.1.20`:
 
 - `Homebrew` tap `NextStat/yacli`
 - `winget` архив с manifest-файлами из GitHub Release assets
