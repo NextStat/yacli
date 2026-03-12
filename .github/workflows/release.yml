@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-assets:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: yacli-x86_64-unknown-linux-gnu.tar.gz
+            package_kind: unix
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: yacli-x86_64-apple-darwin.tar.gz
+            package_kind: unix
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: yacli-aarch64-apple-darwin.tar.gz
+            package_kind: unix
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: yacli-x86_64-pc-windows-msvc.zip
+            package_kind: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package Unix asset
+        if: matrix.package_kind == 'unix'
+        shell: bash
+        run: |
+          mkdir -p dist
+          asset_path="$(sh ./scripts/package-release.sh --target "${{ matrix.target }}" --binary "target/${{ matrix.target }}/release/yacli" --output-dir dist)"
+          asset_name="$(basename "$asset_path")"
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$asset_path" | awk -v name="$asset_name" '{print $1 "  " name}' > "dist/SHA256SUMS-${{ matrix.target }}"
+          else
+            sha256sum "$asset_path" | awk -v name="$asset_name" '{print $1 "  " name}' > "dist/SHA256SUMS-${{ matrix.target }}"
+          fi
+      - name: Package Windows asset
+        if: matrix.package_kind == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $stageDir = Join-Path $env:RUNNER_TEMP "yacli-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/yacli.exe" (Join-Path $stageDir "yacli.exe")
+          Copy-Item "README.md" (Join-Path $stageDir "README.md")
+          Copy-Item "LICENSE" (Join-Path $stageDir "LICENSE")
+          $assetPath = Join-Path (Resolve-Path dist) "${{ matrix.asset }}"
+          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $assetPath -Force
+          $hash = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.asset }}" | Out-File -FilePath (Join-Path (Resolve-Path dist) "SHA256SUMS-${{ matrix.target }}") -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build-assets
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Assemble release checksums
+        shell: bash
+        run: |
+          find dist -type f -name 'SHA256SUMS-*' -print0 | xargs -0 cat | sort > dist/SHA256SUMS
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/**/yacli-*.tar.gz
+            dist/**/yacli-*.zip
+            dist/SHA256SUMS

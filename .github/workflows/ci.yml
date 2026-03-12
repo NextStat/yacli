@@ -18,3 +18,82 @@ jobs:
         run: cargo test --workspace
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  install-smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: yacli-x86_64-unknown-linux-gnu.tar.gz
+            package_kind: unix
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: yacli-aarch64-apple-darwin.tar.gz
+            package_kind: unix
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: yacli-x86_64-pc-windows-msvc.zip
+            package_kind: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package Unix release asset
+        if: matrix.package_kind == 'unix'
+        shell: bash
+        run: |
+          mkdir -p dist
+          asset_path="$(sh ./scripts/package-release.sh --target "${{ matrix.target }}" --binary "target/${{ matrix.target }}/release/yacli" --output-dir dist)"
+          asset_name="$(basename "$asset_path")"
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$asset_path" | awk -v name="$asset_name" '{print $1 "  " name}' > dist/SHA256SUMS
+          else
+            sha256sum "$asset_path" | awk -v name="$asset_name" '{print $1 "  " name}' > dist/SHA256SUMS
+          fi
+      - name: Package Windows release asset
+        if: matrix.package_kind == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $stageDir = Join-Path $env:RUNNER_TEMP "yacli-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/yacli.exe" (Join-Path $stageDir "yacli.exe")
+          Copy-Item "README.md" (Join-Path $stageDir "README.md")
+          Copy-Item "LICENSE" (Join-Path $stageDir "LICENSE")
+          $assetPath = Join-Path (Resolve-Path dist) "${{ matrix.asset }}"
+          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $assetPath -Force
+          $hash = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.asset }}" | Out-File -FilePath (Join-Path (Resolve-Path dist) "SHA256SUMS") -Encoding ascii
+      - name: Start local asset server (Unix)
+        if: matrix.package_kind == 'unix'
+        shell: bash
+        run: |
+          python3 -m http.server 8877 --bind 127.0.0.1 --directory dist >/tmp/yacli-install-smoke.log 2>&1 &
+          echo $! > server.pid
+          sleep 2
+      - name: Start local asset server (Windows)
+        if: matrix.package_kind == 'windows'
+        shell: pwsh
+        run: |
+          $process = Start-Process python -ArgumentList '-m','http.server','8877','--bind','127.0.0.1','--directory','dist' -PassThru
+          $process.Id | Out-File server.pid -Encoding ascii
+          Start-Sleep -Seconds 2
+      - name: Smoke Unix installer
+        if: matrix.package_kind == 'unix'
+        shell: bash
+        run: |
+          install_dir="$RUNNER_TEMP/bin"
+          sh ./scripts/install.sh --base-url http://127.0.0.1:8877 --install-dir "$install_dir"
+          "$install_dir/yacli" --format json guide --topic disk
+      - name: Smoke Windows installer
+        if: matrix.package_kind == 'windows'
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "bin"
+          ./scripts/install.ps1 -BaseUrl http://127.0.0.1:8877 -InstallDir $installDir
+          & (Join-Path $installDir "yacli.exe") --format json guide --topic disk

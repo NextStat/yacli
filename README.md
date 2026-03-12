@@ -1,103 +1,183 @@
 # yacli
 
-`yacli` — CLI для Яндекс Почты, Календаря и Диска, рассчитанный на людей и AI-агентов.
+`yacli` — консольная утилита для работы с Яндекс Почтой, Календарем и Диском.
+
+С ее помощью можно:
+
+- завести несколько аккаунтов и переключаться между ними
+- подключить Почту и Диск через OAuth
+- подключить Календарь через пароль приложения
+- читать письма, отвечать на них, пересылать и отправлять новые
+- смотреть календари и события, создавать и удалять события
+- просматривать приватный Диск, создавать папки и загружать файлы
+- смотреть и скачивать публичные файлы и папки Яндекс Диска
+
+`yacli` подходит и для обычной работы в терминале, и для скриптов: по умолчанию он выводит JSON.
 
 Важно:
 
-- `yacli` не является официальным продуктом Яндекса
-- `yacli` не поддерживается и не сопровождается Яндексом
-- `yacli` использует публично доступные пользовательские интерфейсы и API Яндекса, но является независимым open-source проектом `NextStat`
+- `yacli` не является продуктом Яндекса
+- проект не поддерживается Яндексом
+- это независимый open-source проект
 
-## Статус
+## Что уже поддерживается
 
-Сейчас в репозитории уже доступны следующие стабильные срезы:
+Сейчас в проекте есть рабочие команды для:
 
-- управление именованными аккаунтами для Яндекс Почты, Календаря и Диска
-- `account use/current` для активного аккаунта по умолчанию
-- детерминированная проверка `auth status` для настроенных аккаунтов
-- живые `OAuth`-команды `login/logout` для приватного Яндекс Диска и Почты через `authorization_code + PKCE`
-- живое чтение метаданных публичных ресурсов Яндекс Диска
-- живая загрузка файлов из публичных ресурсов Яндекс Диска
-- живое чтение приватной информации о Диске по сохраненному `OAuth`-токену
-- живой browse приватного Яндекс Диска через `disk list`
-- живое создание папок в приватном Яндекс Диске через `disk mkdir`
-- живая загрузка локальных файлов в приватный Яндекс Диск через `disk upload`
-- живое чтение списка почтовых папок через `IMAP + XOAUTH2`
-- живой список писем по папке через `IMAP + XOAUTH2`
-- живое чтение одного письма по `UID` через `IMAP + MIME parsing`
-- живая пересылка писем через inline-forward поверх `IMAP + SMTP + XOAUTH2`
-- живая отправка писем через `SMTP + XOAUTH2`
-- живое чтение списка календарей через `CalDAV + app password`
-- живой список событий календаря через `CalDAV REPORT`
-- живое создание событий календаря через `CalDAV PUT`
-- живое удаление событий календаря через `CalDAV DELETE`
-- сохранение calendar app password прямо через CLI без обязательного `export`
-- agent-friendly каталог команд и workflow через `yacli guide`
-- `JSON`-ориентированный контракт вывода
+- аккаунтов
+- Почты
+- Календаря
+- Диска
+- публичного Диска
 
-Текущий продуктовый фокус:
-
-- только пользовательская поверхность
-- только доступ пользователей и агентов к Почте, Календарю и Диску
-- без административных и организационных сценариев, доменной админки и `admin API Yandex 360` на текущем этапе
-
-Пока не являются стабильными в `v0.1.17`:
-
-- install/release surface для macOS, Windows и Linux
-
-Эти поверхности намеренно не выводятся как готовые, пока для них нет настоящих адаптеров и живой верификации.
+Готовые package-manager каналы вроде `Homebrew` и `winget` пока не добавлены.
 
 ## Установка
+
+### macOS и Linux
+
+Последний опубликованный релиз:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
+```
+
+Конкретная версия:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.18
+```
+
+По умолчанию бинарь ставится в `~/.local/bin`.
+
+### Windows
+
+Последний опубликованный релиз:
+
+```powershell
+irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | iex
+```
+
+Конкретная версия:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.18
+```
+
+По умолчанию бинарь ставится в `%LOCALAPPDATA%\Programs\yacli\bin`.
+
+Текущие release-артефакты собираются для:
+
+- macOS `aarch64`
+- macOS `x86_64`
+- Linux `x86_64`
+- Windows `x86_64`
+
+### Fallback: из исходников
 
 ```bash
 cargo install --path .
 ```
 
+## С чего начать
+
+Перед работой лучше сначала открыть встроенную справку. Это самый простой способ понять, какие команды уже поддерживаются и как ими пользоваться.
+
+```bash
+yacli guide
+yacli guide --topic account
+yacli guide --topic auth
+yacli guide --topic mail
+yacli guide --topic calendar
+yacli guide --topic disk
+```
+
 ## Быстрый старт
+
+### 1. Добавить аккаунт
 
 ```bash
 yacli account add personal me@yandex.ru --use
-
-yacli account list
 yacli account current
-yacli guide --topic mail
-yacli guide --topic calendar
-yacli account validate
+```
+
+### 2. Подключить Почту
+
+```bash
+yacli auth login --service mail --client-id <client-id>
+```
+
+### 3. Подключить Календарь
+
+```bash
+yacli auth login --service calendar --app-password <app-password>
+```
+
+### 4. Подключить приватный Диск
+
+```bash
+yacli auth login --service disk --client-id <client-id>
+```
+
+### 5. Проверить, что все работает
+
+```bash
 yacli auth status
 
-yacli auth login \
-  --service disk \
-  --client-id <client-id>
+yacli mail folders
+yacli mail list --folder INBOX --limit 10
+yacli mail read --folder INBOX --uid 1353
 
-yacli auth login \
-  --service mail \
-  --client-id <client-id>
-
-yacli auth login \
-  --service calendar \
-  --app-password <app-password>
-
-# Для автоматизации можно передать код подтверждения явно:
-yacli auth login \
-  --service disk \
-  --client-id <client-id> \
-  --code <confirmation-code>
+yacli calendar calendars
+yacli calendar events --calendar default --from 2026-03-12 --to 2026-03-19 --limit 20
 
 yacli disk info
 yacli disk list --path disk:/ --limit 50
-yacli disk mkdir --path disk:/docs/archive
-yacli disk upload --source ./report.pdf --path disk:/docs/archive/report.pdf
+```
+
+## Основные команды
+
+### Аккаунты
+
+```bash
+yacli account add personal me@yandex.ru --use
+yacli account list
+yacli account show
+yacli account validate
+yacli account current
+yacli account use personal
+```
+
+### Почта
+
+```bash
 yacli mail folders
 yacli mail list --folder INBOX --limit 10
 yacli mail search --folder INBOX --query "Budget" --limit 5
 yacli mail read --folder INBOX --uid 1353
-yacli mail reply --folder INBOX --uid 1353 --text "Принято, спасибо"
-yacli mail forward --folder INBOX --uid 1353 --to person@example.com --text "FYI"
+
+yacli mail reply \
+  --folder INBOX \
+  --uid 1353 \
+  --text "Принято, спасибо"
+
+yacli mail forward \
+  --folder INBOX \
+  --uid 1353 \
+  --to person@example.com \
+  --text "FYI"
+
 yacli mail send \
   --to person@example.com \
   --subject "Синк" \
   --text "Привет из yacli"
+```
+
+### Календарь
+
+```bash
 yacli calendar calendars
+
 yacli calendar events \
   --calendar default \
   --from 2026-03-12 \
@@ -115,9 +195,28 @@ yacli calendar create \
 yacli calendar delete \
   --calendar default \
   --uid <uid>
+```
 
-yacli auth logout --service disk
+### Приватный Диск
 
+```bash
+yacli disk info
+
+yacli disk list \
+  --path disk:/ \
+  --limit 50
+
+yacli disk mkdir \
+  --path disk:/docs/archive
+
+yacli disk upload \
+  --source ./report.pdf \
+  --path disk:/docs/archive/report.pdf
+```
+
+### Публичный Диск
+
+```bash
 yacli disk public show \
   --public-key https://disk.yandex.ru/i/WhGpLnQWR9efCA
 
@@ -126,9 +225,9 @@ yacli disk public download \
   --output ./sample.pdf
 ```
 
-## Несколько аккаунтов
+## Работа с несколькими аккаунтами
 
-`yacli` поддерживает несколько независимых аккаунтов через именованные `account` и переключение текущего контекста.
+У `yacli` можно завести несколько независимых аккаунтов и переключаться между ними.
 
 Пример:
 
@@ -145,60 +244,47 @@ yacli mail folders
 
 yacli account use work
 yacli mail search --folder INBOX --query "invoice" --limit 5
-yacli mail list --folder INBOX --limit 10
-yacli mail reply --folder INBOX --uid 42 --text "Подтверждаю"
-yacli mail forward --folder INBOX --uid 42 --to audit@example.com --text "FYI"
 ```
 
-Стабильный контракт:
+Что важно:
 
-- токены хранятся раздельно по `account`
-- `auth logout --account <name> --service mail` удаляет токен только выбранного аккаунта
-- команды Почты, Диска, Календаря и `auth status` используют текущий аккаунт автоматически
-- `--account <name>` остается точечным override для multi-account сценариев и агентов
+- у каждого аккаунта свои учетные данные
+- `account use` переключает текущий аккаунт
+- если нужно, можно явно указать аккаунт через `--account <name>`
+- `auth logout --account <name> --service <service>` удаляет данные только у выбранного аккаунта
 
-## Конфигурация
+## Как устроен вход
 
-По умолчанию `yacli` хранит конфигурацию здесь:
+### Почта и Диск
 
-- macOS: `~/Library/Application Support/yacli/accounts.toml`
-- Linux: `~/.config/yacli/accounts.toml`
-- Windows: `%APPDATA%\\yacli\\accounts.toml`
-
-Сохраненные `OAuth`-учетные данные и app passwords лежат здесь:
-
-- macOS: `~/Library/Application Support/yacli/credentials.toml`
-- Linux: `~/.config/yacli/credentials.toml`
-- Windows: `%APPDATA%\\yacli\\credentials.toml`
-
-Для тестов и автоматизации можно переопределить каталог:
+Для Почты и Диска используется OAuth с PKCE.
 
 ```bash
-export YACLI_CONFIG_DIR=/path/to/config-dir
+yacli auth login --service mail --client-id <client-id>
+yacli auth login --service disk --client-id <client-id>
 ```
 
-## Как получить пароль приложения для Календаря
+Если код подтверждения уже известен, его можно передать сразу:
 
-`yacli` для календаря использует не `client_secret` от OAuth-приложения, а отдельный **пароль приложения Яндекс ID** для `CalDAV`.
+```bash
+yacli auth login \
+  --service disk \
+  --client-id <client-id> \
+  --code <confirmation-code>
+```
 
-Шаги:
+Выход:
 
-1. Открой [Пароли приложений в Яндекс ID](https://yandex.ru/support/id/ru/authorization/app-passwords).
-2. Перейди в `Безопасность` → `Доступ к вашим данным` → `Пароли приложений`.
-3. Выбери тип `Календарь`.
-4. Назови пароль, например `yacli calendar`.
-5. Нажми `Далее`.
-6. Скопируй пароль сразу. Яндекс показывает его только один раз.
+```bash
+yacli auth logout --service mail
+yacli auth logout --service disk
+```
 
-Важно:
+### Календарь
 
-- это **не** `client_secret` от OAuth-приложения
-- для доменной почты email аккаунта должен быть полным: `user@domain`
-- по документации Яндекса пароль приложения может начать работать не мгновенно, а в течение `2–3 часов`
+Для Календаря используется не OAuth, а пароль приложения Яндекс ID для CalDAV.
 
-## Как правильно ввести пароль в CLI
-
-Рекомендуемый пользовательский путь:
+Обычный вариант:
 
 ```bash
 yacli auth login \
@@ -206,21 +292,17 @@ yacli auth login \
   --app-password <app-password>
 ```
 
-Что делает эта команда:
+После этого пароль приложения сохраняется локально, и команды календаря можно запускать без дополнительных переменных окружения.
 
-- сохраняет пароль приложения в `credentials.toml`
-- пишет в аккаунт `calendar.credential_ref = "store:calendar"`
-- после этого `calendar calendars` и `calendar events` больше не требуют `export`
-
-Проверка:
+Выход:
 
 ```bash
-yacli auth status
-yacli calendar calendars
-yacli calendar events --calendar default --from 2026-03-12 --to 2026-03-19 --limit 20
+yacli auth logout --service calendar
 ```
 
-Для automation и CI по-прежнему поддержан env-path:
+### Если не хочешь хранить пароль локально
+
+Можно привязать переменную окружения:
 
 ```bash
 export YACLI_CALENDAR_APP_PASSWORD='<app-password>'
@@ -230,21 +312,60 @@ yacli auth login \
   --env-var YACLI_CALENDAR_APP_PASSWORD
 ```
 
-Этот режим полезен, если ты не хочешь сохранять пароль приложения локально в `credentials.toml`.
+Этот вариант удобен для автоматических сценариев и CI.
 
-## Бар качества
+## Как получить пароль приложения для Календаря
 
-Каждый атомарный срез обязан проходить:
+1. Открой [Пароли приложений в Яндекс ID](https://yandex.ru/support/id/ru/authorization/app-passwords)
+2. Перейди в `Безопасность` → `Доступ к вашим данным` → `Пароли приложений`
+3. Выбери тип `Календарь`
+4. Задай понятное имя, например `yacli calendar`
+5. Скопируй пароль сразу после создания
+
+Важно:
+
+- это не `client_secret` от OAuth-приложения
+- для доменной почты нужно указывать полный email, например `user@domain`
+- по документации Яндекса пароль приложения может начать работать не сразу, а в течение `2–3 часов`
+
+## Где хранятся файлы настроек
+
+Файл с аккаунтами:
+
+- macOS: `~/Library/Application Support/yacli/accounts.toml`
+- Linux: `~/.config/yacli/accounts.toml`
+- Windows: `%APPDATA%\\yacli\\accounts.toml`
+
+Файл с учетными данными:
+
+- macOS: `~/Library/Application Support/yacli/credentials.toml`
+- Linux: `~/.config/yacli/credentials.toml`
+- Windows: `%APPDATA%\\yacli\\credentials.toml`
+
+Если нужно использовать другой каталог:
 
 ```bash
-cargo build --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+export YACLI_CONFIG_DIR=/path/to/config-dir
 ```
 
-## Стабильная поверхность
+## Формат вывода
 
-Стабильно в `v0.1.17`:
+По умолчанию `yacli` выводит JSON.
+
+Если нужен табличный вид:
+
+```bash
+yacli --format table account list
+```
+
+Поддерживаются два варианта:
+
+- `--format json`
+- `--format table`
+
+## Поддерживаемые команды
+
+В `v0.1.18` к поддерживаемым относятся:
 
 - `yacli guide`
 - `yacli account add`
@@ -278,68 +399,39 @@ cargo clippy --workspace --all-targets -- -D warnings
 - `yacli disk public show`
 - `yacli disk public download`
 
-Эти команды:
+Стабильная install/release поверхность в `v0.1.18`:
 
-- через `yacli guide` отдают машинно-читаемый каталог стабильных команд и workflow
-- используют `authorization_code + PKCE` через страницу подтверждения `verification_code`
-- сохраняют `OAuth`-токены Почты и Диска по аккаунтам в `credentials.toml`
-- умеют сохранять calendar app password по аккаунтам в `credentials.toml`
-- не требуют общего `client_secret` для публичного CLI
-- используют `accounts.toml` и текущий аккаунт по умолчанию вместо обязательного `--account` в каждой команде
-- при истечении токена требуют явный повторный `auth login`
-- для Почты используют `IMAP` на `imap.yandex.com:993` и `AUTHENTICATE XOAUTH2`
-- для Календаря используют `CalDAV` на `https://caldav.yandex.ru`
-- для Календаря поддерживают два login-path:
-  - `--app-password <value>` c сохранением в `store:calendar`
-  - `--env-var NAME` для automation без локального сохранения секрета
-- для `calendar calendars` возвращают `id`, `name`, `href`, `description`
-- для `calendar events` принимают `--calendar`, `--from`, `--to`, `--limit`
-- для `calendar events` валидируют диапазон `1..=100` и окно дат `from < to`
-- для `calendar events` возвращают `uid`, `summary`, `start`, `end`, `location`, `status`, `all_day`
-- для `calendar create` принимают `--calendar`, `--summary`, `--start`, `--end`
-- для `calendar create` поддерживают timed `RFC3339` и all-day `YYYY-MM-DD`, но оба края должны быть одного формата
-- для `calendar create` возвращают созданный `uid`, `href`, `etag`, `summary`, `start`, `end`
-- для `calendar delete` принимают `--calendar` и `--uid`, находят событие через `REPORT` и удаляют его через `DELETE`
-- для `disk list` принимают `--path`, `--limit`, `--offset` и читают приватный ресурс через `GET /v1/disk/resources`
-- для `disk list` по умолчанию используют `disk:/` как корень и возвращают метаданные ресурса плюс `children`, если это папка
-- для `disk mkdir` принимают `--path`, создают директорию через `PUT /v1/disk/resources` и затем читают канонические метаданные созданной папки
-- для `disk upload` принимают `--source`, `--path`, опциональный `--overwrite`
-- для `disk upload` получают upload ticket через `GET /v1/disk/resources/upload`, отправляют бинарный поток файла на provider `href` и затем читают канонические метаданные загруженного ресурса
-- для `disk upload` валидируют, что `--source` существует, указывает на файл и не пуст
-- для `disk upload` возвращают `source_path`, `remote_path`, `bytes_written`, `sha256`, `overwrite`
-- для `mail list` принимают `--folder`, по умолчанию используют `INBOX`
-- для `mail list` принимают `--limit`, валидируют диапазон `1..=100`
-- для `mail search` принимают `--query`, `--folder`, `--limit` и ищут письма по тексту через IMAP `UID SEARCH`
-- для `mail search` поддерживают UTF-8 запросы и возвращают тот же summary contract, что и `mail list`
-- для почтовых summary возвращают `uid`, `subject`, `from`, `date`, `flags`, `size`
-- для `mail read` принимают `--uid` и читают одно письмо из выбранной папки
-- для `mail read` принимают `--max-bytes`, по умолчанию `15728640`
-- для `mail read` возвращают `subject`, `from`, `to`, `cc`, `date`, `message_id`, `text_body`, `html_body`, `attachments`
-- для `mail reply` принимают `--uid`, `--text`/`--html`, опциональный `--cc` и отвечают в thread через `In-Reply-To` и `References`
-- для `mail reply` выбирают адрес ответа из `Reply-To`, а если его нет, используют `From`
-- для `mail forward` принимают `--uid`, повторяемые `--to`, опциональные `--cc`, `--bcc`, `--text`, `--html`
-- для `mail forward` читают исходное письмо через IMAP, собирают inline-forward тело и отправляют его через текущий SMTP path
-- для `mail forward` не пересылают бинарные вложения, а явно перечисляют их как `omitted_attachments` и добавляют notice в тело письма
-- для `mail forward` принимают `--max-source-bytes`, по умолчанию `15728640`, и не начинают пересылку при нулевом значении
-- для `mail send` используют `SMTP` на `smtp.yandex.com:465`
-- для `mail send` принимают повторяемые `--to`, `--cc`, `--bcc`
-- для `mail send` требуют `--subject` и хотя бы один из `--text`/`--html`
-- для `mail send` возвращают `from`, `to`, `cc`, `bcc_count`, `subject`, `message_id`, `body_kind`
-- поддерживают несколько независимых аккаунтов через разные `account` и `account use`
+- `scripts/install.sh` для macOS и Linux
+- `scripts/install.ps1` для Windows
+- packaging workflow в [release.yml](/Users/andresvlc/WebDev/yacli/.github/workflows/release.yml)
+- install smoke в [ci.yml](/Users/andresvlc/WebDev/yacli/.github/workflows/ci.yml)
 
-`yacli guide`:
+Если команды нет в `yacli guide`, лучше не рассчитывать на нее как на часть публичного интерфейса.
 
-- принимает `--topic all|account|auth|mail|calendar|disk`
-- возвращает список стабильных команд с summary и examples
-- возвращает типовые workflow, чтобы агенту не приходилось угадывать следующий шаг
-- принимают `public key` или публичный URL Яндекс Диска
-- опционально принимают `--path` для вложенного ресурса внутри опубликованной папки
-- умеют работать без локального аккаунта, используя официальный `REST API` Яндекс Диска
-- при наличии профиля могут брать базовый URL Диска из его конфигурации
+## Что полезно знать заранее
 
-Дополнительно `yacli disk public download`:
+- `auth status` показывает, настроен ли доступ к Почте, Календарю и Диску
+- если OAuth-токен для Почты или Диска истек, нужно заново выполнить `auth login`
+- `mail list` и `mail search` принимают `--limit` от `1` до `100`
+- `mail read` ограничивает размер письма через `--max-bytes`
+- `mail reply` отвечает на `Reply-To`, а если его нет, то на `From`
+- `mail forward` не пересылает бинарные вложения; вместо этого перечисляет их в `omitted_attachments` и добавляет заметку в текст письма
+- `mail send` требует `--subject` и хотя бы одно из полей: `--text` или `--html`
+- `calendar events` проверяет диапазон дат и значение `--limit`
+- `calendar create` поддерживает два формата дат: `RFC3339` для обычных событий и `YYYY-MM-DD` для событий на весь день
+- `disk upload` проверяет, что файл существует, не пуст и действительно является файлом
+- `disk public download` требует `--output` и не перезаписывает существующий файл без `--force`
 
-- требует явный `--output`
-- отказывается перезаписывать существующий файл без `--force`
-- пишет файл атомарно через временный файл и `rename`
-- сверяет размер загруженного файла с метаданными провайдера, если размер известен
+## Проверка качества
+
+Для изменений в поддерживаемых командах ожидается, что проходят:
+
+```bash
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+## Лицензия
+
+MIT
