@@ -30,9 +30,36 @@
 - Диска
 - публичного Диска
 
-Готовые package-manager каналы вроде `Homebrew` и `winget` пока не добавлены.
+Готовые пользовательские каналы установки:
+
+- `Homebrew` через tap `NextStat/yacli`
+- `winget` через архив с manifest-файлами, публикуемый в каждом релизе
+- `install.sh` для macOS и Linux
+- `install.ps1` для Windows
+- установка из исходников через `cargo install --path .`
 
 ## Установка
+
+### Homebrew
+
+Подключить tap:
+
+```bash
+brew tap NextStat/yacli https://github.com/NextStat/yacli
+```
+
+Установить:
+
+```bash
+brew install NextStat/yacli/yacli
+```
+
+Что важно:
+
+- tap живет прямо в этом репозитории
+- формула ставит готовый бинарь из GitHub Releases
+- сейчас Homebrew-пакеты публикуются для `macOS arm64` и `macOS x86_64`
+- для Linux пока остаются `install.sh` или `cargo install`
 
 ### macOS и Linux
 
@@ -45,12 +72,38 @@ curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install
 Конкретная версия:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.18
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh -s -- --version 0.1.19
 ```
 
 По умолчанию бинарь ставится в `~/.local/bin`.
 
 ### Windows
+
+Через `winget`:
+
+```powershell
+$tmp = Join-Path $env:TEMP "yacli-winget"
+Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Invoke-WebRequest https://github.com/NextStat/yacli/releases/latest/download/winget-manifests.zip -OutFile (Join-Path $tmp "winget-manifests.zip")
+Expand-Archive -Path (Join-Path $tmp "winget-manifests.zip") -DestinationPath $tmp -Force
+winget settings --enable LocalManifestFiles
+winget install --manifest (Join-Path $tmp "NextStat.yacli") --accept-package-agreements --disable-interactivity
+```
+
+Конкретная версия:
+
+```powershell
+$tmp = Join-Path $env:TEMP "yacli-winget"
+Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Invoke-WebRequest https://github.com/NextStat/yacli/releases/download/v0.1.19/winget-manifests.zip -OutFile (Join-Path $tmp "winget-manifests.zip")
+Expand-Archive -Path (Join-Path $tmp "winget-manifests.zip") -DestinationPath $tmp -Force
+winget settings --enable LocalManifestFiles
+winget install --manifest (Join-Path $tmp "NextStat.yacli") --accept-package-agreements --disable-interactivity
+```
+
+Если нужен более короткий путь без ручной распаковки manifest-файлов, используй `install.ps1`.
 
 Последний опубликованный релиз:
 
@@ -61,7 +114,7 @@ irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | 
 Конкретная версия:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.18
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1))) -Version 0.1.19
 ```
 
 По умолчанию бинарь ставится в `%LOCALAPPDATA%\Programs\yacli\bin`.
@@ -73,7 +126,7 @@ irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | 
 - Linux `x86_64`
 - Windows `x86_64`
 
-### Fallback: из исходников
+### Из исходников
 
 ```bash
 cargo install --path .
@@ -365,7 +418,7 @@ yacli --format table account list
 
 ## Поддерживаемые команды
 
-В `v0.1.18` к поддерживаемым относятся:
+В `v0.1.19` к поддерживаемым относятся:
 
 - `yacli guide`
 - `yacli account add`
@@ -399,12 +452,12 @@ yacli --format table account list
 - `yacli disk public show`
 - `yacli disk public download`
 
-Стабильная install/release поверхность в `v0.1.18`:
+Стабильные каналы установки в `v0.1.19`:
 
+- `Homebrew` tap `NextStat/yacli`
+- `winget` архив с manifest-файлами из GitHub Release assets
 - `scripts/install.sh` для macOS и Linux
 - `scripts/install.ps1` для Windows
-- packaging workflow в [release.yml](/Users/andresvlc/WebDev/yacli/.github/workflows/release.yml)
-- install smoke в [ci.yml](/Users/andresvlc/WebDev/yacli/.github/workflows/ci.yml)
 
 Если команды нет в `yacli guide`, лучше не рассчитывать на нее как на часть публичного интерфейса.
 

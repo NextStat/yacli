@@ -71,6 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -78,6 +79,32 @@ jobs:
         shell: bash
         run: |
           find dist -type f -name 'SHA256SUMS-*' -print0 | xargs -0 cat | sort > dist/SHA256SUMS
+      - name: Generate package-manager assets
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          sha_macos_arm64="$(awk '$2 == "yacli-aarch64-apple-darwin.tar.gz" { print $1 }' dist/SHA256SUMS)"
+          sha_macos_x64="$(awk '$2 == "yacli-x86_64-apple-darwin.tar.gz" { print $1 }' dist/SHA256SUMS)"
+          sha_windows_x64="$(awk '$2 == "yacli-x86_64-pc-windows-msvc.zip" { print $1 }' dist/SHA256SUMS)"
+
+          sh ./scripts/generate-homebrew-formula.sh \
+            --version "$version" \
+            --base-url "$base_url" \
+            --output dist/yacli.rb \
+            --sha256-macos-arm64 "$sha_macos_arm64" \
+            --sha256-macos-x64 "$sha_macos_x64"
+
+          sh ./scripts/generate-winget-manifests.sh \
+            --version "$version" \
+            --base-url "$base_url" \
+            --output-dir dist/winget-manifests \
+            --sha256-windows-x64 "$sha_windows_x64"
+
+          (
+            cd dist/winget-manifests
+            zip -r ../winget-manifests.zip NextStat.yacli
+          )
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -86,3 +113,5 @@ jobs:
             dist/**/yacli-*.tar.gz
             dist/**/yacli-*.zip
             dist/SHA256SUMS
+            dist/yacli.rb
+            dist/winget-manifests.zip

@@ -97,3 +97,96 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP "bin"
           ./scripts/install.ps1 -BaseUrl http://127.0.0.1:8877 -InstallDir $installDir
           & (Join-Path $installDir "yacli.exe") --format json guide --topic disk
+
+  homebrew-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Package arm64 release asset
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          mkdir -p dist
+          asset_path="$(sh ./scripts/package-release.sh --target aarch64-apple-darwin --binary target/release/yacli --output-dir dist)"
+          asset_sha="$(shasum -a 256 "$asset_path" | awk '{print $1}')"
+          sh ./scripts/generate-homebrew-formula.sh \
+            --version "$version" \
+            --base-url "http://127.0.0.1:8877" \
+            --output dist/yacli.rb \
+            --sha256-macos-arm64 "$asset_sha"
+          tap_dir="$RUNNER_TEMP/homebrew-yacli-smoke"
+          mkdir -p "$tap_dir/Formula"
+          cp dist/yacli.rb "$tap_dir/Formula/yacli.rb"
+          echo "TAP_DIR=$tap_dir" >> "$GITHUB_ENV"
+      - name: Start local asset server
+        shell: bash
+        run: |
+          python3 -m http.server 8877 --bind 127.0.0.1 --directory dist >/tmp/yacli-homebrew-smoke.log 2>&1 &
+          echo $! > server.pid
+          sleep 2
+      - name: Smoke Homebrew formula
+        shell: bash
+        run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew tap local/yacli-smoke "$TAP_DIR"
+          brew install local/yacli-smoke/yacli
+          "$(brew --prefix)/bin/yacli" --format json guide --topic disk
+      - name: Cleanup Homebrew formula
+        if: always()
+        shell: bash
+        run: |
+          brew uninstall yacli || true
+          brew untap local/yacli-smoke || true
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" || true
+          fi
+
+  winget-manifest-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
+      - name: Package Windows asset and generate manifests
+        shell: pwsh
+        run: |
+          $versionLine = Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$' | Select-Object -First 1
+          $version = $versionLine.Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $stageDir = Join-Path $env:RUNNER_TEMP "yacli-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/yacli.exe" (Join-Path $stageDir "yacli.exe")
+          Copy-Item "README.md" (Join-Path $stageDir "README.md")
+          Copy-Item "LICENSE" (Join-Path $stageDir "LICENSE")
+          $assetPath = Join-Path (Resolve-Path dist) "yacli-x86_64-pc-windows-msvc.zip"
+          Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $assetPath -Force
+          $assetHash = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          sh ./scripts/generate-winget-manifests.sh `
+            --version "$version" `
+            --base-url "http://127.0.0.1:8877" `
+            --output-dir dist/winget-manifests `
+            --sha256-windows-x64 $assetHash
+      - name: Start local asset server for winget validation
+        shell: pwsh
+        run: |
+          $process = Start-Process python -ArgumentList '-m','http.server','8877','--bind','127.0.0.1','--directory','dist' -PassThru
+          $process.Id | Out-File server.pid -Encoding ascii
+          Start-Sleep -Seconds 2
+      - name: Validate winget manifests
+        shell: pwsh
+        run: |
+          winget validate --manifest (Resolve-Path dist/winget-manifests/NextStat.yacli) --disable-interactivity
+      - name: Cleanup winget validation server
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path server.pid) {
+            $pid = Get-Content server.pid
+            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+          }
