@@ -51,23 +51,33 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(hide = true)]
     Guide {
         #[arg(long, value_enum, default_value_t = GuideTopicArg::All)]
         topic: GuideTopicArg,
     },
+    /// Добавить аккаунт. Если псевдоним не указан, он будет создан из email.
     Add {
+        #[arg(value_name = "EMAIL")]
         email: String,
+        #[arg(value_name = "ALIAS")]
         name: Option<String>,
     },
+    /// Показать все настроенные аккаунты.
     Accounts,
+    /// Сделать аккаунт текущим.
     Use {
+        #[arg(value_name = "ALIAS")]
         name: String,
     },
+    /// Показать текущий аккаунт.
     Whoami,
+    /// Показать, что подключено у аккаунта.
     Status {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Подключить Почту, Диск или Календарь.
     Login {
         service: Option<AuthServiceArg>,
         #[arg(long)]
@@ -83,6 +93,7 @@ pub enum Command {
         #[arg(long, hide = true)]
         login_hint: Option<String>,
     },
+    /// Отключить один сервис или все сервисы у аккаунта.
     Logout {
         service: Option<AuthServiceArg>,
         #[arg(long)]
@@ -179,16 +190,19 @@ pub enum AuthCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum DiskCommand {
+    /// Работать с публичным файлом или папкой Яндекс Диска.
     Public {
         #[command(subcommand)]
         action: DiskPublicCommand,
     },
+    /// Создать папку в приватном Диске.
     Mkdir {
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
         path: String,
     },
+    /// Загрузить локальный файл в приватный Диск.
     Upload {
         #[arg(long)]
         account: Option<String>,
@@ -199,6 +213,7 @@ pub enum DiskCommand {
         #[arg(long, default_value_t = false)]
         overwrite: bool,
     },
+    /// Показать содержимое папки в приватном Диске.
     List {
         #[arg(long)]
         account: Option<String>,
@@ -209,6 +224,7 @@ pub enum DiskCommand {
         #[arg(long, default_value_t = 0)]
         offset: u64,
     },
+    /// Показать квоту и общую информацию о приватном Диске.
     Info {
         #[arg(long)]
         account: Option<String>,
@@ -217,6 +233,7 @@ pub enum DiskCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum DiskPublicCommand {
+    /// Показать информацию о публичном файле или папке.
     Show {
         #[arg(long)]
         account: Option<String>,
@@ -225,6 +242,7 @@ pub enum DiskPublicCommand {
         #[arg(long)]
         path: Option<String>,
     },
+    /// Скачать публичный файл Яндекс Диска.
     Download {
         #[arg(long)]
         account: Option<String>,
@@ -241,10 +259,12 @@ pub enum DiskPublicCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum MailCommand {
+    /// Показать папки в почтовом ящике.
     Folders {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Показать список писем. По умолчанию используется папка INBOX.
     List {
         #[arg(long)]
         account: Option<String>,
@@ -253,6 +273,7 @@ pub enum MailCommand {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Найти письма по тексту. По умолчанию поиск идет в INBOX.
     Search {
         #[arg(long)]
         account: Option<String>,
@@ -263,12 +284,13 @@ pub enum MailCommand {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Ответить на письмо по номеру из `mail list` или `mail search`.
     Reply {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(long)]
+        #[arg(value_name = "UID")]
         uid: u64,
         #[arg(long)]
         cc: Vec<String>,
@@ -277,12 +299,13 @@ pub enum MailCommand {
         #[arg(long)]
         html: Option<String>,
     },
+    /// Переслать письмо по номеру из `mail list` или `mail search`.
     Forward {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(long)]
+        #[arg(value_name = "UID")]
         uid: u64,
         #[arg(long, required = true)]
         to: Vec<String>,
@@ -297,16 +320,18 @@ pub enum MailCommand {
         #[arg(long, default_value_t = 15 * 1024 * 1024)]
         max_source_bytes: u64,
     },
+    /// Открыть письмо по номеру из `mail list` или `mail search`.
     Read {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(long)]
+        #[arg(value_name = "UID")]
         uid: u64,
         #[arg(long, default_value_t = 15 * 1024 * 1024)]
         max_bytes: u64,
     },
+    /// Отправить новое письмо.
     Send {
         #[arg(long)]
         account: Option<String>,
@@ -327,10 +352,12 @@ pub enum MailCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CalendarCommand {
+    /// Показать доступные календари.
     Calendars {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Показать события в окне дат.
     Events {
         #[arg(long)]
         account: Option<String>,
@@ -343,6 +370,7 @@ pub enum CalendarCommand {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Создать событие в календаре.
     Create {
         #[arg(long)]
         account: Option<String>,
@@ -359,6 +387,7 @@ pub enum CalendarCommand {
         #[arg(long)]
         location: Option<String>,
     },
+    /// Удалить событие по UID.
     Delete {
         #[arg(long)]
         account: Option<String>,

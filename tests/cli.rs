@@ -191,6 +191,55 @@ fn simple_add_sets_current_account_and_derived_name() {
 }
 
 #[test]
+fn simple_add_respects_manual_account_name() {
+    let temp = tempdir().expect("tempdir");
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["add", "me@yandex.ru", "personal"])
+        .assert()
+        .success();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["whoami"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["account"], "personal");
+    assert_eq!(value["email"], "me@yandex.ru");
+}
+
+#[test]
+fn top_level_help_hides_agent_guide_command() {
+    yacli()
+        .args(["--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("login"))
+        .stdout(predicate::str::contains("mail"))
+        .stdout(predicate::str::contains("calendar"))
+        .stdout(predicate::str::contains("disk"))
+        .stdout(predicate::str::contains("guide").not());
+}
+
+#[test]
+fn mail_read_help_uses_positional_uid() {
+    yacli()
+        .args(["mail", "read", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: yacli mail read [OPTIONS] <UID>"))
+        .stdout(predicate::str::contains("--uid").not())
+        .stdout(predicate::str::contains("--folder <FOLDER>        [default: INBOX]"));
+}
+
+#[test]
 fn guide_lists_stable_commands_and_workflows() {
     let output = yacli()
         .args(["guide"])
@@ -203,7 +252,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.21");
+    assert_eq!(value["version"], "0.1.22");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
@@ -1520,7 +1569,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["mail", "read", "--account", "mock", "--uid", "42"])
+        .args(["mail", "read", "--account", "mock", "42"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"AUTH_ERROR\""))
@@ -1715,7 +1764,6 @@ client_id = "client-123"
             "reply",
             "--account",
             "mock",
-            "--uid",
             "42",
             "--text",
             "Принято",
@@ -1759,7 +1807,6 @@ client_id = "client-123"
             "reply",
             "--account",
             "mock",
-            "--uid",
             "0",
             "--text",
             "Принято",
@@ -1800,7 +1847,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["mail", "reply", "--account", "mock", "--uid", "42"])
+        .args(["mail", "reply", "--account", "mock", "42"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
@@ -1842,7 +1889,6 @@ client_id = "client-123"
             "forward",
             "--account",
             "mock",
-            "--uid",
             "42",
             "--to",
             "person@example.com",
@@ -1886,7 +1932,6 @@ client_id = "client-123"
             "forward",
             "--account",
             "mock",
-            "--uid",
             "0",
             "--to",
             "person@example.com",
@@ -1932,7 +1977,6 @@ client_id = "client-123"
             "forward",
             "--account",
             "mock",
-            "--uid",
             "42",
             "--to",
             "person@example.com",
@@ -1980,7 +2024,6 @@ client_id = "client-123"
             "forward",
             "--account",
             "mock",
-            "--uid",
             "42",
             "--to",
             "broken-recipient",
@@ -2021,7 +2064,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["mail", "read", "--account", "mock", "--uid", "0"])
+        .args(["mail", "read", "--account", "mock", "0"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
@@ -2063,7 +2106,6 @@ client_id = "client-123"
             "read",
             "--account",
             "mock",
-            "--uid",
             "42",
             "--max-bytes",
             "0",
