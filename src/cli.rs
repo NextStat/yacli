@@ -284,13 +284,13 @@ pub enum MailCommand {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
-    /// Ответить на письмо по номеру из `mail list` или `mail search`.
+    /// Ответить на письмо по ID из `mail list` или `mail search`.
     Reply {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(value_name = "UID")]
+        #[arg(value_name = "ID")]
         uid: u64,
         #[arg(long)]
         cc: Vec<String>,
@@ -299,13 +299,13 @@ pub enum MailCommand {
         #[arg(long)]
         html: Option<String>,
     },
-    /// Переслать письмо по номеру из `mail list` или `mail search`.
+    /// Переслать письмо по ID из `mail list` или `mail search`.
     Forward {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(value_name = "UID")]
+        #[arg(value_name = "ID")]
         uid: u64,
         #[arg(long, required = true)]
         to: Vec<String>,
@@ -320,13 +320,13 @@ pub enum MailCommand {
         #[arg(long, default_value_t = 15 * 1024 * 1024)]
         max_source_bytes: u64,
     },
-    /// Открыть письмо по номеру из `mail list` или `mail search`.
+    /// Открыть письмо по ID из `mail list` или `mail search`.
     Read {
         #[arg(long)]
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(value_name = "UID")]
+        #[arg(value_name = "ID")]
         uid: u64,
         #[arg(long, default_value_t = 15 * 1024 * 1024)]
         max_bytes: u64,
@@ -387,13 +387,13 @@ pub enum CalendarCommand {
         #[arg(long)]
         location: Option<String>,
     },
-    /// Удалить событие по UID.
+    /// Удалить событие по ID.
     Delete {
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
         calendar: String,
-        #[arg(long)]
+        #[arg(long = "id", value_name = "ID")]
         uid: String,
     },
 }

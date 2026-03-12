@@ -18,22 +18,7 @@
 
 ## Установка
 
-### macOS
-
-Через Homebrew:
-
-```bash
-brew tap NextStat/yacli https://github.com/NextStat/yacli
-brew install NextStat/yacli/yacli
-```
-
-Или installer script:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
-```
-
-### Linux
+### macOS и Linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
@@ -41,13 +26,15 @@ curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install
 
 ### Windows
 
-Основной путь:
-
 ```powershell
 irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | iex
 ```
 
-Дополнительно можно использовать `winget` через manifest bundle из GitHub Release.
+### Другие варианты
+
+- скачать готовый архив из GitHub Releases
+- установить из исходников
+- для Windows при желании использовать `winget` через manifest bundle из релиза
 
 ### Из исходников
 
@@ -123,7 +110,7 @@ yacli mail send --to person@example.com --subject "Синк" --text "Приве�
 Что важно:
 
 - по умолчанию `list`, `search`, `read`, `reply` и `forward` работают с `INBOX`
-- число вроде `1353` берется из колонки `UID`, которую показывают `mail list` и `mail search`
+- число вроде `1353` это ID письма из первой колонки, которую показывают `mail list` и `mail search`
 - если нужна другая папка, просто добавь `--folder "Имя папки"`
 
 Примеры:
@@ -152,7 +139,7 @@ yacli calendar create \
 
 yacli calendar delete \
   --calendar default \
-  --uid <uid>
+  --id <id>
 ```
 
 ### Диск

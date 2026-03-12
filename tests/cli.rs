@@ -229,14 +229,24 @@ fn top_level_help_hides_agent_guide_command() {
 }
 
 #[test]
-fn mail_read_help_uses_positional_uid() {
+fn mail_read_help_uses_positional_id() {
     yacli()
         .args(["mail", "read", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Usage: yacli mail read [OPTIONS] <UID>"))
+        .stdout(predicate::str::contains("Usage: yacli mail read [OPTIONS] <ID>"))
         .stdout(predicate::str::contains("--uid").not())
         .stdout(predicate::str::contains("--folder <FOLDER>        [default: INBOX]"));
+}
+
+#[test]
+fn calendar_delete_help_uses_id_flag() {
+    yacli()
+        .args(["calendar", "delete", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--id <ID>"))
+        .stdout(predicate::str::contains("--uid").not());
 }
 
 #[test]
@@ -252,7 +262,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.22");
+    assert_eq!(value["version"], "0.1.23");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
@@ -1775,7 +1785,7 @@ client_id = "client-123"
 }
 
 #[test]
-fn mail_reply_rejects_zero_uid() {
+fn mail_reply_rejects_zero_id() {
     let temp = tempdir().expect("tempdir");
 
     write_mock_account_with_refs(
@@ -1815,7 +1825,7 @@ client_id = "client-123"
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail reply --uid must be greater than zero",
+            "mail reply <id> must be greater than zero",
         ));
 }
 
@@ -1900,7 +1910,7 @@ client_id = "client-123"
 }
 
 #[test]
-fn mail_forward_rejects_zero_uid() {
+fn mail_forward_rejects_zero_id() {
     let temp = tempdir().expect("tempdir");
 
     write_mock_account_with_refs(
@@ -1940,7 +1950,7 @@ client_id = "client-123"
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail forward --uid must be greater than zero",
+            "mail forward <id> must be greater than zero",
         ));
 }
 
@@ -2037,7 +2047,7 @@ client_id = "client-123"
 }
 
 #[test]
-fn mail_read_rejects_zero_uid() {
+fn mail_read_rejects_zero_id() {
     let temp = tempdir().expect("tempdir");
 
     write_mock_account_with_refs(
@@ -2069,7 +2079,7 @@ client_id = "client-123"
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail read --uid must be greater than zero",
+            "mail read <id> must be greater than zero",
         ));
 }
 
@@ -2487,7 +2497,7 @@ END:VCALENDAR]]></c:calendar-data>
     assert_eq!(value["window"]["from"], "2026-03-12T00:00:00Z");
     assert_eq!(value["window"]["to"], "2026-03-19T00:00:00Z");
     assert_eq!(value["events"].as_array().expect("events").len(), 1);
-    assert_eq!(value["events"][0]["uid"], "event-1");
+    assert_eq!(value["events"][0]["id"], "event-1");
     assert_eq!(value["events"][0]["summary"], "Синк команды");
     assert_eq!(value["events"][0]["start"], "2026-03-12T09:00:00Z");
     assert_eq!(value["events"][0]["location"], "Meet");
@@ -2680,9 +2690,9 @@ END:VCALENDAR]]></c:calendar-data>
     assert_eq!(value["event"]["end"], "2026-03-12T10:00:00Z");
     assert_eq!(value["event"]["etag"], "\"new-evt\"");
     assert!(
-        value["event"]["uid"]
+        value["event"]["id"]
             .as_str()
-            .expect("uid")
+            .expect("id")
             .starts_with("yacli-")
     );
     assert_eq!(
@@ -2692,7 +2702,7 @@ END:VCALENDAR]]></c:calendar-data>
 }
 
 #[test]
-fn calendar_delete_removes_event_by_uid_via_caldav_delete() {
+fn calendar_delete_removes_event_by_id_via_caldav_delete() {
     let temp = tempdir().expect("tempdir");
     let mut caldav = Server::new();
 
@@ -2827,7 +2837,7 @@ END:VCALENDAR]]></c:calendar-data>
             "mock",
             "--calendar",
             "default",
-            "--uid",
+            "--id",
             "event-1",
         ])
         .assert()
@@ -2839,7 +2849,7 @@ END:VCALENDAR]]></c:calendar-data>
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "calendar.delete");
     assert_eq!(value["calendar"]["id"], "default");
-    assert_eq!(value["deleted_event"]["uid"], "event-1");
+    assert_eq!(value["deleted_event"]["id"], "event-1");
     assert_eq!(value["deleted_event"]["summary"], "Удаляемое событие");
     assert_eq!(
         value["deleted_event"]["href"],

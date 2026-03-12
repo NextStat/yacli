@@ -252,7 +252,7 @@ pub fn read_mail_message(
 ) -> Result<MailMessage> {
     if uid == 0 {
         return Err(YacliError::Validation(
-            "mail read --uid must be greater than zero".to_string(),
+            "mail read <id> must be greater than zero".to_string(),
         ));
     }
     if max_bytes == 0 {
@@ -272,7 +272,7 @@ pub fn read_mail_message(
     {
         let _ = session.logout();
         return Err(YacliError::UnsupportedOperation(format!(
-            "message uid {} size {} exceeds --max-bytes {}; rerun `yacli mail read --uid {} --max-bytes {}`",
+            "message id {} size {} exceeds --max-bytes {}; rerun `yacli mail read {} --max-bytes {}`",
             uid, size, max_bytes, uid, size
         )));
     }
@@ -323,7 +323,7 @@ pub fn reply_to_mail_message(
 ) -> Result<RepliedMail> {
     if request.uid == 0 {
         return Err(YacliError::Validation(
-            "mail reply --uid must be greater than zero".to_string(),
+            "mail reply <id> must be greater than zero".to_string(),
         ));
     }
 
@@ -374,7 +374,7 @@ pub fn forward_mail_message(
 ) -> Result<ForwardedMail> {
     if request.uid == 0 {
         return Err(YacliError::Validation(
-            "mail forward --uid must be greater than zero".to_string(),
+            "mail forward <id> must be greater than zero".to_string(),
         ));
     }
 

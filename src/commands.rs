@@ -23,8 +23,8 @@ use crate::disk::{
 };
 use crate::error::{Result, YacliError};
 use crate::mail::{
-    ForwardedMail, MailFolder, MailForwardRequest, MailMessage, MailMessageSummary,
-    MailReplyRequest, MailSendRequest, MailSessionAuth, RepliedMail, SentMail,
+    ForwardedMail, MailAttachmentSummary, MailFolder, MailForwardRequest, MailMessage,
+    MailMessageSummary, MailReplyRequest, MailSendRequest, MailSessionAuth, RepliedMail, SentMail,
     forward_mail_message, list_mail_folders, list_mail_messages, read_mail_message,
     reply_to_mail_message, search_mail_messages, send_mail_message,
 };
@@ -846,7 +846,7 @@ fn execute_calendar(format: OutputFormat, action: CalendarCommand) -> Result<Ren
                     "email": context.email,
                     "calendar": calendar,
                     "window": window,
-                    "events": events,
+                    "events": events.iter().map(calendar_event_json).collect::<Vec<_>>(),
                 }),
                 render_calendar_events_table(&resolved_account, &calendar, &window, &events),
             )
@@ -883,7 +883,7 @@ fn execute_calendar(format: OutputFormat, action: CalendarCommand) -> Result<Ren
                     "account": resolved_account,
                     "email": context.email,
                     "calendar": calendar,
-                    "event": event,
+                    "event": calendar_event_json(&event),
                 }),
                 render_calendar_create_table(&resolved_account, &calendar, &event),
             )
@@ -910,7 +910,7 @@ fn execute_calendar(format: OutputFormat, action: CalendarCommand) -> Result<Ren
                     "account": resolved_account,
                     "email": context.email,
                     "calendar": calendar,
-                    "deleted_event": event,
+                    "deleted_event": calendar_event_json(&event),
                 }),
                 render_calendar_delete_table(&resolved_account, &calendar, &event),
             )
@@ -958,7 +958,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     "email": context.email,
                     "folder": folder,
                     "limit": limit,
-                    "messages": messages,
+                    "messages": messages.iter().map(mail_summary_json).collect::<Vec<_>>(),
                 }),
                 render_mail_list_table(&resolved_account, &folder, &messages),
             )
@@ -989,7 +989,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     "folder": folder,
                     "query": query,
                     "limit": limit,
-                    "messages": messages,
+                    "messages": messages.iter().map(mail_summary_json).collect::<Vec<_>>(),
                 }),
                 render_mail_search_table(&resolved_account, &folder, &query, &messages),
             )
@@ -1018,8 +1018,8 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     "account": resolved_account,
                     "email": context.email,
                     "folder": folder,
-                    "uid": uid,
-                    "message": message,
+                    "id": uid,
+                    "message": mail_message_json(&message),
                 }),
                 render_mail_read_table(&resolved_account, &folder, &message),
             )
@@ -1097,7 +1097,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     "account": resolved_account,
                     "email": context.email,
                     "folder": folder,
-                    "reply": replied,
+                    "reply": replied_mail_json(&replied),
                 }),
                 render_mail_reply_table(&resolved_account, &folder, &replied),
             )
@@ -1140,7 +1140,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     "account": resolved_account,
                     "email": context.email,
                     "folder": folder,
-                    "forward": forwarded,
+                    "forward": forwarded_mail_json(&forwarded),
                 }),
                 render_mail_forward_table(&resolved_account, &folder, &forwarded),
             )
@@ -1478,14 +1478,14 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
         GuideCommandEntry {
             path: "mail reply",
             topic: "mail",
-            summary: "Ответить на письмо по номеру из `mail list` или `mail search`.",
+            summary: "Ответить на письмо по ID из `mail list` или `mail search`.",
             requires_account: true,
             examples: vec!["yacli mail reply 1353 --text \"Принято\""],
         },
         GuideCommandEntry {
             path: "mail forward",
             topic: "mail",
-            summary: "Переслать письмо по номеру из `mail list` или `mail search`.",
+            summary: "Переслать письмо по ID из `mail list` или `mail search`.",
             requires_account: true,
             examples: vec![
                 "yacli mail forward 1353 --to person@example.com --text \"FYI\"",
@@ -1494,7 +1494,7 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
         GuideCommandEntry {
             path: "mail read",
             topic: "mail",
-            summary: "Открыть письмо по номеру из `mail list` или `mail search`.",
+            summary: "Открыть письмо по ID из `mail list` или `mail search`.",
             requires_account: true,
             examples: vec!["yacli mail read 1353"],
         },
@@ -1535,9 +1535,9 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
         GuideCommandEntry {
             path: "calendar delete",
             topic: "calendar",
-            summary: "Удалить событие по UID из выбранного календаря.",
+            summary: "Удалить событие по ID из выбранного календаря.",
             requires_account: true,
-            examples: vec!["yacli calendar delete --calendar default --uid <uid>"],
+            examples: vec!["yacli calendar delete --calendar default --id <id>"],
         },
         GuideCommandEntry {
             path: "disk list",
@@ -1596,24 +1596,24 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             id: "mail_read_flow",
             topic: "mail",
             title: "Прочитать письмо из Яндекс Почты",
-            summary: "Полный поток от добавления аккаунта и логина до чтения письма по номеру из списка.",
+            summary: "Полный поток от добавления аккаунта и логина до чтения письма по ID из списка.",
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
                 "yacli mail list --limit 10",
-                "yacli mail read <uid>",
+                "yacli mail read <id>",
             ],
         },
         GuideWorkflowEntry {
             id: "mail_search_flow",
             topic: "mail",
             title: "Найти письмо по тексту",
-            summary: "Поток от OAuth логина до поиска письма и открытия результата по номеру.",
+            summary: "Поток от OAuth логина до поиска письма и открытия результата по ID.",
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
                 "yacli mail search --query \"Budget\" --limit 5",
-                "yacli mail read <uid>",
+                "yacli mail read <id>",
             ],
         },
         GuideWorkflowEntry {
@@ -1625,7 +1625,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
                 "yacli add me@yandex.ru",
                 "yacli login",
                 "yacli mail search --query \"Budget\" --limit 5",
-                "yacli mail reply <uid> --text \"Принято\"",
+                "yacli mail reply <id> --text \"Принято\"",
             ],
         },
         GuideWorkflowEntry {
@@ -1637,7 +1637,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
                 "yacli add me@yandex.ru",
                 "yacli login",
                 "yacli mail search --query \"Budget\" --limit 5",
-                "yacli mail forward <uid> --to person@example.com --text \"FYI\"",
+                "yacli mail forward <id> --to person@example.com --text \"FYI\"",
             ],
         },
         GuideWorkflowEntry {
@@ -1737,7 +1737,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
                 "yacli add me@yandex.ru",
                 "yacli login calendar --app-password <app-password>",
                 "yacli calendar create --calendar default --summary \"Синк\" --start 2026-03-12T09:00:00Z --end 2026-03-12T10:00:00Z",
-                "yacli calendar delete --calendar default --uid <uid>",
+                "yacli calendar delete --calendar default --id <id>",
             ],
         },
     ]
@@ -2294,7 +2294,7 @@ fn render_mail_list_table(account: &str, folder: &str, messages: &[MailMessageSu
         format!("account\t{account}"),
         format!("folder\t{folder}"),
         format!("count\t{}", messages.len()),
-        "UID\tDATE\tFROM\tSUBJECT\tFLAGS\tSIZE".to_string(),
+        "ID\tDATE\tFROM\tSUBJECT\tFLAGS\tSIZE".to_string(),
     ];
     lines.extend(messages.iter().map(|message| {
         format!(
@@ -2328,7 +2328,7 @@ fn render_mail_search_table(
         format!("folder\t{folder}"),
         format!("query\t{query}"),
         format!("count\t{}", messages.len()),
-        "UID\tDATE\tFROM\tSUBJECT\tFLAGS\tSIZE".to_string(),
+        "ID\tDATE\tFROM\tSUBJECT\tFLAGS\tSIZE".to_string(),
     ];
     lines.extend(messages.iter().map(|message| {
         format!(
@@ -2355,7 +2355,7 @@ fn render_mail_read_table(account: &str, folder: &str, message: &MailMessage) ->
     let mut lines = vec![
         format!("account\t{account}"),
         format!("folder\t{folder}"),
-        format!("uid\t{}", message.uid),
+        format!("id\t{}", message.uid),
         format!("date\t{}", message.date.as_deref().unwrap_or("-")),
         format!("from\t{}", message.from.as_deref().unwrap_or("-")),
         format!("to\t{}", message.to.as_deref().unwrap_or("-")),
@@ -2439,7 +2439,7 @@ fn render_mail_reply_table(account: &str, folder: &str, replied: &RepliedMail) -
     render_key_value_table(&[
         ("account", account.to_string()),
         ("folder", folder.to_string()),
-        ("original_uid", replied.original_uid.to_string()),
+        ("original_id", replied.original_uid.to_string()),
         ("recipient", replied.recipient.clone()),
         ("original_subject", replied.original_subject.clone()),
         ("original_message_id", replied.original_message_id.clone()),
@@ -2453,7 +2453,7 @@ fn render_mail_forward_table(account: &str, folder: &str, forwarded: &ForwardedM
     render_key_value_table(&[
         ("account", account.to_string()),
         ("folder", folder.to_string()),
-        ("original_uid", forwarded.original_uid.to_string()),
+        ("original_id", forwarded.original_uid.to_string()),
         (
             "original_subject",
             forwarded
@@ -2490,6 +2490,92 @@ fn render_mail_forward_table(account: &str, folder: &str, forwarded: &ForwardedM
     ])
 }
 
+fn mail_summary_json(message: &MailMessageSummary) -> serde_json::Value {
+    json!({
+        "id": message.uid,
+        "subject": message.subject,
+        "from": message.from,
+        "date": message.date,
+        "flags": message.flags,
+        "size": message.size,
+    })
+}
+
+fn mail_attachment_json(attachment: &MailAttachmentSummary) -> serde_json::Value {
+    json!({
+        "filename": attachment.filename,
+        "mime_type": attachment.mime_type,
+        "content_id": attachment.content_id,
+        "inline": attachment.inline,
+    })
+}
+
+fn mail_message_json(message: &MailMessage) -> serde_json::Value {
+    json!({
+        "id": message.uid,
+        "subject": message.subject,
+        "from": message.from,
+        "to": message.to,
+        "cc": message.cc,
+        "date": message.date,
+        "message_id": message.message_id,
+        "flags": message.flags,
+        "size": message.size,
+        "text_body": message.text_body,
+        "html_body": message.html_body,
+        "attachments": message.attachments.iter().map(mail_attachment_json).collect::<Vec<_>>(),
+    })
+}
+
+fn sent_mail_json(sent: &SentMail) -> serde_json::Value {
+    json!({
+        "from": sent.from,
+        "to": sent.to,
+        "cc": sent.cc,
+        "bcc_count": sent.bcc_count,
+        "subject": sent.subject,
+        "message_id": sent.message_id,
+        "body_kind": sent.body_kind,
+    })
+}
+
+fn replied_mail_json(replied: &RepliedMail) -> serde_json::Value {
+    json!({
+        "original_id": replied.original_uid,
+        "recipient": replied.recipient,
+        "original_subject": replied.original_subject,
+        "original_message_id": replied.original_message_id,
+        "sent": sent_mail_json(&replied.sent),
+    })
+}
+
+fn forwarded_mail_json(forwarded: &ForwardedMail) -> serde_json::Value {
+    json!({
+        "original_id": forwarded.original_uid,
+        "original_subject": forwarded.original_subject,
+        "original_message_id": forwarded.original_message_id,
+        "omitted_attachments": forwarded.omitted_attachments.iter().map(mail_attachment_json).collect::<Vec<_>>(),
+        "sent": sent_mail_json(&forwarded.sent),
+    })
+}
+
+fn calendar_event_json(event: &CalendarEvent) -> serde_json::Value {
+    json!({
+        "calendar_id": event.calendar_id,
+        "calendar_name": event.calendar_name,
+        "href": event.href,
+        "id": event.uid,
+        "summary": event.summary,
+        "start": event.start,
+        "end": event.end,
+        "description": event.description,
+        "location": event.location,
+        "status": event.status,
+        "etag": event.etag,
+        "all_day": event.all_day,
+    })
+}
+
 fn render_calendar_collections_table(account: &str, calendars: &[CalendarCollection]) -> String {
     let mut lines = vec![
         format!("account\t{account}"),
@@ -2521,7 +2607,7 @@ fn render_calendar_events_table(
         format!("window.from\t{}", window.from),
         format!("window.to\t{}", window.to),
         format!("count\t{}", events.len()),
-        "UID\tSTART\tEND\tSUMMARY\tLOCATION\tSTATUS\tALL_DAY".to_string(),
+        "ID\tSTART\tEND\tSUMMARY\tLOCATION\tSTATUS\tALL_DAY".to_string(),
     ];
     lines.extend(events.iter().map(|event| {
         format!(
@@ -2548,7 +2634,7 @@ fn render_calendar_create_table(
         ("calendar.id", calendar.id.clone()),
         ("calendar.name", calendar.name.clone()),
         (
-            "event.uid",
+            "event.id",
             event.uid.clone().unwrap_or_else(|| "-".to_string()),
         ),
         ("event.href", event.href.clone()),
@@ -2586,7 +2672,7 @@ fn render_calendar_delete_table(
         ("calendar.id", calendar.id.clone()),
         ("calendar.name", calendar.name.clone()),
         (
-            "deleted.uid",
+            "deleted.id",
             event.uid.clone().unwrap_or_else(|| "-".to_string()),
         ),
         ("deleted.href", event.href.clone()),
