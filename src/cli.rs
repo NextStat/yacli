@@ -1,0 +1,335 @@
+use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum OutputFormat {
+    Json,
+    Table,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum MailAuthModeArg {
+    OauthXoauth2,
+    AppPassword,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum CalendarAuthModeArg {
+    AppPassword,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DiskAuthModeArg {
+    Oauth,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AuthServiceArg {
+    Mail,
+    Calendar,
+    Disk,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum GuideTopicArg {
+    All,
+    Account,
+    Auth,
+    Mail,
+    Calendar,
+    Disk,
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "yacli", version, about = "Yandex Mail, Calendar, and Disk CLI")]
+pub struct Cli {
+    #[arg(long, value_enum, global = true, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    Guide {
+        #[arg(long, value_enum, default_value_t = GuideTopicArg::All)]
+        topic: GuideTopicArg,
+    },
+    Account {
+        #[command(subcommand)]
+        action: AccountCommand,
+    },
+    Auth {
+        #[command(subcommand)]
+        action: AuthCommand,
+    },
+    Disk {
+        #[command(subcommand)]
+        action: DiskCommand,
+    },
+    Calendar {
+        #[command(subcommand)]
+        action: CalendarCommand,
+    },
+    Mail {
+        #[command(subcommand)]
+        action: MailCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountCommand {
+    Add {
+        name: String,
+        email: String,
+        #[arg(long = "use", default_value_t = false)]
+        use_as_current: bool,
+        #[arg(long, value_enum, default_value_t = MailAuthModeArg::OauthXoauth2)]
+        mail_auth_mode: MailAuthModeArg,
+        #[arg(long, value_enum, default_value_t = CalendarAuthModeArg::AppPassword)]
+        calendar_auth_mode: CalendarAuthModeArg,
+        #[arg(long, value_enum, default_value_t = DiskAuthModeArg::Oauth)]
+        disk_auth_mode: DiskAuthModeArg,
+        #[arg(long)]
+        mail_credential_ref: Option<String>,
+        #[arg(long)]
+        calendar_credential_ref: Option<String>,
+        #[arg(long)]
+        disk_credential_ref: Option<String>,
+    },
+    List,
+    Show {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    Validate {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    Use {
+        name: String,
+    },
+    Current,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCommand {
+    Status {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    Login {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, value_enum)]
+        service: AuthServiceArg,
+        #[arg(long)]
+        client_id: Option<String>,
+        #[arg(long)]
+        env_var: Option<String>,
+        #[arg(long)]
+        app_password: Option<String>,
+        #[arg(long)]
+        code: Option<String>,
+        #[arg(long)]
+        login_hint: Option<String>,
+    },
+    Logout {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, value_enum)]
+        service: AuthServiceArg,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DiskCommand {
+    Public {
+        #[command(subcommand)]
+        action: DiskPublicCommand,
+    },
+    Mkdir {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        path: String,
+    },
+    Upload {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        path: String,
+        #[arg(long, default_value_t = false)]
+        overwrite: bool,
+    },
+    List {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, default_value = "disk:/")]
+        path: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+    },
+    Info {
+        #[arg(long)]
+        account: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DiskPublicCommand {
+    Show {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        public_key: String,
+        #[arg(long)]
+        path: Option<String>,
+    },
+    Download {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        public_key: String,
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MailCommand {
+    Folders {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX")]
+        folder: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    Search {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX")]
+        folder: String,
+        #[arg(long)]
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    Reply {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX")]
+        folder: String,
+        #[arg(long)]
+        uid: u64,
+        #[arg(long)]
+        cc: Vec<String>,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        html: Option<String>,
+    },
+    Forward {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX")]
+        folder: String,
+        #[arg(long)]
+        uid: u64,
+        #[arg(long, required = true)]
+        to: Vec<String>,
+        #[arg(long)]
+        cc: Vec<String>,
+        #[arg(long)]
+        bcc: Vec<String>,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        html: Option<String>,
+        #[arg(long, default_value_t = 15 * 1024 * 1024)]
+        max_source_bytes: u64,
+    },
+    Read {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX")]
+        folder: String,
+        #[arg(long)]
+        uid: u64,
+        #[arg(long, default_value_t = 15 * 1024 * 1024)]
+        max_bytes: u64,
+    },
+    Send {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, required = true)]
+        to: Vec<String>,
+        #[arg(long)]
+        cc: Vec<String>,
+        #[arg(long)]
+        bcc: Vec<String>,
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        html: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CalendarCommand {
+    Calendars {
+        #[arg(long)]
+        account: Option<String>,
+    },
+    Events {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        calendar: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    Create {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        calendar: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        end: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        location: Option<String>,
+    },
+    Delete {
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        calendar: String,
+        #[arg(long)]
+        uid: String,
+    },
+}
