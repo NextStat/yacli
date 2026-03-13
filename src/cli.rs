@@ -43,6 +43,7 @@ pub enum GuideTopicArg {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum McpClientArg {
     Claude,
+    ClaudeDesktop,
     Codex,
     Gemini,
     Warp,

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 fn yacli() -> Command {
-    Command::cargo_bin("yacli").expect("binary exists")
+    let mut command = Command::cargo_bin("yacli").expect("binary exists");
+    command.env("YACLI_SECRET_BACKEND", "file");
+    command
 }
 
 fn write_file(path: &Path, content: &str) {
@@ -56,6 +58,16 @@ fn zed_settings_path(home: &Path) -> PathBuf {
     }
 }
 
+fn claude_desktop_config_path(home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Claude/claude_desktop_config.json")
+    } else if cfg!(target_os = "windows") {
+        home.join("AppData/Roaming/Claude/claude_desktop_config.json")
+    } else {
+        home.join(".config/Claude/claude_desktop_config.json")
+    }
+}
+
 fn windsurf_config_path(home: &Path) -> PathBuf {
     home.join(".codeium/mcp_config.json")
 }
@@ -99,6 +111,7 @@ fn mcp_install_help_lists_target_clients() {
         .stdout(predicate::str::contains("cursor"))
         .stdout(predicate::str::contains("codex"))
         .stdout(predicate::str::contains("claude"))
+        .stdout(predicate::str::contains("claude-desktop"))
         .stdout(predicate::str::contains("zed"))
         .stdout(predicate::str::contains("warp"))
         .stdout(predicate::str::contains("windsurf"))
@@ -267,6 +280,77 @@ fn mcp_install_invokes_claude_native_cli() {
     assert!(log.contains("add"));
     assert!(log.contains("--scope"));
     assert!(log.contains("user"));
+}
+
+#[test]
+fn mcp_install_writes_claude_desktop_config() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path();
+    let desktop_path = claude_desktop_config_path(home);
+    write_file(
+        &desktop_path,
+        r#"{
+  "mcpServers": {
+    "existing": {
+      "command": "node",
+      "args": ["desktop.js"]
+    }
+  }
+}"#,
+    );
+
+    let output = yacli()
+        .env("HOME", home)
+        .args(["mcp", "install", "--client", "claude-desktop"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let report: Value = serde_json::from_slice(&output).expect("json report");
+    assert_eq!(report["items"][0]["client"], "claude-desktop");
+    assert_eq!(report["items"][0]["status"], "installed");
+    assert!(report["items"][0]["skills_count"].is_null());
+
+    let installed: Value =
+        serde_json::from_slice(&fs::read(&desktop_path).expect("desktop config")).expect("json");
+    assert_eq!(installed["mcpServers"]["existing"]["command"], "node");
+    assert_eq!(installed["mcpServers"]["yacli"]["args"][0], "mcp");
+}
+
+#[test]
+fn mcp_install_claude_also_installs_claude_desktop() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path();
+    let bin_dir = home.join("bin");
+    fs::create_dir_all(&bin_dir).expect("bin directory");
+    let log_path = home.join("claude.log");
+    write_logging_command(&bin_dir.join("claude"), &log_path, true);
+    write_file(
+        &claude_desktop_config_path(home),
+        "{\n  \"mcpServers\": {}\n}\n",
+    );
+
+    let output = yacli()
+        .env("HOME", home)
+        .env("PATH", prepend_path(&bin_dir))
+        .args(["mcp", "install", "--client", "claude"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let report: Value = serde_json::from_slice(&output).expect("json report");
+    let items = report["items"].as_array().expect("items");
+    assert!(items.iter().any(|item| item["client"] == "claude"));
+    assert!(items.iter().any(|item| item["client"] == "claude-desktop"));
+
+    let desktop_config: Value =
+        serde_json::from_slice(&fs::read(claude_desktop_config_path(home)).expect("desktop"))
+            .expect("desktop json");
+    assert_eq!(desktop_config["mcpServers"]["yacli"]["args"][0], "mcp");
 }
 
 #[test]

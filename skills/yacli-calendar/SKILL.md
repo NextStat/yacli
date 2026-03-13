@@ -1,60 +1,65 @@
 ---
 name: yacli-calendar
-description: "Yandex Calendar: list calendars, view events, create and delete events via CalDAV. Use when the task involves scheduling."
+description: "Яндекс Календарь: просмотр событий, создание и удаление встреч через CalDAV. Используй для задач с расписанием — что запланировано, когда встреча, создать событие, свободное время."
 metadata:
   author: NextStat
 ---
 
-# yacli calendar
+# yacli calendar — Яндекс Календарь
 
-Read `yacli-shared` first for account and auth setup.
+Сначала прочитай `yacli-shared` для настройки аккаунта и авторизации.
 
-## Commands
+## Команды
 
-### List calendars
+### Список календарей
 
 ```
 yacli calendar calendars [--account ALIAS]
 ```
 
-Returns available calendars with names and IDs.
+Возвращает доступные календари с именами и ID.
 
-### List events
+### Список событий
 
 ```
-yacli calendar events [FROM] [TO] [--calendar NAME] [--limit N] [--account ALIAS]
+yacli calendar events [ОТ] [ДО] [--calendar ИМЯ] [--limit N] [--account ALIAS]
 ```
 
-FROM and TO are dates in `YYYY-MM-DD` format. Defaults: calendar=default, limit=20, window=30 days from today.
+ОТ и ДО — даты в формате `YYYY-MM-DD`. По умолчанию: 30 дней от сегодня, limit=20.
 
-Example — events for tomorrow:
+Пример — события на завтра:
 ```
 yacli calendar events 2026-03-14 2026-03-15
 ```
 
-### Create an event
-
+Пример — события на следующую неделю:
 ```
-yacli calendar create SUMMARY START END [--calendar NAME] [--description TEXT] [--location TEXT] [--account ALIAS]
-```
-
-START and END are ISO 8601 datetime strings: `2026-03-14T10:00:00`.
-
-Example:
-```
-yacli calendar create "Team sync" 2026-03-14T10:00:00 2026-03-14T11:00:00 --description "Weekly standup"
+yacli calendar events 2026-03-13 2026-03-20
 ```
 
-### Delete an event
+### Создать событие
 
 ```
-yacli calendar delete UID [--calendar NAME] [--account ALIAS]
+yacli calendar create НАЗВАНИЕ НАЧАЛО КОНЕЦ [--calendar ИМЯ] [--description ТЕКСТ] [--location МЕСТО] [--account ALIAS]
 ```
 
-UID comes from the `uid` field in `calendar events` output.
+НАЧАЛО и КОНЕЦ — ISO 8601: `2026-03-14T10:00:00`.
 
-## Typical flow
+Пример:
+```
+yacli calendar create "Синхронизация команды" 2026-03-14T10:00:00 2026-03-14T11:00:00 --description "Еженедельный стендап"
+```
 
-1. `yacli calendar calendars` — see available calendars
-2. `yacli calendar events` — view upcoming events
-3. `yacli calendar create ...` — add an event
+### Удалить событие
+
+```
+yacli calendar delete UID [--calendar ИМЯ] [--account ALIAS]
+```
+
+UID берётся из поля `uid` в выводе `calendar events`.
+
+## Типичный порядок работы
+
+1. `yacli calendar calendars` — посмотреть доступные календари
+2. `yacli calendar events` — посмотреть ближайшие события
+3. `yacli calendar create ...` — создать событие

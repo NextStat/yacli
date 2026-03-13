@@ -244,6 +244,109 @@
         gap: 10px;
       }
 
+      .browser-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 180px auto;
+        gap: 10px;
+      }
+
+      .browser-results {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .browser-item {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), transparent);
+      }
+
+      .browser-item-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .browser-item-title {
+        display: grid;
+        gap: 4px;
+      }
+
+      .browser-item-title strong {
+        font: 700 0.95rem/1.3 ui-sans-serif, system-ui, sans-serif;
+        color: var(--ink);
+      }
+
+      .browser-item-title span {
+        color: var(--muted);
+        font: 500 0.84rem/1.4 ui-sans-serif, system-ui, sans-serif;
+      }
+
+      .browser-item p {
+        margin: 0;
+      }
+
+      .browser-chip {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--brand-soft);
+        color: var(--brand-strong);
+        font: 700 0.72rem/1.1 ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .host-profile {
+        display: grid;
+        gap: 12px;
+      }
+
+      .host-capability-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .host-capability-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(23, 33, 38, 0.04);
+        font: 600 0.78rem/1.2 ui-sans-serif, system-ui, sans-serif;
+        color: var(--muted);
+      }
+
+      .host-capability-chip[data-enabled="true"] {
+        color: var(--brand-strong);
+        background: var(--brand-soft);
+        border-color: rgba(14, 124, 102, 0.22);
+      }
+
+      .host-capability-chip strong {
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      .host-recommendations {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+      }
+
       button,
       input {
         font: 500 0.95rem/1.2 ui-sans-serif, system-ui, sans-serif;
@@ -437,6 +540,23 @@
             <span class="status-dot" aria-hidden="true"></span>
             <span id="status-text">Connecting to host</span>
           </div>
+          <div class="host-profile">
+            <div>
+              <h2>Host profile</h2>
+              <p id="host-profile-summary">
+                Waiting for host capabilities to classify this MCP Apps surface.
+              </p>
+            </div>
+            <div id="host-capability-grid" class="host-capability-grid">
+              <span class="host-capability-chip" data-enabled="false">
+                <strong>Booting</strong>
+                awaiting ui/initialize
+              </span>
+            </div>
+            <ol id="host-recommendations" class="host-recommendations">
+              <li>Wait for the host handshake before using the dashboard.</li>
+            </ol>
+          </div>
           <div>
             <h2>Host context</h2>
             <p>
@@ -466,12 +586,29 @@
                 <label class="field-label" for="account-input">Account alias</label>
                 <input id="account-input" name="account" placeholder="personal" autocomplete="off">
               </div>
+              <div>
+                <label class="field-label" for="tool-name-input">Tool name</label>
+                <input id="tool-name-input" name="tool-name" placeholder="yacli.mail.list" autocomplete="off">
+              </div>
+              <div>
+                <label class="field-label" for="tool-args-input">Tool args JSON</label>
+                <input
+                  id="tool-args-input"
+                  name="tool-args"
+                  placeholder='{"account":"personal","folder":"INBOX","limit":20}'
+                  autocomplete="off"
+                >
+              </div>
               <div class="actions">
                 <button id="action-app-snapshot" data-tool="yacli.app.snapshot">Refresh snapshot</button>
                 <button id="action-account-list" data-tool="yacli.account.list">List accounts</button>
                 <button id="action-account-current" class="secondary" data-tool="yacli.account.current">Current account</button>
                 <button id="action-auth-status" class="secondary" data-tool="yacli.auth.status">Auth status</button>
                 <button id="action-update-check" class="secondary" data-tool="yacli.update.check">Check updates</button>
+                <button id="action-run-selected-tool" class="secondary">Run selected tool</button>
+              </div>
+              <div class="json-frame">
+                <pre id="tool-schema-json">No tool selected yet.</pre>
               </div>
             </div>
           </article>
@@ -513,17 +650,89 @@
         </section>
 
         <section class="workspace">
-          <article class="card" id="panel-tool-input">
+          <article class="card" id="panel-browser">
             <div class="panel-header">
               <div>
-                <h2>Tool input</h2>
+                <h2>Searchable browser</h2>
                 <p class="panel-note">
-                  Last payload observed through the host bridge.
+                  Unified search across yacli tools, prompts, resources, templates, and embedded skills.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div class="browser-toolbar">
+                <input id="browser-query-input" name="browser-query" placeholder="search mail, skills, prompts, disk" autocomplete="off">
+                <select id="browser-filter-select" name="browser-filter">
+                  <option value="all">All surfaces</option>
+                  <option value="tool">Tools</option>
+                  <option value="prompt">Prompts</option>
+                  <option value="resource">Resources</option>
+                  <option value="template">Templates</option>
+                  <option value="skill">Skills</option>
+                </select>
+                <button id="action-refresh-browser" class="secondary">Refresh browser</button>
+              </div>
+              <p id="browser-summary">Search index is warming up.</p>
+            </div>
+            <div id="browser-results" class="browser-results">
+              <div class="browser-item">
+                <div class="browser-item-title">
+                  <strong>Browser not ready yet</strong>
+                  <span>Waiting for host handshake and catalog fetch.</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card" id="panel-events">
+            <div class="panel-header">
+              <div>
+                <h2>Runtime state</h2>
+                <p class="panel-note">
+                  Cached app state that survives reopen and tracks resource + prompt activity.
                 </p>
               </div>
             </div>
             <div class="json-frame">
-              <pre id="tool-input-json">No tool input yet.</pre>
+              <pre id="runtime-state-json">No persisted runtime state yet.</pre>
+            </div>
+          </article>
+        </section>
+
+        <section class="workspace">
+          <article class="card" id="panel-prompts">
+            <div class="panel-header">
+              <div>
+                <h2>Prompt browser</h2>
+                <p class="panel-note">
+                  Lists embedded MCP prompts and renders the selected workflow through the host bridge.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div>
+                <label class="field-label" for="prompt-name-input">Prompt name</label>
+                <input id="prompt-name-input" name="prompt" placeholder="mail" autocomplete="off">
+              </div>
+              <div>
+                <label class="field-label" for="prompt-args-input">Prompt args JSON</label>
+                <input
+                  id="prompt-args-input"
+                  name="prompt-args"
+                  placeholder='{"request":"triage inbox","account":"personal"}'
+                  autocomplete="off"
+                >
+              </div>
+              <div class="actions">
+                <button id="action-list-prompts" class="secondary">List prompts</button>
+                <button id="action-render-prompt" class="secondary">Render selected prompt</button>
+              </div>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="prompt-list-json">No prompts listed yet.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="prompt-json">No prompt rendered yet.</pre>
             </div>
           </article>
 
@@ -543,6 +752,22 @@
         </section>
 
         <section class="workspace">
+          <article class="card" id="panel-tool-input">
+            <div class="panel-header">
+              <div>
+                <h2>Tool input</h2>
+                <p class="panel-note">
+                  Last payload observed through the host bridge.
+                </p>
+              </div>
+            </div>
+            <div class="json-frame">
+              <pre id="tool-input-json">No tool input yet.</pre>
+            </div>
+          </article>
+        </section>
+
+        <section class="workspace">
           <article class="card" id="panel-resources">
             <div class="panel-header">
               <div>
@@ -555,6 +780,12 @@
             <div class="actions">
               <button id="action-read-account-resource" class="secondary">Read account resource</button>
               <button id="action-read-auth-resource" class="secondary">Read auth resource</button>
+              <button id="action-read-skills-catalog" class="secondary">Read skills catalog</button>
+              <button id="action-read-skill-resource" class="secondary">Read selected skill</button>
+            </div>
+            <div style="margin-top: 12px;">
+              <label class="field-label" for="skill-input">Skill name</label>
+              <input id="skill-input" name="skill" placeholder="yacli-mail" autocomplete="off">
             </div>
             <div class="json-frame" style="margin-top: 14px;">
               <pre id="resource-templates-json">No resource templates fetched yet.</pre>
@@ -621,6 +852,14 @@
               typeof source.preferredTool === "string" && source.preferredTool.length > 0
                 ? source.preferredTool
                 : "",
+            preferredSkill:
+              typeof source.preferredSkill === "string" && source.preferredSkill.length > 0
+                ? source.preferredSkill
+                : "",
+            preferredPrompt:
+              typeof source.preferredPrompt === "string" && source.preferredPrompt.length > 0
+                ? source.preferredPrompt
+                : "",
             resourceUri:
               typeof source.resourceUri === "string" && source.resourceUri.length > 0
                 ? source.resourceUri
@@ -648,6 +887,8 @@
             preferredSection: explicit.preferredSection || stored.preferredSection,
             preferredResource: explicit.preferredResource || stored.preferredResource,
             preferredTool: explicit.preferredTool || stored.preferredTool,
+            preferredSkill: explicit.preferredSkill || stored.preferredSkill,
+            preferredPrompt: explicit.preferredPrompt || stored.preferredPrompt,
             resourceUri: explicit.resourceUri || stored.resourceUri || APP_RESOURCE_URI,
           };
         }
@@ -659,6 +900,14 @@
               source.authChallenge != null && typeof source.authChallenge === "object"
                 ? source.authChallenge
                 : null,
+            browserFilter:
+              typeof source.browserFilter === "string" && source.browserFilter.length > 0
+                ? source.browserFilter
+                : "all",
+            browserQuery:
+              typeof source.browserQuery === "string"
+                ? source.browserQuery
+                : "",
             currentResourceUri:
               typeof source.currentResourceUri === "string" && source.currentResourceUri.length > 0
                 ? source.currentResourceUri
@@ -673,9 +922,21 @@
                 ? source.lastToolName
                 : null,
             lastToolResult: source.lastToolResult != null ? source.lastToolResult : null,
+            promptListPayload: source.promptListPayload != null ? source.promptListPayload : null,
+            promptPayload: source.promptPayload != null ? source.promptPayload : null,
+            resourceCatalogPayload:
+              source.resourceCatalogPayload != null ? source.resourceCatalogPayload : null,
+            promptArgumentsText:
+              typeof source.promptArgumentsText === "string" ? source.promptArgumentsText : "",
+            toolArgumentsText:
+              typeof source.toolArgumentsText === "string" ? source.toolArgumentsText : "",
             resourcePayload: source.resourcePayload != null ? source.resourcePayload : null,
             resourceTemplatesPayload:
               source.resourceTemplatesPayload != null ? source.resourceTemplatesPayload : null,
+            skillsCatalogPayload:
+              source.skillsCatalogPayload != null ? source.skillsCatalogPayload : null,
+            toolCatalogPayload:
+              source.toolCatalogPayload != null ? source.toolCatalogPayload : null,
           };
         }
 
@@ -694,6 +955,8 @@
         const state = {
           authChallenge: null,
           bootstrap: mergeBootstrapState(APP_BOOTSTRAP, loadPersistedViewState()),
+          browserFilter: "all",
+          browserQuery: "",
           currentResourceUri: null,
           displayMode: "inline",
           hostCapabilities: null,
@@ -705,12 +968,20 @@
           lastToolInput: null,
           lastToolResult: null,
           lastSize: null,
+          promptArgumentsText: "",
+          promptListPayload: null,
+          promptPayload: null,
+          resourceCatalogPayload: null,
           resourcePayload: null,
           resourceTemplatesPayload: null,
+          skillsCatalogPayload: null,
+          toolArgumentsText: "",
+          toolCatalogPayload: null,
         };
 
         const SECTION_TO_PANEL_ID = {
           tools: "panel-tools",
+          prompts: "panel-prompts",
           resources: "panel-resources",
           auth: "panel-auth",
         };
@@ -721,30 +992,52 @@
 
         const elements = {
           accountInput: document.getElementById("account-input"),
+          actionRefreshBrowser: document.getElementById("action-refresh-browser"),
           actionOpenAuthServer: document.getElementById("action-open-auth-server"),
           actionOpenDocs: document.getElementById("action-open-docs"),
           actionOpenResourceMetadata: document.getElementById("action-open-resource-metadata"),
           actionReadAccountResource: document.getElementById("action-read-account-resource"),
           actionReadAuthResource: document.getElementById("action-read-auth-resource"),
+          actionListPrompts: document.getElementById("action-list-prompts"),
+          actionReadSkillResource: document.getElementById("action-read-skill-resource"),
+          actionReadSkillsCatalog: document.getElementById("action-read-skills-catalog"),
+          actionRenderPrompt: document.getElementById("action-render-prompt"),
           actionShareAuthContext: document.getElementById("action-share-auth-context"),
           actionShareSnapshot: document.getElementById("action-share-snapshot"),
           actionToggleDisplay: document.getElementById("action-toggle-display"),
           authJson: document.getElementById("auth-json"),
+          browserFilterSelect: document.getElementById("browser-filter-select"),
+          browserQueryInput: document.getElementById("browser-query-input"),
+          browserResults: document.getElementById("browser-results"),
+          browserSummary: document.getElementById("browser-summary"),
           displayMode: document.getElementById("display-mode"),
           eventLog: document.getElementById("event-log"),
           hostContextJson: document.getElementById("host-context-json"),
+          hostCapabilityGrid: document.getElementById("host-capability-grid"),
+          hostProfileSummary: document.getElementById("host-profile-summary"),
+          hostRecommendations: document.getElementById("host-recommendations"),
           lastTool: document.getElementById("last-tool"),
           currentViewSummary: document.getElementById("current-view-summary"),
           currentViewUri: document.getElementById("current-view-uri"),
+          promptArgsInput: document.getElementById("prompt-args-input"),
+          promptJson: document.getElementById("prompt-json"),
+          promptListJson: document.getElementById("prompt-list-json"),
+          promptNameInput: document.getElementById("prompt-name-input"),
           resourceJson: document.getElementById("resource-json"),
           resourceTemplatesJson: document.getElementById("resource-templates-json"),
+          runtimeStateJson: document.getElementById("runtime-state-json"),
+          skillInput: document.getElementById("skill-input"),
           sessionState: document.getElementById("session-state"),
           statusBadge: document.getElementById("status-badge"),
           statusText: document.getElementById("status-text"),
           actionShareView: document.getElementById("action-share-view"),
+          actionRunSelectedTool: document.getElementById("action-run-selected-tool"),
           themeValue: document.getElementById("theme-value"),
+          toolArgsInput: document.getElementById("tool-args-input"),
           toolInputJson: document.getElementById("tool-input-json"),
+          toolNameInput: document.getElementById("tool-name-input"),
           toolResultJson: document.getElementById("tool-result-json"),
+          toolSchemaJson: document.getElementById("tool-schema-json"),
           transportHint: document.getElementById("transport-hint"),
         };
 
@@ -827,6 +1120,22 @@
           }
           if (
             state.bootstrap &&
+            typeof state.bootstrap.preferredSkill === "string" &&
+            state.bootstrap.preferredSkill.length > 0 &&
+            state.bootstrap.preferredResource === "skill"
+          ) {
+            params.set("skill", state.bootstrap.preferredSkill);
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredPrompt === "string" &&
+            state.bootstrap.preferredPrompt.length > 0 &&
+            state.bootstrap.preferredSection === "prompts"
+          ) {
+            params.set("prompt", state.bootstrap.preferredPrompt);
+          }
+          if (
+            state.bootstrap &&
             typeof state.bootstrap.preferredTool === "string" &&
             state.bootstrap.preferredTool.length > 0
           ) {
@@ -853,6 +1162,8 @@
                 preferredSection: state.bootstrap.preferredSection || "",
                 preferredResource: state.bootstrap.preferredResource || "",
                 preferredTool: state.bootstrap.preferredTool || "",
+                preferredSkill: state.bootstrap.preferredSkill || "",
+                preferredPrompt: state.bootstrap.preferredPrompt || "",
                 resourceUri: state.bootstrap.resourceUri || APP_RESOURCE_URI,
               }),
             );
@@ -867,13 +1178,22 @@
               APP_RUNTIME_STATE_STORAGE_KEY,
               JSON.stringify({
                 authChallenge: state.authChallenge,
+                browserFilter: elements.browserFilterSelect.value,
+                browserQuery: elements.browserQueryInput.value,
                 currentResourceUri: state.currentResourceUri,
                 dashboardSnapshot: state.dashboardSnapshot,
                 lastToolInput: state.lastToolInput,
                 lastToolName: state.lastToolName,
                 lastToolResult: state.lastToolResult,
+                promptArgumentsText: elements.promptArgsInput.value,
+                promptListPayload: state.promptListPayload,
+                promptPayload: state.promptPayload,
+                resourceCatalogPayload: state.resourceCatalogPayload,
                 resourcePayload: state.resourcePayload,
                 resourceTemplatesPayload: state.resourceTemplatesPayload,
+                skillsCatalogPayload: state.skillsCatalogPayload,
+                toolArgumentsText: elements.toolArgsInput.value,
+                toolCatalogPayload: state.toolCatalogPayload,
               }),
             );
           } catch (_error) {
@@ -884,17 +1204,27 @@
         function restorePersistedRuntimeState() {
           const persisted = loadPersistedRuntimeState();
           state.authChallenge = persisted.authChallenge;
+          state.browserFilter = persisted.browserFilter;
+          state.browserQuery = persisted.browserQuery;
           state.currentResourceUri = persisted.currentResourceUri;
           state.dashboardSnapshot = persisted.dashboardSnapshot;
           state.lastToolInput = persisted.lastToolInput;
           state.lastToolName = persisted.lastToolName;
           state.lastToolResult = persisted.lastToolResult;
+          state.promptArgumentsText = persisted.promptArgumentsText;
+          state.promptListPayload = persisted.promptListPayload;
+          state.promptPayload = persisted.promptPayload;
+          state.resourceCatalogPayload = persisted.resourceCatalogPayload;
           state.resourcePayload = persisted.resourcePayload;
           state.resourceTemplatesPayload = persisted.resourceTemplatesPayload;
+          state.skillsCatalogPayload = persisted.skillsCatalogPayload;
+          state.toolArgumentsText = persisted.toolArgumentsText;
+          state.toolCatalogPayload = persisted.toolCatalogPayload;
 
           if (
             state.dashboardSnapshot ||
             state.lastToolResult ||
+            state.promptPayload ||
             state.resourcePayload ||
             state.authChallenge
           ) {
@@ -909,12 +1239,153 @@
           document.body.dataset.displayMode = state.displayMode || "inline";
           document.body.dataset.theme = state.theme || "light";
           renderCurrentViewUri();
+          renderHostProfile();
           syncHostActionAvailability();
         }
 
         function renderHostContext() {
           const payload = state.hostInit || { status: "awaiting initialize result" };
           elements.hostContextJson.textContent = safeStringify(payload);
+        }
+
+        function hostDisplayModes() {
+          const available =
+            (state.hostContext && state.hostContext.availableDisplayModes) || [];
+          return Array.isArray(available) ? available : [];
+        }
+
+        function hostProfileName() {
+          const context = state.hostContext && typeof state.hostContext === "object"
+            ? state.hostContext
+            : {};
+          const init = state.hostInit && typeof state.hostInit === "object"
+            ? state.hostInit
+            : {};
+          const candidates = [
+            context.hostName,
+            context.host_name,
+            context.clientName,
+            context.client_name,
+            context.name,
+            init.hostName,
+            init.clientName,
+            init.name,
+          ];
+          const value = candidates.find(function (candidate) {
+            return typeof candidate === "string" && candidate.trim().length > 0;
+          });
+          return value || "MCP Apps host";
+        }
+
+        function hostCapabilityMatrix() {
+          return [
+            {
+              name: "Open links",
+              enabled: hostSupportsOpenLinks(),
+              detail: "ui/open-link",
+            },
+            {
+              name: "Messages",
+              enabled: hostSupportsMessages(),
+              detail: "ui/message",
+            },
+            {
+              name: "Model context",
+              enabled: hostSupportsModelContext(),
+              detail: "ui/update-model-context",
+            },
+            {
+              name: "Resources",
+              enabled: hostSupportsServerResources(),
+              detail: "resources/read",
+            },
+            {
+              name: "Subscriptions",
+              enabled: hostSupportsResourceSubscriptions(),
+              detail: "resources/subscribe",
+            },
+            {
+              name: "Display modes",
+              enabled: hostDisplayModes().length > 1,
+              detail: hostDisplayModes().join(", ") || "inline",
+            },
+          ];
+        }
+
+        function hostRecommendations() {
+          const recommendations = [];
+          if (hostSupportsServerResources()) {
+            recommendations.push(
+              "Use the searchable browser and resource inspector for accounts, auth posture, and embedded skills.",
+            );
+          } else {
+            recommendations.push(
+              "Stay on prompts and direct tools: this host does not expose server resources to the app.",
+            );
+          }
+          if (hostSupportsModelContext() && hostSupportsMessages()) {
+            recommendations.push(
+              "Share snapshot, current view, or auth context back into the host conversation when you need handoff.",
+            );
+          } else {
+            recommendations.push(
+              "Treat this host as execution-first: tool results stay inside the dashboard unless you copy them manually.",
+            );
+          }
+          if (hostSupportsOpenLinks()) {
+            recommendations.push(
+              "Open external auth or docs directly from the dashboard when recovery or reference material is needed.",
+            );
+          }
+          if (hostDisplayModes().length > 1) {
+            recommendations.push(
+              "Switch display modes for heavier workflows like prompt browsing and resource inspection.",
+            );
+          }
+          return recommendations;
+        }
+
+        function renderHostProfile() {
+          const matrix = hostCapabilityMatrix();
+          const enabledCount = matrix.filter(function (capability) {
+            return capability.enabled;
+          }).length;
+          let tier = "text-first";
+          if (enabledCount >= 5) {
+            tier = "apps-rich";
+          } else if (enabledCount >= 3) {
+            tier = "hybrid";
+          }
+
+          elements.hostProfileSummary.textContent =
+            hostProfileName() +
+            " is running in " +
+            tier +
+            " mode with " +
+            String(enabledCount) +
+            " of " +
+            String(matrix.length) +
+            " host affordances active.";
+
+          elements.hostCapabilityGrid.textContent = "";
+          matrix.forEach(function (capability) {
+            const chip = document.createElement("span");
+            chip.className = "host-capability-chip";
+            chip.dataset.enabled = capability.enabled ? "true" : "false";
+            chip.innerHTML =
+              "<strong>" +
+              escapeHtml(capability.name) +
+              "</strong>" +
+              escapeHtml(capability.detail);
+            elements.hostCapabilityGrid.appendChild(chip);
+          });
+
+          elements.hostRecommendations.textContent = "";
+          hostRecommendations().forEach(function (item) {
+            const bullet = document.createElement("li");
+            bullet.textContent = item;
+            elements.hostRecommendations.appendChild(bullet);
+          });
         }
 
         function renderToolInput(payload) {
@@ -935,6 +1406,34 @@
           elements.toolResultJson.textContent =
             typeof value === "string" ? value : safeStringify(value);
           savePersistedRuntimeState();
+        }
+
+        function renderPromptList(payload) {
+          if (arguments.length > 0) {
+            state.promptListPayload = payload;
+          }
+          elements.promptListJson.textContent =
+            state.promptListPayload == null
+              ? "No prompts listed yet."
+              : typeof state.promptListPayload === "string"
+                ? state.promptListPayload
+                : safeStringify(state.promptListPayload);
+          savePersistedRuntimeState();
+          renderRuntimeState();
+        }
+
+        function renderPrompt(payload) {
+          if (arguments.length > 0) {
+            state.promptPayload = payload;
+          }
+          elements.promptJson.textContent =
+            state.promptPayload == null
+              ? "No prompt rendered yet."
+              : typeof state.promptPayload === "string"
+                ? state.promptPayload
+                : safeStringify(state.promptPayload);
+          savePersistedRuntimeState();
+          renderRuntimeState();
         }
 
         function renderResourceTemplates(payload) {
@@ -963,6 +1462,56 @@
           savePersistedRuntimeState();
         }
 
+        function renderRuntimeState() {
+          elements.runtimeStateJson.textContent = safeStringify({
+            browserFilter: elements.browserFilterSelect ? elements.browserFilterSelect.value : "all",
+            browserQuery: elements.browserQueryInput ? elements.browserQueryInput.value : "",
+            currentResourceUri: state.currentResourceUri,
+            currentToolArguments:
+              elements.toolArgsInput ? elements.toolArgsInput.value : "",
+            currentToolName:
+              elements.toolNameInput ? elements.toolNameInput.value : "",
+            lastToolName: state.lastToolName,
+            promptArgumentsText: elements.promptArgsInput ? elements.promptArgsInput.value : "",
+            preferredPrompt:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredPrompt || ""
+                : "",
+            preferredResource:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredResource || ""
+                : "",
+            preferredSkill:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredSkill || ""
+                : "",
+            searchIndexCounts: {
+              prompts:
+                state.promptListPayload &&
+                Array.isArray(state.promptListPayload.prompts)
+                  ? state.promptListPayload.prompts.length
+                  : 0,
+              resources:
+                state.resourceCatalogPayload &&
+                Array.isArray(state.resourceCatalogPayload.resources)
+                  ? state.resourceCatalogPayload.resources.length
+                  : 0,
+              templates:
+                state.resourceTemplatesPayload &&
+                Array.isArray(state.resourceTemplatesPayload.resourceTemplates)
+                  ? state.resourceTemplatesPayload.resourceTemplates.length
+                  : 0,
+              skills:
+                Array.isArray(skillCatalogItems()) ? skillCatalogItems().length : 0,
+              tools:
+                state.toolCatalogPayload &&
+                Array.isArray(state.toolCatalogPayload.tools)
+                  ? state.toolCatalogPayload.tools.length
+                  : 0,
+            },
+          });
+        }
+
         function renderAuth(payload) {
           if (arguments.length > 0) {
             state.authChallenge = payload;
@@ -974,6 +1523,376 @@
                 ? state.authChallenge
                 : safeStringify(state.authChallenge);
           savePersistedRuntimeState();
+        }
+
+        function resourceJsonPayload(payload) {
+          if (
+            !payload ||
+            typeof payload !== "object" ||
+            !Array.isArray(payload.contents) ||
+            payload.contents.length === 0
+          ) {
+            return null;
+          }
+          const text =
+            payload.contents[0] &&
+            typeof payload.contents[0].text === "string"
+              ? payload.contents[0].text
+              : "";
+          if (!text) {
+            return null;
+          }
+          try {
+            return JSON.parse(text);
+          } catch (_error) {
+            return null;
+          }
+        }
+
+        function skillCatalogItems() {
+          const payload = resourceJsonPayload(state.skillsCatalogPayload);
+          return payload && Array.isArray(payload.items) ? payload.items : [];
+        }
+
+        function toolDefinitionByName(name) {
+          const tools =
+            state.toolCatalogPayload && Array.isArray(state.toolCatalogPayload.tools)
+              ? state.toolCatalogPayload.tools
+              : [];
+          return tools.find(function (tool) {
+            return tool.name === name;
+          }) || null;
+        }
+
+        function defaultToolArguments(toolName) {
+          const definition = toolDefinitionByName(toolName);
+          const schema =
+            definition &&
+            definition.inputSchema &&
+            typeof definition.inputSchema === "object"
+              ? definition.inputSchema
+              : null;
+          const properties =
+            schema &&
+            schema.properties &&
+            typeof schema.properties === "object"
+              ? schema.properties
+              : null;
+          const args = {};
+          const account = elements.accountInput.value.trim();
+          if (properties && Object.prototype.hasOwnProperty.call(properties, "account") && account) {
+            args.account = account;
+          }
+          return args;
+        }
+
+        function renderSelectedToolSchema() {
+          const toolName = elements.toolNameInput.value.trim();
+          if (!toolName) {
+            elements.toolSchemaJson.textContent = "No tool selected yet.";
+            savePersistedRuntimeState();
+            renderRuntimeState();
+            return;
+          }
+          const definition = toolDefinitionByName(toolName);
+          if (!definition) {
+            elements.toolSchemaJson.textContent = safeStringify({
+              error: "Tool is not in the current tools/list catalog.",
+              name: toolName,
+            });
+            savePersistedRuntimeState();
+            renderRuntimeState();
+            return;
+          }
+          elements.toolSchemaJson.textContent = safeStringify({
+            name: definition.name,
+            description: definition.description || "",
+            inputSchema: definition.inputSchema || {},
+          });
+          savePersistedRuntimeState();
+          renderRuntimeState();
+        }
+
+        function selectTool(toolName, preserveArguments) {
+          const nextTool = toolName || "yacli.app.snapshot";
+          elements.toolNameInput.value = nextTool;
+          state.bootstrap.preferredTool = nextTool;
+          if (!preserveArguments) {
+            elements.toolArgsInput.value = safeStringify(defaultToolArguments(nextTool));
+          }
+          renderSelectedToolSchema();
+          renderCurrentViewUri();
+        }
+
+        function parseToolArguments() {
+          const raw = elements.toolArgsInput.value.trim();
+          if (!raw) {
+            return {};
+          }
+          try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("Tool args must be a JSON object");
+            }
+            return parsed;
+          } catch (error) {
+            throw new Error(error && error.message ? error.message : "Invalid tool args JSON");
+          }
+        }
+
+        function browserItems() {
+          const items = [];
+
+          const tools =
+            state.toolCatalogPayload && Array.isArray(state.toolCatalogPayload.tools)
+              ? state.toolCatalogPayload.tools
+              : [];
+          tools.forEach(function (tool) {
+            items.push({
+              kind: "tool",
+              name: tool.name || "unknown-tool",
+              title: tool.name || "unknown-tool",
+              subtitle: "MCP tool",
+              description: tool.description || "",
+              matchText: [
+                tool.name,
+                tool.description,
+                tool.inputSchema ? safeStringify(tool.inputSchema) : "",
+              ].join(" "),
+            });
+          });
+
+          const prompts =
+            state.promptListPayload && Array.isArray(state.promptListPayload.prompts)
+              ? state.promptListPayload.prompts
+              : [];
+          prompts.forEach(function (prompt) {
+            items.push({
+              kind: "prompt",
+              name: prompt.name || "unknown-prompt",
+              title: prompt.name || "unknown-prompt",
+              subtitle: prompt.title || "MCP prompt",
+              description: prompt.description || "",
+              matchText: [
+                prompt.name,
+                prompt.title,
+                prompt.description,
+                Array.isArray(prompt.arguments)
+                  ? prompt.arguments.map(function (argument) {
+                      return argument.name;
+                    }).join(" ")
+                  : "",
+              ].join(" "),
+            });
+          });
+
+          const resources =
+            state.resourceCatalogPayload && Array.isArray(state.resourceCatalogPayload.resources)
+              ? state.resourceCatalogPayload.resources
+              : [];
+          resources.forEach(function (resource) {
+            items.push({
+              kind: "resource",
+              name: resource.uri || "unknown-resource",
+              title: resource.name || resource.uri || "unknown-resource",
+              subtitle: resource.uri || "MCP resource",
+              description: resource.description || "",
+              matchText: [
+                resource.uri,
+                resource.name,
+                resource.description,
+                resource.mimeType,
+              ].join(" "),
+            });
+          });
+
+          const templates =
+            state.resourceTemplatesPayload &&
+            Array.isArray(state.resourceTemplatesPayload.resourceTemplates)
+              ? state.resourceTemplatesPayload.resourceTemplates
+              : [];
+          templates.forEach(function (template) {
+            items.push({
+              kind: "template",
+              name: template.uriTemplate || "unknown-template",
+              title: template.name || template.uriTemplate || "unknown-template",
+              subtitle: template.uriTemplate || "MCP resource template",
+              description: template.description || "",
+              matchText: [
+                template.uriTemplate,
+                template.name,
+                template.description,
+                template.mimeType,
+              ].join(" "),
+            });
+          });
+
+          skillCatalogItems().forEach(function (skill) {
+            items.push({
+              kind: "skill",
+              name: skill.name || "unknown-skill",
+              title: skill.name || "unknown-skill",
+              subtitle: skill.uri || "Embedded skill resource",
+              description: skill.description || "",
+              matchText: [
+                skill.name,
+                skill.uri,
+                skill.description,
+                skill.prompt,
+              ].join(" "),
+            });
+          });
+
+          return items;
+        }
+
+        function browserActionLabel(item) {
+          switch (item.kind) {
+            case "tool":
+              return "Open runner";
+            case "prompt":
+              return "Render prompt";
+            case "resource":
+              return "Read resource";
+            case "template":
+              return "Open flow";
+            case "skill":
+              return "Read skill";
+            default:
+              return "Open";
+          }
+        }
+
+        function filteredBrowserItems() {
+          const filter = elements.browserFilterSelect.value || "all";
+          const query = elements.browserQueryInput.value.trim().toLowerCase();
+          return browserItems().filter(function (item) {
+            if (filter !== "all" && item.kind !== filter) {
+              return false;
+            }
+            if (!query) {
+              return true;
+            }
+            return item.matchText.toLowerCase().includes(query);
+          });
+        }
+
+        function renderBrowser() {
+          const items = filteredBrowserItems();
+          const total = browserItems().length;
+          const filter = elements.browserFilterSelect.value || "all";
+          elements.browserSummary.textContent =
+            total === 0
+              ? "Search index is empty until the host exposes MCP catalogs."
+              : "Showing " +
+                String(items.length) +
+                " of " +
+                String(total) +
+                " indexed surfaces" +
+                (filter === "all" ? "." : " in " + filter + ".");
+
+          elements.browserResults.textContent = "";
+          if (items.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "browser-item";
+            empty.innerHTML =
+              "<div class=\"browser-item-title\"><strong>No matches</strong><span>Try a broader query or refresh the browser catalogs.</span></div>";
+            elements.browserResults.appendChild(empty);
+            savePersistedRuntimeState();
+            renderRuntimeState();
+            return;
+          }
+
+          items.slice(0, 24).forEach(function (item) {
+            const wrapper = document.createElement("div");
+            wrapper.className = "browser-item";
+
+            const header = document.createElement("div");
+            header.className = "browser-item-header";
+
+            const title = document.createElement("div");
+            title.className = "browser-item-title";
+            title.innerHTML =
+              "<strong>" +
+              escapeHtml(item.title) +
+              "</strong><span>" +
+              escapeHtml(item.subtitle) +
+              "</span>";
+
+            const chip = document.createElement("span");
+            chip.className = "browser-chip";
+            chip.textContent = item.kind;
+
+            header.appendChild(title);
+            header.appendChild(chip);
+            wrapper.appendChild(header);
+
+            const description = document.createElement("p");
+            description.textContent = item.description || "No description available.";
+            wrapper.appendChild(description);
+
+            const action = document.createElement("button");
+            action.className = "secondary";
+            action.textContent = browserActionLabel(item);
+            action.addEventListener("click", function () {
+              browserAction(item);
+            });
+            wrapper.appendChild(action);
+
+            elements.browserResults.appendChild(wrapper);
+          });
+
+          savePersistedRuntimeState();
+          renderRuntimeState();
+        }
+
+        async function browserAction(item) {
+          switch (item.kind) {
+            case "tool":
+              selectTool(item.name, false);
+              focusPanel("panel-tools");
+              break;
+            case "prompt":
+              elements.promptNameInput.value = item.name;
+              state.bootstrap.preferredPrompt = item.name;
+              focusPanel("panel-prompts");
+              await renderSelectedPrompt();
+              break;
+            case "resource":
+              if (item.name === "resource://yacli/skills") {
+                focusPanel("panel-resources");
+                readSkillsCatalog();
+                return;
+              }
+              if (item.name === "ui://yacli/dashboard") {
+                focusPanel("panel-browser");
+                logEvent("browser", "dashboard resource is already open");
+                return;
+              }
+              focusPanel("panel-resources");
+              await readResource(item.name);
+              break;
+            case "template":
+              focusPanel("panel-resources");
+              if (item.name === "resource://yacli/account/{account}") {
+                readAccountResource();
+              } else if (item.name === "resource://yacli/auth/{account}") {
+                readAuthResource();
+              } else if (item.name === "resource://yacli/skill/{skill}") {
+                readSkillResource();
+              } else {
+                logEvent("browser", item.name);
+              }
+              break;
+            case "skill":
+              elements.skillInput.value = item.name;
+              state.bootstrap.preferredSkill = item.name;
+              focusPanel("panel-resources");
+              readSkillResource();
+              break;
+            default:
+              break;
+          }
         }
 
         function applyHostContext(hostContext) {
@@ -1133,6 +2052,7 @@
             !hostSupportsModelContext() ||
             !authChallenge ||
             disposed;
+          elements.actionRunSelectedTool.disabled = disposed;
           elements.actionToggleDisplay.disabled = !alternateMode || disposed;
           elements.actionToggleDisplay.textContent =
             state.displayMode === "fullscreen"
@@ -1225,34 +2145,45 @@
           };
         }
 
-        async function runTool(toolName) {
+        async function runTool(toolName, explicitArguments) {
           if (disposed) {
             return;
           }
 
-          const account = elements.accountInput.value.trim();
-          const args = {};
-          if (toolName === "yacli.auth.status" && account) {
-            args.account = account;
+          const selectedTool = toolName || elements.toolNameInput.value.trim() || "yacli.app.snapshot";
+          let args = {};
+          if (explicitArguments && typeof explicitArguments === "object") {
+            args = explicitArguments;
+          } else {
+            try {
+              args = parseToolArguments();
+            } catch (error) {
+              const detail = error && error.message ? error.message : String(error);
+              setStatus("error", "Tool args are invalid");
+              logEvent("tool args error", detail);
+              renderToolResult({ error: detail, name: selectedTool });
+              return;
+            }
           }
+          selectTool(selectedTool, true);
 
-          state.lastToolName = toolName;
+          state.lastToolName = selectedTool;
           state.bootstrap.preferredSection = "tools";
-          state.bootstrap.preferredTool = toolName;
-          state.lastToolInput = { name: toolName, arguments: args };
+          state.bootstrap.preferredTool = selectedTool;
+          state.lastToolInput = { name: selectedTool, arguments: args };
           renderToolInput();
           updateMetrics();
-          setStatus("running", "Running " + toolName);
+          setStatus("running", "Running " + selectedTool);
           setButtonsDisabled(true);
-          logEvent("tools/call", toolName);
+          logEvent("tools/call", selectedTool);
 
           try {
             const result = await sendRequest("tools/call", {
-              name: toolName,
+              name: selectedTool,
               arguments: args,
             });
             if (
-              toolName === "yacli.app.snapshot" &&
+              selectedTool === "yacli.app.snapshot" &&
               result &&
               typeof result === "object" &&
               result.structuredContent
@@ -1264,8 +2195,13 @@
             }
             state.lastToolResult = result;
             renderToolResult();
-            setStatus("ready", toolName === "yacli.app.snapshot" ? "Dashboard snapshot refreshed" : "Host connected and app initialized");
-            logEvent("tool result", toolName + " completed");
+            setStatus(
+              "ready",
+              selectedTool === "yacli.app.snapshot"
+                ? "Dashboard snapshot refreshed"
+                : selectedTool + " completed",
+            );
+            logEvent("tool result", selectedTool + " completed");
           } catch (error) {
             const detail = error && error.message ? error.message : String(error);
             state.lastToolResult = error || { error: detail };
@@ -1284,6 +2220,7 @@
           toolButtons.forEach(function (button) {
             button.disabled = disabled;
           });
+          elements.actionRunSelectedTool.disabled = disabled || disposed;
           syncHostActionAvailability();
         }
 
@@ -1527,7 +2464,29 @@
           return value || "personal";
         }
 
+        function skillName() {
+          const value = elements.skillInput.value.trim();
+          return value || "yacli-shared";
+        }
+
         function applyBootstrapState() {
+          if (elements.browserQueryInput) {
+            elements.browserQueryInput.value = state.browserQuery || "";
+          }
+          if (elements.browserFilterSelect) {
+            elements.browserFilterSelect.value = state.browserFilter || "all";
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredTool === "string" &&
+            state.bootstrap.preferredTool.length > 0
+          ) {
+            elements.toolNameInput.value = state.bootstrap.preferredTool;
+          }
+          if (state.toolArgumentsText) {
+            elements.toolArgsInput.value = state.toolArgumentsText;
+          }
           if (
             state.bootstrap &&
             typeof state.bootstrap === "object" &&
@@ -1539,6 +2498,26 @@
               "state restored",
               "dashboard opened for account " + state.bootstrap.defaultAccount,
             );
+          }
+
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredSkill === "string" &&
+            state.bootstrap.preferredSkill.length > 0
+          ) {
+            elements.skillInput.value = state.bootstrap.preferredSkill;
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredPrompt === "string" &&
+            state.bootstrap.preferredPrompt.length > 0
+          ) {
+            elements.promptNameInput.value = state.bootstrap.preferredPrompt;
+          }
+          if (state.promptArgumentsText) {
+            elements.promptArgsInput.value = state.promptArgumentsText;
           }
 
           if (
@@ -1571,6 +2550,100 @@
             renderCurrentViewUri();
             savePersistedRuntimeState();
           }
+        }
+
+        async function refreshToolCatalog() {
+          try {
+            state.toolCatalogPayload = await sendRequest("tools/list", {});
+            const activeTool =
+              elements.toolNameInput.value.trim() ||
+              (state.bootstrap && state.bootstrap.preferredTool) ||
+              "yacli.app.snapshot";
+            if (!elements.toolNameInput.value.trim()) {
+              selectTool(activeTool, Boolean(state.toolArgumentsText));
+            }
+            renderSelectedToolSchema();
+            renderBrowser();
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            state.toolCatalogPayload = {
+              error: detail,
+              tools: [],
+            };
+            logEvent("tools/list error", detail);
+          }
+        }
+
+        async function refreshPromptCatalog() {
+          try {
+            const result = await sendRequest("prompts/list", {});
+            renderPromptList(result);
+            return result;
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderPromptList({ error: detail, prompts: [] });
+            throw error;
+          }
+        }
+
+        async function refreshResourceCatalog() {
+          if (!hostSupportsServerResources() || disposed) {
+            state.resourceCatalogPayload = {
+              resources: [],
+              unsupported: true,
+            };
+            return;
+          }
+
+          try {
+            state.resourceCatalogPayload = await sendRequest("resources/list", {});
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            state.resourceCatalogPayload = {
+              error: detail,
+              resources: [],
+            };
+            logEvent("resources/list error", detail);
+          }
+        }
+
+        async function refreshSkillsCatalog() {
+          if (!hostSupportsServerResources() || disposed) {
+            state.skillsCatalogPayload = {
+              contents: [],
+              unsupported: true,
+            };
+            return;
+          }
+
+          try {
+            state.skillsCatalogPayload = await sendRequest("resources/read", {
+              uri: "resource://yacli/skills",
+            });
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            state.skillsCatalogPayload = {
+              error: detail,
+              contents: [],
+            };
+            logEvent("skills catalog error", detail);
+          }
+        }
+
+        async function refreshBrowserCatalogs() {
+          setStatus("running", "Refreshing search index");
+          await refreshToolCatalog();
+          try {
+            await refreshPromptCatalog();
+          } catch (_error) {
+            // renderPromptList already captured the failure surface.
+          }
+          await refreshResourceCatalog();
+          await refreshResourceTemplates();
+          await refreshSkillsCatalog();
+          renderBrowser();
+          setStatus("ready", "Search index refreshed");
+          logEvent("browser", "searchable browser catalogs refreshed");
         }
 
         async function refreshResourceTemplates() {
@@ -1634,8 +2707,12 @@
           setStatus("running", "Reading resource");
           try {
             const result = await sendRequest("resources/read", { uri: uri });
+            if (uri === "resource://yacli/skills") {
+              state.skillsCatalogPayload = result;
+            }
             renderResource(result);
             await setCurrentResourceSubscription(uri);
+            renderBrowser();
             setStatus("ready", "Resource loaded");
             logEvent("resources/read", uri);
           } catch (error) {
@@ -1648,14 +2725,97 @@
 
         function readAccountResource() {
           state.bootstrap.preferredResource = "account";
+          state.bootstrap.preferredSkill = "";
           focusPanel("panel-resources");
           readResource("resource://yacli/account/" + accountAlias());
         }
 
         function readAuthResource() {
           state.bootstrap.preferredResource = "auth";
+          state.bootstrap.preferredSkill = "";
           focusPanel("panel-auth");
           readResource("resource://yacli/auth/" + accountAlias());
+        }
+
+        function readSkillsCatalog() {
+          state.bootstrap.preferredResource = "skills";
+          state.bootstrap.preferredSkill = "";
+          focusPanel("panel-resources");
+          readResource("resource://yacli/skills");
+        }
+
+        function readSkillResource() {
+          const skill = skillName();
+          state.bootstrap.preferredResource = "skill";
+          state.bootstrap.preferredSkill = skill;
+          focusPanel("panel-resources");
+          readResource("resource://yacli/skill/" + skill);
+        }
+
+        async function listPrompts() {
+          state.bootstrap.preferredSection = "prompts";
+          focusPanel("panel-prompts");
+          setStatus("running", "Listing prompts");
+          try {
+            await refreshPromptCatalog();
+            renderBrowser();
+            setStatus("ready", "Prompts loaded");
+            logEvent("prompts/list", "loaded embedded MCP prompts");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderPromptList({ error: detail });
+            setStatus("error", "Prompt listing failed");
+            logEvent("prompts/list error", detail);
+          }
+        }
+
+        function parsePromptArguments() {
+          const raw = elements.promptArgsInput.value.trim();
+          if (!raw) {
+            return {};
+          }
+          try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("Prompt args must be a JSON object");
+            }
+            return parsed;
+          } catch (error) {
+            throw new Error(error && error.message ? error.message : "Invalid prompt args JSON");
+          }
+        }
+
+        async function renderSelectedPrompt() {
+          const prompt = elements.promptNameInput.value.trim() || "shared";
+          let argumentsPayload;
+          try {
+            argumentsPayload = parsePromptArguments();
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderPrompt({ error: detail });
+            setStatus("error", "Prompt args are invalid");
+            logEvent("prompt args error", detail);
+            return;
+          }
+
+          state.bootstrap.preferredSection = "prompts";
+          state.bootstrap.preferredPrompt = prompt;
+          focusPanel("panel-prompts");
+          setStatus("running", "Rendering prompt");
+          try {
+            const result = await sendRequest("prompts/get", {
+              name: prompt,
+              arguments: argumentsPayload,
+            });
+            renderPrompt(result);
+            setStatus("ready", "Prompt rendered");
+            logEvent("prompts/get", prompt);
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderPrompt({ error: detail, prompt: prompt });
+            setStatus("error", "Prompt render failed");
+            logEvent("prompts/get error", detail);
+          }
         }
 
         async function restoreBootstrapFocus() {
@@ -1679,13 +2839,26 @@
             await readAccountResource();
           } else if (preferredResource === "auth") {
             await readAuthResource();
+          } else if (preferredResource === "skills") {
+            await readSkillsCatalog();
+          } else if (preferredResource === "skill") {
+            await readSkillResource();
           } else if (elements.accountInput.value.trim()) {
             await readAccountResource();
           }
 
+          const preferredPrompt =
+            typeof state.bootstrap.preferredPrompt === "string"
+              ? state.bootstrap.preferredPrompt
+              : "";
+          if (preferredPrompt) {
+            focusPanel("panel-prompts");
+            await renderSelectedPrompt();
+          }
+
           if (preferredTool && preferredTool !== "yacli.app.snapshot") {
             focusPanel("panel-tools");
-            await runTool(preferredTool);
+            selectTool(preferredTool, true);
           }
         }
 
@@ -1730,7 +2903,30 @@
 
           if (method === "notifications/resources/list_changed") {
             logEvent("resources changed", "host reported resource template changes");
-            refreshResourceTemplates();
+            refreshResourceCatalog()
+              .then(refreshResourceTemplates)
+              .then(refreshSkillsCatalog)
+              .then(renderBrowser);
+            return;
+          }
+
+          if (method === "notifications/prompts/list_changed") {
+            logEvent("prompts changed", "host reported prompt catalog changes");
+            refreshPromptCatalog()
+              .then(renderBrowser)
+              .catch(function (error) {
+                logEvent(
+                  "prompts changed error",
+                  error && error.message ? error.message : String(error),
+                );
+              });
+            return;
+          }
+
+          if (method === "notifications/tools/list_changed") {
+            logEvent("tools changed", "host reported tool catalog changes");
+            refreshToolCatalog()
+              .then(renderBrowser);
             return;
           }
 
@@ -1792,17 +2988,54 @@
           renderToolInput(state.lastToolInput);
           renderToolResult(state.lastToolResult);
           renderAuth(state.authChallenge);
+          renderPromptList(state.promptListPayload);
+          renderPrompt(state.promptPayload);
           renderResourceTemplates(state.resourceTemplatesPayload);
           renderResource(state.resourcePayload);
+          renderRuntimeState();
           applyBootstrapState();
+          renderBrowser();
           elements.accountInput.addEventListener("input", renderCurrentViewUri);
+          elements.toolNameInput.addEventListener("input", function () {
+            state.bootstrap.preferredTool = elements.toolNameInput.value.trim();
+            renderSelectedToolSchema();
+            renderCurrentViewUri();
+          });
+          elements.toolArgsInput.addEventListener("input", function () {
+            renderRuntimeState();
+          });
+          elements.browserQueryInput.addEventListener("input", function () {
+            state.browserQuery = elements.browserQueryInput.value;
+            renderBrowser();
+          });
+          elements.browserFilterSelect.addEventListener("change", function () {
+            state.browserFilter = elements.browserFilterSelect.value;
+            renderBrowser();
+          });
+          elements.skillInput.addEventListener("input", function () {
+            if (state.bootstrap.preferredResource === "skill") {
+              state.bootstrap.preferredSkill = elements.skillInput.value.trim();
+            }
+            renderCurrentViewUri();
+            renderRuntimeState();
+          });
+          elements.promptNameInput.addEventListener("input", function () {
+            state.bootstrap.preferredPrompt = elements.promptNameInput.value.trim();
+            renderCurrentViewUri();
+            renderRuntimeState();
+          });
+          elements.promptArgsInput.addEventListener("input", function () {
+            renderRuntimeState();
+          });
           window.addEventListener("pagehide", savePersistedRuntimeState);
           window.addEventListener("beforeunload", savePersistedRuntimeState);
           window.addEventListener("message", onMessage);
 
           toolButtons.forEach(function (button) {
             button.addEventListener("click", function () {
-              runTool(button.dataset.tool);
+              const toolName = button.dataset.tool;
+              selectTool(toolName, false);
+              runTool(toolName);
             });
           });
 
@@ -1824,13 +3057,22 @@
             elements.actionOpenAuthServer.addEventListener("click", openAuthIssuer);
             elements.actionOpenDocs.addEventListener("click", openDocs);
             elements.actionOpenResourceMetadata.addEventListener("click", openResourceMetadata);
+            elements.actionRefreshBrowser.addEventListener("click", refreshBrowserCatalogs);
             elements.actionReadAccountResource.addEventListener("click", readAccountResource);
             elements.actionReadAuthResource.addEventListener("click", readAuthResource);
+            elements.actionListPrompts.addEventListener("click", listPrompts);
+            elements.actionReadSkillsCatalog.addEventListener("click", readSkillsCatalog);
+            elements.actionReadSkillResource.addEventListener("click", readSkillResource);
+            elements.actionRunSelectedTool.addEventListener("click", function () {
+              runTool();
+            });
+            elements.actionRenderPrompt.addEventListener("click", renderSelectedPrompt);
             elements.actionShareAuthContext.addEventListener("click", shareAuthContext);
             elements.actionShareSnapshot.addEventListener("click", shareSnapshot);
             elements.actionShareView.addEventListener("click", shareCurrentView);
             elements.actionToggleDisplay.addEventListener("click", requestAlternateDisplayMode);
-            await refreshResourceTemplates();
+            renderBrowser();
+            await refreshBrowserCatalogs();
             await runTool("yacli.app.snapshot");
             await restoreBootstrapFocus();
           } catch (error) {

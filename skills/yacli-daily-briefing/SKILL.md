@@ -1,32 +1,51 @@
 ---
 name: yacli-daily-briefing
-description: "Daily briefing: show unread inbox messages and today's calendar events in one flow. Use for morning review or status check."
+description: "Сводка по почте и расписанию за период: входящие письма, важные сообщения, ближайшие встречи. Используй для утреннего обзора, дайджеста за неделю, сводки по важным письмам, проверки что нового."
 metadata:
   author: NextStat
 ---
 
-# Daily briefing
+# Сводка по почте и расписанию
 
-A multi-step workflow to get a quick overview of mail and schedule.
+Многошаговый сценарий для обзора почты и календаря за любой период.
 
-## Steps
+## Шаги
 
-1. List recent inbox messages:
+1. Определи период. Если пользователь сказал:
+   - «за сегодня» → FROM=сегодня, TO=завтра, limit=20
+   - «за неделю» → FROM=7 дней назад, TO=завтра, limit=50
+   - «за месяц» → FROM=30 дней назад, TO=завтра, limit=100
+   - без уточнения → используй «за сегодня»
+
+2. Получи входящие письма за период:
 
 ```
-yacli mail list --limit 10
+yacli mail list --limit N
 ```
 
-2. List today's events (replace dates with actual today/tomorrow):
+3. Получи события календаря за тот же период:
 
 ```
-yacli calendar events YYYY-MM-DD YYYY-MM-DD+1
+yacli calendar events FROM TO
 ```
 
-3. Summarize: count of messages, any urgent subjects, upcoming meetings.
+4. Если среди писем есть важные — прочитай их:
 
-## Notes
+```
+yacli mail read UID
+```
 
-- If multiple accounts exist, run for each account using `--account ALIAS`.
-- Adjust `--limit` based on expected volume.
-- Use `yacli mail read UID` to drill into any message that looks important.
+Признаки важности: пометка «срочно» в теме, письма от руководства, ответы на твои письма, приглашения на встречи.
+
+5. Сформируй сводку:
+   - Количество новых писем
+   - Важные письма с кратким содержанием
+   - Ближайшие встречи и события
+   - Что требует действия (ответить, принять приглашение)
+
+## Заметки
+
+- При нескольких аккаунтах повтори для каждого: `--account ALIAS`.
+- Увеличь `--limit` если писем за период может быть много.
+- Используй `yacli mail read UID` чтобы вникнуть в важное письмо.
+- Если пользователь просит «сводку по важным письмам» — акцентируй внимание на срочных и требующих действия.

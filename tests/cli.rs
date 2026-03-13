@@ -7,7 +7,9 @@ use std::fs;
 use tempfile::tempdir;
 
 fn yacli() -> Command {
-    Command::cargo_bin("yacli").expect("binary exists")
+    let mut command = Command::cargo_bin("yacli").expect("binary exists");
+    command.env("YACLI_SECRET_BACKEND", "file");
+    command
 }
 
 fn current_release_update_target() -> (&'static str, &'static str) {

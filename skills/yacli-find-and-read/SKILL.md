@@ -1,32 +1,34 @@
 ---
 name: yacli-find-and-read
-description: "Find and read an email: search by keyword, then read the matching message by UID. Use when looking for a specific email."
+description: "Найти и прочитать письмо: поиск по ключевому слову, затем чтение по UID. Используй когда нужно найти конкретное письмо, email от определённого человека, сообщение на тему."
 metadata:
   author: NextStat
 ---
 
-# Find and read
+# Найти и прочитать письмо
 
-A two-step workflow to locate and read a specific email.
+Двухшаговый сценарий: поиск → чтение.
 
-## Steps
+## Шаги
 
-1. Search for the message:
+1. Найди письмо:
 
 ```
-yacli mail search "KEYWORD" --limit 5
+yacli mail search "ЗАПРОС" --limit 5
 ```
 
-2. Pick the relevant message from results. Note the `uid` field.
+2. Выбери нужное письмо из результатов. Запомни поле `uid`.
 
-3. Read it:
+3. Прочитай его:
 
 ```
 yacli mail read UID
 ```
 
-## Notes
+## Заметки
 
-- Search looks in INBOX by default. Use `--folder FOLDER` for other folders.
-- If search returns too many results, narrow the query or reduce `--limit`.
-- The `uid` from step 1 output is the required argument for step 3.
+- Поиск по умолчанию идёт в INBOX. Для других папок: `--folder ПАПКА`.
+- Если результатов слишком много — уточни запрос или уменьши `--limit`.
+- `uid` из шага 1 — обязательный аргумент для шага 3.
+- Если пользователь ищет «письмо от Иванова» — используй фамилию как запрос.
+- Если пользователь ищет «письмо про отчёт» — используй ключевое слово из темы.

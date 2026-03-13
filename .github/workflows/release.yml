@@ -85,6 +85,18 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+      - name: Smoke packaged Linux x64 release asset
+        shell: bash
+        run: |
+          asset_path="$(find dist -type f -name 'yacli-x86_64-unknown-linux-gnu.tar.gz' | head -n 1)"
+          test -n "$asset_path"
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT INT TERM HUP
+          tar -xzf "$asset_path" -C "$smoke_dir"
+          binary_path="$(find "$smoke_dir" -type f -name yacli | head -n 1)"
+          test -n "$binary_path"
+          chmod +x "$binary_path"
+          sh ./scripts/smoke-product-surface.sh "$binary_path"
       - name: Assemble release checksums
         shell: bash
         run: |

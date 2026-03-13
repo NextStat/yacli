@@ -45,6 +45,37 @@ pub fn skill_names() -> Vec<&'static str> {
     SKILLS.iter().map(|s| s.name).collect()
 }
 
+pub fn skill_content(name: &str) -> Option<&'static str> {
+    SKILLS
+        .iter()
+        .find(|skill| skill.name == name)
+        .map(|skill| skill.content)
+}
+
+pub fn skill_description(name: &str) -> Option<String> {
+    let content = skill_content(name)?;
+    parse_frontmatter_description(content)
+}
+
+pub fn skill_prompt_name(name: &str) -> Option<&'static str> {
+    match name {
+        "yacli-shared" => Some("shared"),
+        "yacli-mail" => Some("mail"),
+        "yacli-calendar" => Some("calendar"),
+        "yacli-disk" => Some("disk"),
+        "yacli-daily-briefing" => Some("daily-briefing"),
+        "yacli-find-and-read" => Some("find-and-read"),
+        "yacli-reply-with-context" => Some("reply-with-context"),
+        _ => None,
+    }
+}
+
+pub fn prompt_skill_name(prompt_name: &str) -> Option<&'static str> {
+    SKILLS.iter().find_map(|skill| {
+        (skill_prompt_name(skill.name) == Some(prompt_name)).then_some(skill.name)
+    })
+}
+
 /// Write all embedded skills to `target_dir/<skill-name>/SKILL.md`.
 /// Returns the number of skills written.
 pub fn install_skills(target_dir: &Path) -> Result<usize> {
@@ -65,6 +96,18 @@ pub fn install_skills(target_dir: &Path) -> Result<usize> {
         })?;
     }
     Ok(SKILLS.len())
+}
+
+fn parse_frontmatter_description(content: &str) -> Option<String> {
+    let frontmatter = content
+        .strip_prefix("---\n")?
+        .split_once("\n---\n")
+        .map(|(frontmatter, _)| frontmatter)?;
+    let raw = frontmatter
+        .lines()
+        .find_map(|line| line.strip_prefix("description:"))?
+        .trim();
+    Some(raw.trim_matches('"').to_string())
 }
 
 #[cfg(test)]
@@ -207,5 +250,28 @@ mod tests {
             let content = fs::read_to_string(&path).expect("read");
             assert_eq!(content, skill.content);
         }
+    }
+
+    #[test]
+    fn skill_content_and_description_are_available() {
+        let content = skill_content("yacli-mail").expect("skill content");
+        assert!(content.contains("# yacli mail"));
+
+        let description = skill_description("yacli-mail").expect("skill description");
+        assert!(description.contains("Яндекс Почта"));
+    }
+
+    #[test]
+    fn prompt_and_skill_name_mapping_is_bidirectional() {
+        assert_eq!(prompt_skill_name("mail"), Some("yacli-mail"));
+        assert_eq!(
+            prompt_skill_name("daily-briefing"),
+            Some("yacli-daily-briefing")
+        );
+        assert_eq!(skill_prompt_name("yacli-shared"), Some("shared"));
+        assert_eq!(
+            skill_prompt_name("yacli-reply-with-context"),
+            Some("reply-with-context")
+        );
     }
 }

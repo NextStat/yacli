@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
@@ -15,9 +16,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use rand::{Rng, distr::Alphanumeric};
 use serde_json::{Map, Value, json};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, mpsc as tokio_mpsc, oneshot};
 use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use url::Url;
 
 use crate::account_store::AccountStore;
@@ -29,21 +30,35 @@ use crate::runtime_context::{
 };
 use crate::update::check_for_update;
 use crate::{
-    calendar::{CalendarEventsRequest, list_calendar_events, list_calendars, parse_event_window},
-    disk::{PrivateDiskListRequest, fetch_disk_info, fetch_private_resource},
-    mail::{list_mail_folders, list_mail_messages, read_mail_message, search_mail_messages},
+    calendar::{
+        CalendarCreateRequest, CalendarEventsRequest, create_calendar_event, delete_calendar_event,
+        list_calendar_events, list_calendars, parse_event_window,
+    },
+    disk::{
+        PrivateDiskListRequest, PrivateDiskMkdirRequest, PrivateDiskUploadRequest,
+        create_private_directory, fetch_disk_info, fetch_private_resource, upload_private_resource,
+    },
+    mail::{
+        list_mail_folders, list_mail_messages, read_mail_message, search_mail_messages,
+        send_mail_message,
+    },
 };
 use chrono::{DateTime, Utc};
 
+use super::{prompts, skills};
+
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const APP_RESOURCE_URI: &str = "ui://yacli/dashboard";
-const APP_RESOURCE_URI_TEMPLATE: &str = "ui://yacli/dashboard{?account,section,resource,tool}";
+const APP_RESOURCE_URI_TEMPLATE: &str =
+    "ui://yacli/dashboard{?account,section,resource,tool,skill,prompt}";
 const APP_RESOURCE_MIME_TYPE: &str = "text/html;profile=mcp-app";
 const APP_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
 const APP_ACCOUNT_QUERY_PARAM: &str = "account";
 const APP_SECTION_QUERY_PARAM: &str = "section";
 const APP_RESOURCE_QUERY_PARAM: &str = "resource";
 const APP_TOOL_QUERY_PARAM: &str = "tool";
+const APP_SKILL_QUERY_PARAM: &str = "skill";
+const APP_PROMPT_QUERY_PARAM: &str = "prompt";
 const HTTP_MCP_PATH: &str = "/mcp";
 const MCP_SESSION_HEADER: &str = "Mcp-Session-Id";
 const HTTP_AUTH_TOKEN_ENV: &str = "YACLI_MCP_HTTP_BEARER_TOKEN";
@@ -55,10 +70,13 @@ const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 const PROTECTED_RESOURCE_MCP_METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
 const DASHBOARD_SECTION_TOOLS: &str = "tools";
+const DASHBOARD_SECTION_PROMPTS: &str = "prompts";
 const DASHBOARD_SECTION_RESOURCES: &str = "resources";
 const DASHBOARD_SECTION_AUTH: &str = "auth";
 const DASHBOARD_RESOURCE_ACCOUNT: &str = "account";
 const DASHBOARD_RESOURCE_AUTH: &str = "auth";
+const DASHBOARD_RESOURCE_SKILLS: &str = "skills";
+const DASHBOARD_RESOURCE_SKILL: &str = "skill";
 const DASHBOARD_TOOL_APP_SNAPSHOT: &str = "yacli.app.snapshot";
 const DASHBOARD_TOOL_ACCOUNT_LIST: &str = "yacli.account.list";
 const DASHBOARD_TOOL_ACCOUNT_CURRENT: &str = "yacli.account.current";
@@ -70,12 +88,30 @@ struct DashboardResourceState {
     preferred_section: Option<String>,
     preferred_resource: Option<String>,
     preferred_tool: Option<String>,
+    preferred_skill: Option<String>,
+    preferred_prompt: Option<String>,
+}
+
+struct MailForwardToolRequest {
+    folder: String,
+    uid: u64,
+    to: String,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    text: Option<String>,
+    html: Option<String>,
+    max_source_bytes: u64,
 }
 
 struct SessionState {
     initialized: bool,
     ui_enabled: bool,
     supports_resource_subscriptions: bool,
+    supports_roots_requests: bool,
+    roots_list_changed_supported: bool,
+    roots_dirty: bool,
+    cached_roots: Option<Vec<Value>>,
+    next_outbound_request_id: u64,
     resource_subscriptions: BTreeSet<String>,
     stdio_message_format: StdioMessageFormat,
 }
@@ -86,6 +122,11 @@ impl SessionState {
             initialized: false,
             ui_enabled: false,
             supports_resource_subscriptions: true,
+            supports_roots_requests: false,
+            roots_list_changed_supported: false,
+            roots_dirty: false,
+            cached_roots: None,
+            next_outbound_request_id: 1,
             resource_subscriptions: BTreeSet::new(),
             stdio_message_format: StdioMessageFormat::ContentLength,
         }
@@ -96,6 +137,11 @@ impl SessionState {
             initialized: false,
             ui_enabled: false,
             supports_resource_subscriptions: true,
+            supports_roots_requests: false,
+            roots_list_changed_supported: false,
+            roots_dirty: false,
+            cached_roots: None,
+            next_outbound_request_id: 1,
             resource_subscriptions: BTreeSet::new(),
             stdio_message_format: StdioMessageFormat::ContentLength,
         }
@@ -141,6 +187,7 @@ struct HttpSession {
     state: SessionState,
     poller: ResourceSubscriptionPoller,
     notifications: broadcast::Sender<Value>,
+    pending_client_requests: HashMap<u64, oneshot::Sender<Value>>,
 }
 
 impl HttpSession {
@@ -150,6 +197,7 @@ impl HttpSession {
             state: SessionState::http(),
             poller: ResourceSubscriptionPoller::default(),
             notifications,
+            pending_client_requests: HashMap::new(),
         }
     }
 }
@@ -283,8 +331,14 @@ pub fn serve_stdio() -> Result<()> {
                     .cloned()
                     .ok_or_else(|| YacliError::Serialization("missing JSON-RPC id".to_string()))?;
 
-                let response = match handle_request(method, params, &mut session, Some(&mut poller))
-                {
+                let response = match execute_stdio_request(
+                    method,
+                    params,
+                    &mut session,
+                    &mut writer,
+                    &rx,
+                    &mut poller,
+                ) {
                     Ok(result) => json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -330,6 +384,17 @@ async fn handle_http_post(
         Err(err) => return http_error_response(StatusCode::BAD_REQUEST, &err.to_string(), None),
     };
 
+    if messages.iter().any(is_client_response_message) {
+        if !messages.iter().all(is_client_response_message) {
+            return http_error_response(
+                StatusCode::BAD_REQUEST,
+                "JSON-RPC responses cannot be mixed with requests in the same HTTP payload",
+                None,
+            );
+        }
+        return handle_http_client_responses(&state, &headers, messages).await;
+    }
+
     if needs_http_auth(&messages) && !state.auth.authorized(&headers) {
         return http_unauthorized_response(
             required_scopes(&messages),
@@ -357,6 +422,26 @@ async fn handle_http_post(
         );
     };
 
+    if method == "tools/call"
+        && requested_tool_name(messages[0].get("params").unwrap_or(&Value::Null))
+            == Some("yacli.roots.list")
+    {
+        if messages.len() != 1 {
+            return http_error_response(
+                StatusCode::BAD_REQUEST,
+                "yacli.roots.list must be called as a single JSON-RPC request over HTTP",
+                Some(&session_id),
+            );
+        }
+        return handle_http_roots_tool_call(
+            state,
+            headers,
+            session_id,
+            messages.into_iter().next().unwrap_or(Value::Null),
+        )
+        .await;
+    }
+
     let mut responses = Vec::new();
     {
         let mut sessions = state.sessions.lock().await;
@@ -364,7 +449,9 @@ async fn handle_http_post(
             .entry(session_id.clone())
             .or_insert_with(HttpSession::new);
         for message in messages {
-            match execute_message(message, &mut session.state, Some(&mut session.poller)) {
+            match tokio::task::block_in_place(|| {
+                execute_message(message, &mut session.state, Some(&mut session.poller))
+            }) {
                 Ok(Some(response)) => responses.push(response),
                 Ok(None) => {}
                 Err(err) => responses.push(json!({
@@ -390,6 +477,185 @@ async fn handle_http_post(
         Value::Array(responses)
     };
     http_json_response(StatusCode::OK, payload, Some(&session_id))
+}
+
+async fn handle_http_client_responses(
+    state: &HttpAppState,
+    headers: &HeaderMap,
+    messages: Vec<Value>,
+) -> Response {
+    let session_id = match header_value(headers, MCP_SESSION_HEADER) {
+        Some(session_id) => session_id,
+        None => {
+            return http_error_response(
+                StatusCode::BAD_REQUEST,
+                "missing Mcp-Session-Id header; call initialize first",
+                None,
+            );
+        }
+    };
+
+    let mut sessions = state.sessions.lock().await;
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return http_error_response(
+            StatusCode::BAD_REQUEST,
+            "unknown Mcp-Session-Id session",
+            None,
+        );
+    };
+
+    for message in messages {
+        let Some(id) = message.get("id").and_then(Value::as_u64) else {
+            return http_error_response(
+                StatusCode::BAD_REQUEST,
+                "HTTP client response requires numeric JSON-RPC `id`",
+                Some(&session_id),
+            );
+        };
+        let Some(sender) = session.pending_client_requests.remove(&id) else {
+            return http_error_response(
+                StatusCode::BAD_REQUEST,
+                "unknown pending HTTP client request id",
+                Some(&session_id),
+            );
+        };
+        let _ = sender.send(message);
+    }
+
+    http_empty_response(StatusCode::ACCEPTED, Some(&session_id))
+}
+
+async fn handle_http_roots_tool_call(
+    state: HttpAppState,
+    headers: HeaderMap,
+    session_id: String,
+    message: Value,
+) -> Response {
+    if !request_accepts_sse(&headers) {
+        return http_error_response(
+            StatusCode::NOT_ACCEPTABLE,
+            "yacli.roots.list over HTTP requires Accept: text/event-stream",
+            Some(&session_id),
+        );
+    }
+
+    let original_id = message.get("id").cloned().unwrap_or(Value::Null);
+    let mut sessions = state.sessions.lock().await;
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return http_error_response(
+            StatusCode::BAD_REQUEST,
+            "unknown Mcp-Session-Id session",
+            Some(&session_id),
+        );
+    };
+    if !session.state.initialized {
+        return http_error_response(
+            StatusCode::BAD_REQUEST,
+            "MCP session is not initialized; call initialize first",
+            Some(&session_id),
+        );
+    }
+    if !session.state.supports_roots_requests {
+        let payload = jsonrpc_error_payload(
+            original_id,
+            &YacliError::UnsupportedOperation(
+                "yacli.roots.list requires client roots capability".to_string(),
+            ),
+        );
+        return http_json_response(StatusCode::OK, payload, Some(&session_id));
+    }
+
+    let outbound_request_id = session.state.next_outbound_request_id;
+    session.state.next_outbound_request_id += 1;
+    let ui_enabled = session.state.ui_enabled;
+    let (roots_response_tx, roots_response_rx) = oneshot::channel();
+    session
+        .pending_client_requests
+        .insert(outbound_request_id, roots_response_tx);
+    drop(sessions);
+
+    let (event_tx, event_rx) = tokio_mpsc::channel::<Value>(4);
+    let state_for_task = state.clone();
+    let session_id_for_task = session_id.clone();
+    tokio::spawn(async move {
+        let roots_request = json!({
+            "jsonrpc": "2.0",
+            "id": outbound_request_id,
+            "method": "roots/list"
+        });
+        if event_tx.send(roots_request).await.is_err() {
+            let mut sessions = state_for_task.sessions.lock().await;
+            if let Some(session) = sessions.get_mut(&session_id_for_task) {
+                session.pending_client_requests.remove(&outbound_request_id);
+            }
+            return;
+        }
+
+        let final_payload =
+            match tokio::time::timeout(Duration::from_secs(30), roots_response_rx).await {
+                Ok(Ok(client_response)) => match parse_roots_list_response(&client_response)
+                    .and_then(|roots| {
+                        let response = roots_tool_response(roots.clone(), ui_enabled)?;
+                        Ok((roots, response))
+                    }) {
+                    Ok((roots, response)) => {
+                        let mut sessions = state_for_task.sessions.lock().await;
+                        if let Some(session) = sessions.get_mut(&session_id_for_task) {
+                            session.state.cached_roots = Some(roots);
+                            session.state.roots_dirty = false;
+                        }
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": original_id,
+                            "result": response,
+                        })
+                    }
+                    Err(err) => jsonrpc_error_payload(original_id, &err),
+                },
+                Ok(Err(_)) => jsonrpc_error_payload(
+                    original_id,
+                    &YacliError::Io(
+                        "HTTP client closed roots/list response channel before replying"
+                            .to_string(),
+                    ),
+                ),
+                Err(_) => {
+                    let mut sessions = state_for_task.sessions.lock().await;
+                    if let Some(session) = sessions.get_mut(&session_id_for_task) {
+                        session.pending_client_requests.remove(&outbound_request_id);
+                    }
+                    jsonrpc_error_payload(
+                        original_id,
+                        &YacliError::Io(
+                            "timed out waiting for HTTP client roots/list response".to_string(),
+                        ),
+                    )
+                }
+            };
+
+        let _ = event_tx.send(final_payload).await;
+    });
+
+    let stream =
+        ReceiverStream::new(event_rx).filter_map(|payload| match serde_json::to_string(&payload) {
+            Ok(data) => Some(Ok::<Event, Infallible>(
+                Event::default().event("message").data(data),
+            )),
+            Err(_) => None,
+        });
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(SSE_KEEPALIVE_INTERVAL)
+                .text("keepalive"),
+        )
+        .into_response();
+    insert_common_http_headers(response.headers_mut(), Some(&session_id));
+    response.headers_mut().insert(
+        http_header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache"),
+    );
+    response
 }
 
 async fn handle_http_get(State(state): State<HttpAppState>, headers: HeaderMap) -> Response {
@@ -592,8 +858,15 @@ fn execute_message(
 }
 
 fn handle_notification(method: &str, session: &mut SessionState) {
-    if method == "notifications/initialized" {
-        session.initialized = true;
+    match method {
+        "notifications/initialized" => {
+            session.initialized = true;
+        }
+        "notifications/roots/list_changed" => {
+            session.roots_dirty = true;
+            session.cached_roots = None;
+        }
+        _ => {}
     }
 }
 
@@ -612,11 +885,17 @@ fn handle_request(
     match method {
         "initialize" => {
             session.ui_enabled = client_supports_ui(&params);
+            session.roots_list_changed_supported = client_supports_roots_list_changed(&params);
+            session.supports_roots_requests = client_supports_roots(&params);
+            session.roots_dirty = session.supports_roots_requests;
+            session.cached_roots = None;
             session.initialized = true;
 
             Ok(json!({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {
+                    "completions": {},
+                    "prompts": { "listChanged": false },
                     "tools": { "listChanged": false },
                     "resources": {
                         "listChanged": false,
@@ -636,8 +915,21 @@ fn handle_request(
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_definitions(session.ui_enabled) })),
-        "tools/call" => call_tool(params, session.ui_enabled),
+        "completion/complete" => prompts::complete(params),
+        "prompts/list" => Ok(json!({ "prompts": prompts::prompt_definitions() })),
+        "prompts/get" => prompts::get_prompt(params),
+        "tools/list" => Ok(json!({
+            "tools": tool_definitions(session.ui_enabled, session.supports_roots_requests)
+        })),
+        "tools/call" => {
+            if requested_tool_name(&params) == Some("yacli.roots.list") {
+                return Err(YacliError::UnsupportedOperation(
+                    "yacli.roots.list requires stdio transport with client roots capability"
+                        .to_string(),
+                ));
+            }
+            call_tool(params, session.ui_enabled)
+        }
         "resources/list" => Ok(json!({ "resources": resource_definitions(session.ui_enabled) })),
         "resources/templates/list" => {
             Ok(json!({ "resourceTemplates": resource_templates(session.ui_enabled) }))
@@ -651,7 +943,7 @@ fn handle_request(
     }
 }
 
-fn tool_definitions(ui_enabled: bool) -> Vec<Value> {
+fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     if ui_enabled {
         tools.push(tool(
@@ -663,6 +955,20 @@ fn tool_definitions(ui_enabled: bool) -> Vec<Value> {
                 "additionalProperties": false
             }),
             Some(APP_ONLY_VISIBILITY),
+            ui_enabled,
+        ));
+    }
+
+    if roots_enabled {
+        tools.push(tool(
+            "yacli.roots.list",
+            "Request the current MCP client filesystem roots for this session.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            Some(MODEL_AND_APP_VISIBILITY),
             ui_enabled,
         ));
     }
@@ -779,6 +1085,82 @@ fn tool_definitions(ui_enabled: bool) -> Vec<Value> {
             ui_enabled,
         ),
         tool(
+            "yacli.mail.send",
+            "Send one mail message.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "to": { "type": "string" },
+                    "cc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "bcc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "subject": { "type": "string" },
+                    "text": { "type": "string" },
+                    "html": { "type": "string" }
+                },
+                "required": ["to", "subject"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.mail.reply",
+            "Reply to one message by UID.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "folder": { "type": "string" },
+                    "uid": { "type": "integer", "minimum": 1 },
+                    "text": { "type": "string" },
+                    "html": { "type": "string" },
+                    "cc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["uid"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.mail.forward",
+            "Forward one message by UID.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "folder": { "type": "string" },
+                    "uid": { "type": "integer", "minimum": 1 },
+                    "to": { "type": "string" },
+                    "text": { "type": "string" },
+                    "html": { "type": "string" },
+                    "cc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "bcc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "max_source_bytes": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["uid", "to"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
             "yacli.calendar.calendars",
             "List calendars for the selected account.",
             json!({
@@ -809,6 +1191,42 @@ fn tool_definitions(ui_enabled: bool) -> Vec<Value> {
             ui_enabled,
         ),
         tool(
+            "yacli.calendar.create",
+            "Create one calendar event.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "calendar": { "type": "string" },
+                    "summary": { "type": "string" },
+                    "start": { "type": "string" },
+                    "end": { "type": "string" },
+                    "description": { "type": "string" },
+                    "location": { "type": "string" }
+                },
+                "required": ["summary", "start", "end"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.calendar.delete",
+            "Delete one calendar event by UID.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "calendar": { "type": "string" },
+                    "uid": { "type": "string" }
+                },
+                "required": ["uid"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
             "yacli.disk.info",
             "Return Yandex Disk quota information.",
             json!({
@@ -832,6 +1250,38 @@ fn tool_definitions(ui_enabled: bool) -> Vec<Value> {
                     "limit": { "type": "integer", "minimum": 1 },
                     "offset": { "type": "integer", "minimum": 0 }
                 },
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.mkdir",
+            "Create one Yandex Disk directory.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "path": { "type": "string" }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.upload",
+            "Upload one local file to Yandex Disk.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "source": { "type": "string" },
+                    "path": { "type": "string" },
+                    "overwrite": { "type": "boolean" }
+                },
+                "required": ["source", "path"],
                 "additionalProperties": false
             }),
             None,
@@ -900,6 +1350,39 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             required_u64(&arguments, "uid")?,
             optional_u64(&arguments, "max_bytes").unwrap_or(15 * 1024 * 1024),
         )?,
+        "yacli.mail.send" => mail_send(
+            arguments.get("account").and_then(Value::as_str),
+            required_string(&arguments, "to")?,
+            string_list(&arguments, "cc")?,
+            string_list(&arguments, "bcc")?,
+            required_string(&arguments, "subject")?,
+            optional_string_owned(&arguments, "text"),
+            optional_string_owned(&arguments, "html"),
+        )?,
+        "yacli.mail.reply" => mail_reply(
+            arguments.get("account").and_then(Value::as_str),
+            optional_string(&arguments, "folder").unwrap_or("INBOX"),
+            required_u64(&arguments, "uid")?,
+            string_list(&arguments, "cc")?,
+            optional_string_owned(&arguments, "text"),
+            optional_string_owned(&arguments, "html"),
+        )?,
+        "yacli.mail.forward" => mail_forward(
+            arguments.get("account").and_then(Value::as_str),
+            MailForwardToolRequest {
+                folder: optional_string(&arguments, "folder")
+                    .unwrap_or("INBOX")
+                    .to_string(),
+                uid: required_u64(&arguments, "uid")?,
+                to: required_string(&arguments, "to")?.to_string(),
+                cc: string_list(&arguments, "cc")?,
+                bcc: string_list(&arguments, "bcc")?,
+                text: optional_string_owned(&arguments, "text"),
+                html: optional_string_owned(&arguments, "html"),
+                max_source_bytes: optional_u64(&arguments, "max_source_bytes")
+                    .unwrap_or(15 * 1024 * 1024),
+            },
+        )?,
         "yacli.calendar.calendars" => {
             calendar_calendars(arguments.get("account").and_then(Value::as_str))?
         }
@@ -910,12 +1393,36 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             optional_string(&arguments, "to"),
             optional_usize(&arguments, "limit").unwrap_or(20),
         )?,
+        "yacli.calendar.create" => calendar_create(
+            arguments.get("account").and_then(Value::as_str),
+            optional_string(&arguments, "calendar").unwrap_or("default"),
+            required_string(&arguments, "summary")?,
+            required_string(&arguments, "start")?,
+            required_string(&arguments, "end")?,
+            optional_string_owned(&arguments, "description"),
+            optional_string_owned(&arguments, "location"),
+        )?,
+        "yacli.calendar.delete" => calendar_delete(
+            arguments.get("account").and_then(Value::as_str),
+            optional_string(&arguments, "calendar").unwrap_or("default"),
+            required_string(&arguments, "uid")?,
+        )?,
         "yacli.disk.info" => disk_info(arguments.get("account").and_then(Value::as_str))?,
         "yacli.disk.list" => disk_list(
             arguments.get("account").and_then(Value::as_str),
             optional_string(&arguments, "path").unwrap_or("disk:/"),
             optional_usize(&arguments, "limit").unwrap_or(100),
             optional_u64(&arguments, "offset").unwrap_or(0),
+        )?,
+        "yacli.disk.mkdir" => disk_mkdir(
+            arguments.get("account").and_then(Value::as_str),
+            required_string(&arguments, "path")?,
+        )?,
+        "yacli.disk.upload" => disk_upload(
+            arguments.get("account").and_then(Value::as_str),
+            required_string(&arguments, "source")?,
+            required_string(&arguments, "path")?,
+            optional_bool(&arguments, "overwrite").unwrap_or(false),
         )?,
         _ => {
             return Err(YacliError::UnsupportedOperation(format!(
@@ -946,12 +1453,20 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
 }
 
 fn resource_definitions(ui_enabled: bool) -> Vec<Value> {
-    let mut resources = vec![json!({
-        "uri": "resource://yacli/getting-started",
-        "name": "yacli MCP Getting Started",
-        "description": "Text guide for the stable yacli MCP surface",
-        "mimeType": "text/markdown"
-    })];
+    let mut resources = vec![
+        json!({
+            "uri": "resource://yacli/getting-started",
+            "name": "yacli MCP Getting Started",
+            "description": "Text guide for the stable yacli MCP surface",
+            "mimeType": "text/markdown"
+        }),
+        json!({
+            "uri": "resource://yacli/skills",
+            "name": "yacli Embedded Skills",
+            "description": "Catalog of embedded yacli SKILL.md workflows mirrored into MCP resources",
+            "mimeType": "application/json"
+        }),
+    ];
     if ui_enabled {
         resources.push(json!({
             "uri": APP_RESOURCE_URI,
@@ -977,6 +1492,12 @@ fn resource_templates(_ui_enabled: bool) -> Vec<Value> {
             "name": "yacli Auth Resource",
             "description": "Read auth posture for one configured yacli account as JSON",
             "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/skill/{skill}",
+            "name": "yacli Embedded Skill Resource",
+            "description": "Read one embedded yacli SKILL.md workflow as Markdown",
+            "mimeType": "text/markdown"
         }),
     ];
 
@@ -1143,6 +1664,36 @@ fn auth_resource(uri: &str) -> Result<Value> {
     auth_status(Some(&account_name))
 }
 
+fn skills_catalog_resource() -> Value {
+    let items = skills::skill_names()
+        .into_iter()
+        .map(|name| {
+            json!({
+                "name": name,
+                "prompt": skills::skill_prompt_name(name),
+                "uri": format!("resource://yacli/skill/{name}"),
+                "description": skills::skill_description(name).unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "count": items.len(),
+        "items": items,
+    })
+}
+
+fn skill_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let skill_name = templated_account_name(uri, "skill")?;
+    let content = skills::skill_content(&skill_name).ok_or_else(|| {
+        YacliError::UnsupportedOperation(format!("unknown embedded skill resource: {uri}"))
+    })?;
+    Ok(vec![json!({
+        "uri": uri,
+        "mimeType": "text/markdown",
+        "text": content,
+    })])
+}
+
 fn app_snapshot() -> Result<Value> {
     let account_store = AccountStore::load()?;
     let credential_store = CredentialStore::load()?;
@@ -1258,6 +1809,93 @@ fn mail_read(account: Option<&str>, folder: &str, uid: u64, max_bytes: u64) -> R
     }))
 }
 
+fn mail_send(
+    account: Option<&str>,
+    to: &str,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    subject: &str,
+    text: Option<String>,
+    html: Option<String>,
+) -> Result<Value> {
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let sent = send_mail_message(
+        &context.smtp_host,
+        context.smtp_port,
+        auth,
+        crate::mail::MailSendRequest {
+            to: vec![to.to_string()],
+            cc,
+            bcc,
+            subject: subject.to_string(),
+            text,
+            html,
+            attachments: Vec::new(),
+            thread_headers: None,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "sent": sent,
+    }))
+}
+
+fn mail_reply(
+    account: Option<&str>,
+    folder: &str,
+    uid: u64,
+    cc: Vec<String>,
+    text: Option<String>,
+    html: Option<String>,
+) -> Result<Value> {
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let reply = crate::mail::reply_to_mail_message(
+        &context.imap_host,
+        context.imap_port,
+        &context.smtp_host,
+        context.smtp_port,
+        auth,
+        folder,
+        crate::mail::MailReplyRequest {
+            uid,
+            cc,
+            text,
+            html,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "folder": folder,
+        "reply": reply,
+    }))
+}
+
+fn mail_forward(account: Option<&str>, request: MailForwardToolRequest) -> Result<Value> {
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let forward = crate::mail::forward_mail_message(
+        &context.imap_host,
+        context.imap_port,
+        &context.smtp_host,
+        context.smtp_port,
+        auth,
+        &request.folder,
+        crate::mail::MailForwardRequest {
+            uid: request.uid,
+            to: vec![request.to],
+            cc: request.cc,
+            bcc: request.bcc,
+            text: request.text,
+            html: request.html,
+            max_source_bytes: request.max_source_bytes,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "folder": request.folder,
+        "forward": forward,
+    }))
+}
+
 fn calendar_calendars(account: Option<&str>) -> Result<Value> {
     let (resolved_account, app_password, context) = resolve_calendar_private_context(account)?;
     let calendars = list_calendars(&context.caldav_base_url, &context.email, &app_password)?;
@@ -1296,6 +1934,52 @@ fn calendar_events(
     }))
 }
 
+fn calendar_create(
+    account: Option<&str>,
+    calendar: &str,
+    summary: &str,
+    start: &str,
+    end: &str,
+    description: Option<String>,
+    location: Option<String>,
+) -> Result<Value> {
+    let (resolved_account, app_password, context) = resolve_calendar_private_context(account)?;
+    let (calendar, event) = create_calendar_event(
+        &context.caldav_base_url,
+        &context.email,
+        &app_password,
+        CalendarCreateRequest {
+            calendar: calendar.to_string(),
+            summary: summary.to_string(),
+            start: start.to_string(),
+            end: end.to_string(),
+            description,
+            location,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "calendar": calendar,
+        "event": event,
+    }))
+}
+
+fn calendar_delete(account: Option<&str>, calendar: &str, uid: &str) -> Result<Value> {
+    let (resolved_account, app_password, context) = resolve_calendar_private_context(account)?;
+    let (calendar, deleted_event) = delete_calendar_event(
+        &context.caldav_base_url,
+        &context.email,
+        &app_password,
+        calendar,
+        uid,
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "calendar": calendar,
+        "deleted_event": deleted_event,
+    }))
+}
+
 fn disk_info(account: Option<&str>) -> Result<Value> {
     let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
     let info = fetch_disk_info(&base_url, &access_token)?;
@@ -1322,6 +2006,41 @@ fn disk_list(account: Option<&str>, path: &str, limit: usize, offset: u64) -> Re
     }))
 }
 
+fn disk_mkdir(account: Option<&str>, path: &str) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let resource = create_private_directory(
+        &base_url,
+        &access_token,
+        &PrivateDiskMkdirRequest {
+            path: path.to_string(),
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "path": path,
+        "resource": resource,
+    }))
+}
+
+fn disk_upload(account: Option<&str>, source: &str, path: &str, overwrite: bool) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let (resource, upload) = upload_private_resource(
+        &base_url,
+        &access_token,
+        &PrivateDiskUploadRequest {
+            source: PathBuf::from(source),
+            path: path.to_string(),
+            overwrite,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "path": path,
+        "resource": resource,
+        "upload": upload,
+    }))
+}
+
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     value
         .get(key)
@@ -1340,6 +2059,29 @@ fn optional_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
 
+fn optional_string_owned(value: &Value, key: &str) -> Option<String> {
+    optional_string(value, key).map(ToString::to_string)
+}
+
+fn string_list(value: &Value, key: &str) -> Result<Vec<String>> {
+    let Some(values) = value.get(key) else {
+        return Ok(Vec::new());
+    };
+
+    let array = values
+        .as_array()
+        .ok_or_else(|| YacliError::Validation(format!("`{key}` must be an array of strings")))?;
+
+    array
+        .iter()
+        .map(|item| {
+            item.as_str().map(ToString::to_string).ok_or_else(|| {
+                YacliError::Validation(format!("`{key}` must be an array of strings"))
+            })
+        })
+        .collect()
+}
+
 fn optional_usize(value: &Value, key: &str) -> Option<usize> {
     value
         .get(key)
@@ -1349,6 +2091,10 @@ fn optional_usize(value: &Value, key: &str) -> Option<usize> {
 
 fn optional_u64(value: &Value, key: &str) -> Option<u64> {
     value.get(key).and_then(Value::as_u64)
+}
+
+fn optional_bool(value: &Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(Value::as_bool)
 }
 
 fn parse_rfc3339(value: &str) -> Result<DateTime<Utc>> {
@@ -1367,6 +2113,8 @@ fn app_html(uri: &str) -> Result<String> {
         "preferredSection": bootstrap_state.preferred_section,
         "preferredResource": bootstrap_state.preferred_resource,
         "preferredTool": bootstrap_state.preferred_tool,
+        "preferredSkill": bootstrap_state.preferred_skill,
+        "preferredPrompt": bootstrap_state.preferred_prompt,
     }))
     .map_err(|err| YacliError::Serialization(err.to_string()))?;
 
@@ -1400,6 +2148,7 @@ fn resource_contents(uri: &str) -> Result<Vec<Value>> {
             "mimeType": "text/markdown",
             "text": "# yacli MCP\n\nStable read-only tools are available for accounts, auth status, mail, calendar, and disk.\n\nApps-ready clients can also load `ui://yacli/dashboard`."
         })]),
+        "resource://yacli/skills" => json_resource_contents(uri, skills_catalog_resource()),
         dashboard_uri if is_dashboard_resource_uri(dashboard_uri) => Ok(vec![json!({
             "uri": dashboard_uri,
             "mimeType": APP_RESOURCE_MIME_TYPE,
@@ -1411,6 +2160,9 @@ fn resource_contents(uri: &str) -> Result<Vec<Value>> {
         }
         auth_uri if auth_uri.starts_with("resource://yacli/auth/") => {
             json_resource_contents(auth_uri, auth_resource(auth_uri)?)
+        }
+        skill_uri if skill_uri.starts_with("resource://yacli/skill/") => {
+            skill_resource_contents(skill_uri)
         }
         _ => Err(YacliError::UnsupportedOperation(format!(
             "unknown MCP resource: {uri}"
@@ -1464,6 +2216,8 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
     let mut section = None;
     let mut resource = None;
     let mut tool = None;
+    let mut skill = None;
+    let mut prompt = None;
     for (key, value) in parsed.query_pairs() {
         match key.as_ref() {
             APP_ACCOUNT_QUERY_PARAM => {
@@ -1482,10 +2236,13 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
                 let value = value.into_owned();
                 if !matches!(
                     value.as_str(),
-                    DASHBOARD_SECTION_TOOLS | DASHBOARD_SECTION_RESOURCES | DASHBOARD_SECTION_AUTH
+                    DASHBOARD_SECTION_TOOLS
+                        | DASHBOARD_SECTION_PROMPTS
+                        | DASHBOARD_SECTION_RESOURCES
+                        | DASHBOARD_SECTION_AUTH
                 ) {
                     return Err(YacliError::Validation(format!(
-                        "dashboard resource query `{APP_SECTION_QUERY_PARAM}` must be one of: {DASHBOARD_SECTION_TOOLS}, {DASHBOARD_SECTION_RESOURCES}, {DASHBOARD_SECTION_AUTH}"
+                        "dashboard resource query `{APP_SECTION_QUERY_PARAM}` must be one of: {DASHBOARD_SECTION_TOOLS}, {DASHBOARD_SECTION_PROMPTS}, {DASHBOARD_SECTION_RESOURCES}, {DASHBOARD_SECTION_AUTH}"
                     )));
                 }
                 if section.replace(value).is_some() {
@@ -1498,10 +2255,13 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
                 let value = value.into_owned();
                 if !matches!(
                     value.as_str(),
-                    DASHBOARD_RESOURCE_ACCOUNT | DASHBOARD_RESOURCE_AUTH
+                    DASHBOARD_RESOURCE_ACCOUNT
+                        | DASHBOARD_RESOURCE_AUTH
+                        | DASHBOARD_RESOURCE_SKILLS
+                        | DASHBOARD_RESOURCE_SKILL
                 ) {
                     return Err(YacliError::Validation(format!(
-                        "dashboard resource query `{APP_RESOURCE_QUERY_PARAM}` must be one of: {DASHBOARD_RESOURCE_ACCOUNT}, {DASHBOARD_RESOURCE_AUTH}"
+                        "dashboard resource query `{APP_RESOURCE_QUERY_PARAM}` must be one of: {DASHBOARD_RESOURCE_ACCOUNT}, {DASHBOARD_RESOURCE_AUTH}, {DASHBOARD_RESOURCE_SKILLS}, {DASHBOARD_RESOURCE_SKILL}"
                     )));
                 }
                 if resource.replace(value).is_some() {
@@ -1529,6 +2289,31 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
                     )));
                 }
             }
+            APP_SKILL_QUERY_PARAM => {
+                if value.trim().is_empty() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_SKILL_QUERY_PARAM}` cannot be empty"
+                    )));
+                }
+                if skill.replace(value.into_owned()).is_some() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_SKILL_QUERY_PARAM}` cannot appear more than once"
+                    )));
+                }
+            }
+            APP_PROMPT_QUERY_PARAM => {
+                let value = value.into_owned();
+                if !prompts::prompt_names().contains(&value.as_str()) {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_PROMPT_QUERY_PARAM}` must be one of the embedded MCP prompts"
+                    )));
+                }
+                if prompt.replace(value).is_some() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_PROMPT_QUERY_PARAM}` cannot appear more than once"
+                    )));
+                }
+            }
             _ => {
                 return Err(YacliError::UnsupportedOperation(format!(
                     "unknown MCP resource: {uri}"
@@ -1537,12 +2322,41 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
         }
     }
 
+    match resource.as_deref() {
+        Some(DASHBOARD_RESOURCE_SKILL) if skill.is_none() => {
+            return Err(YacliError::Validation(format!(
+                "dashboard resource query `{APP_SKILL_QUERY_PARAM}` is required when `{APP_RESOURCE_QUERY_PARAM}=skill`"
+            )));
+        }
+        Some(DASHBOARD_RESOURCE_ACCOUNT | DASHBOARD_RESOURCE_AUTH | DASHBOARD_RESOURCE_SKILLS)
+            if skill.is_some() =>
+        {
+            return Err(YacliError::Validation(format!(
+                "dashboard resource query `{APP_SKILL_QUERY_PARAM}` is only valid when `{APP_RESOURCE_QUERY_PARAM}=skill`"
+            )));
+        }
+        None if skill.is_some() => {
+            return Err(YacliError::Validation(format!(
+                "dashboard resource query `{APP_SKILL_QUERY_PARAM}` requires `{APP_RESOURCE_QUERY_PARAM}=skill`"
+            )));
+        }
+        _ => {}
+    }
+
     if section.is_none() {
         if resource.is_some() {
             section = Some(DASHBOARD_SECTION_RESOURCES.to_string());
         } else if tool.is_some() {
             section = Some(DASHBOARD_SECTION_TOOLS.to_string());
+        } else if prompt.is_some() {
+            section = Some(DASHBOARD_SECTION_PROMPTS.to_string());
         }
+    }
+
+    if prompt.is_some() && section.as_deref() != Some(DASHBOARD_SECTION_PROMPTS) {
+        return Err(YacliError::Validation(format!(
+            "dashboard resource query `{APP_PROMPT_QUERY_PARAM}` requires `{APP_SECTION_QUERY_PARAM}=prompts`"
+        )));
     }
 
     Ok(DashboardResourceState {
@@ -1550,6 +2364,8 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
         preferred_section: section,
         preferred_resource: resource,
         preferred_tool: tool,
+        preferred_skill: skill,
+        preferred_prompt: prompt,
     })
 }
 
@@ -1599,12 +2415,220 @@ fn resource_digest(uri: &str) -> Result<u64> {
 fn tool_visibility(tool_name: &str) -> Option<&'static [&'static str]> {
     match tool_name {
         "yacli.app.snapshot" => Some(APP_ONLY_VISIBILITY),
-        "yacli.account.list"
+        "yacli.roots.list"
+        | "yacli.account.list"
         | "yacli.account.current"
         | "yacli.auth.status"
         | DASHBOARD_TOOL_UPDATE_CHECK => Some(MODEL_AND_APP_VISIBILITY),
         _ => None,
     }
+}
+
+fn jsonrpc_error_payload(id: Value, err: &YacliError) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": error_code(err),
+            "message": err.to_string(),
+            "data": err.as_json(),
+        }
+    })
+}
+
+fn execute_stdio_request(
+    method: &str,
+    params: Value,
+    session: &mut SessionState,
+    writer: &mut dyn Write,
+    rx: &mpsc::Receiver<InputEvent>,
+    poller: &mut ResourceSubscriptionPoller,
+) -> Result<Value> {
+    if method == "tools/call" && requested_tool_name(&params) == Some("yacli.roots.list") {
+        return roots_list_tool_stdio(session, writer, rx, poller);
+    }
+
+    handle_request(method, params, session, Some(poller))
+}
+
+fn roots_list_tool_stdio(
+    session: &mut SessionState,
+    writer: &mut dyn Write,
+    rx: &mpsc::Receiver<InputEvent>,
+    poller: &mut ResourceSubscriptionPoller,
+) -> Result<Value> {
+    if !session.supports_roots_requests {
+        return Err(YacliError::UnsupportedOperation(
+            "yacli.roots.list requires stdio transport with client roots capability".to_string(),
+        ));
+    }
+
+    if let Some(cached_roots) = session.cached_roots.clone()
+        && !session.roots_dirty
+    {
+        return roots_tool_response(cached_roots, session.ui_enabled);
+    }
+
+    let request_id = session.next_outbound_request_id;
+    session.next_outbound_request_id += 1;
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "roots/list"
+    });
+    write_message(writer, &request, session.stdio_message_format)?;
+
+    loop {
+        match rx.recv_timeout(RESOURCE_POLL_INTERVAL) {
+            Ok(InputEvent::Message(message, format)) => {
+                session.stdio_message_format = format;
+
+                if message.get("id") == Some(&json!(request_id)) && message.get("method").is_none()
+                {
+                    if let Some(error) = message.get("error") {
+                        let code = error.get("code").and_then(Value::as_i64).unwrap_or(-32000);
+                        let message = error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("roots/list failed");
+                        let err = if code == -32601 {
+                            YacliError::UnsupportedOperation(message.to_string())
+                        } else {
+                            YacliError::Validation(message.to_string())
+                        };
+                        return Err(err);
+                    }
+
+                    let roots = parse_roots_list_response(&message)?;
+                    session.cached_roots = Some(roots.clone());
+                    session.roots_dirty = false;
+                    return roots_tool_response(roots, session.ui_enabled);
+                }
+
+                if message.get("method").is_none() {
+                    continue;
+                }
+
+                let nested_method =
+                    message
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            YacliError::Serialization("missing JSON-RPC method".to_string())
+                        })?;
+                let nested_params = message.get("params").cloned().unwrap_or(Value::Null);
+
+                if message.get("id").is_none() {
+                    handle_notification(nested_method, session);
+                    continue;
+                }
+
+                let nested_id = message
+                    .get("id")
+                    .cloned()
+                    .ok_or_else(|| YacliError::Serialization("missing JSON-RPC id".to_string()))?;
+                let response = match execute_stdio_request(
+                    nested_method,
+                    nested_params,
+                    session,
+                    writer,
+                    rx,
+                    poller,
+                ) {
+                    Ok(result) => json!({
+                        "jsonrpc": "2.0",
+                        "id": nested_id,
+                        "result": result,
+                    }),
+                    Err(err) => json!({
+                        "jsonrpc": "2.0",
+                        "id": nested_id,
+                        "error": {
+                            "code": error_code(&err),
+                            "message": err.to_string(),
+                            "data": err.as_json(),
+                        }
+                    }),
+                };
+                write_message(writer, &response, session.stdio_message_format)?;
+            }
+            Ok(InputEvent::Eof) => {
+                return Err(YacliError::Io(
+                    "stdio stream closed while waiting for roots/list response".to_string(),
+                ));
+            }
+            Ok(InputEvent::Error(err)) => return Err(err),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(YacliError::Io(
+                    "stdio reader disconnected while waiting for roots/list response".to_string(),
+                ));
+            }
+        }
+
+        for notification in poller.collect_notifications(&session.resource_subscriptions)? {
+            write_message(writer, &notification, session.stdio_message_format)?;
+        }
+    }
+}
+
+fn roots_tool_response(roots: Vec<Value>, ui_enabled: bool) -> Result<Value> {
+    let structured = json!({
+        "roots": roots,
+    });
+    let text = serde_json::to_string_pretty(&structured)
+        .map_err(|err| YacliError::Serialization(err.to_string()))?;
+
+    let mut response = Map::new();
+    response.insert("structuredContent".to_string(), structured);
+    response.insert(
+        "content".to_string(),
+        json!([
+            {
+                "type": "text",
+                "text": text
+            }
+        ]),
+    );
+    if ui_enabled && let Some(visibility) = tool_visibility("yacli.roots.list") {
+        response.insert("_meta".to_string(), app_meta(visibility));
+    }
+    Ok(Value::Object(response))
+}
+
+fn parse_roots_list_response(message: &Value) -> Result<Vec<Value>> {
+    let roots = message
+        .get("result")
+        .and_then(|result| result.get("roots"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            YacliError::Serialization("roots/list response missing `result.roots`".to_string())
+        })?;
+
+    roots.iter().map(validate_root).collect::<Result<Vec<_>>>()
+}
+
+fn validate_root(root: &Value) -> Result<Value> {
+    let uri = root
+        .get("uri")
+        .and_then(Value::as_str)
+        .ok_or_else(|| YacliError::Validation("roots/list item requires `uri`".to_string()))?;
+    if !uri.starts_with("file://") {
+        return Err(YacliError::Validation(format!(
+            "roots/list item `uri` must be a file:// URI, got `{uri}`"
+        )));
+    }
+
+    let mut normalized = Map::new();
+    normalized.insert("uri".to_string(), Value::String(uri.to_string()));
+    if let Some(name) = root.get("name").and_then(Value::as_str) {
+        normalized.insert("name".to_string(), Value::String(name.to_string()));
+    }
+    Ok(Value::Object(normalized))
+}
+
+fn requested_tool_name(params: &Value) -> Option<&str> {
+    params.get("name").and_then(Value::as_str)
 }
 
 fn app_meta(visibility: &[&str]) -> Value {
@@ -1636,6 +2660,22 @@ fn client_supports_ui(params: &Value) -> bool {
         .any(|mime_type| mime_type == APP_RESOURCE_MIME_TYPE)
 }
 
+fn client_supports_roots(params: &Value) -> bool {
+    params
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("roots"))
+        .is_some()
+}
+
+fn client_supports_roots_list_changed(params: &Value) -> bool {
+    params
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("roots"))
+        .and_then(|roots| roots.get("listChanged"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 fn capability_mime_types<'a>(params: &'a Value, branch: &str) -> Vec<&'a str> {
     params
         .get("capabilities")
@@ -1659,6 +2699,18 @@ fn normalize_messages(payload: Value) -> Result<Vec<Value>> {
         }
         single => Ok(vec![single]),
     }
+}
+
+fn is_client_response_message(message: &Value) -> bool {
+    message.get("method").is_none()
+        && message.get("id").is_some()
+        && (message.get("result").is_some() || message.get("error").is_some())
+}
+
+fn request_accepts_sse(headers: &HeaderMap) -> bool {
+    header_value(headers, "Accept")
+        .map(|accept| accept.contains("text/event-stream"))
+        .unwrap_or(false)
 }
 
 fn needs_http_auth(messages: &[Value]) -> bool {

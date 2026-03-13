@@ -11,5 +11,6 @@ pub mod model;
 mod oauth;
 pub mod output;
 pub mod paths;
+mod persist;
 pub mod runtime_context;
 pub mod update;

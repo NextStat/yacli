@@ -1,67 +1,67 @@
 ---
 name: yacli-shared
-description: "Yandex services CLI: account management, authentication, and output configuration. Read this skill before using yacli-mail, yacli-calendar, or yacli-disk."
+description: "CLI для Яндекс сервисов: аккаунты, авторизация, формат вывода. Прочитай перед использованием почты, календаря или диска. Используй при вопросах про настройку, подключение, вход в аккаунт Яндекса."
 metadata:
   author: NextStat
 ---
 
-# yacli — shared foundation
+# yacli — общая основа
 
-yacli is a CLI for Yandex Mail, Calendar, and Disk. All commands return JSON by default.
+yacli — CLI для Яндекс Почты, Календаря и Диска. Все команды возвращают JSON.
 
-## Output format
+## Формат вывода
 
-Every command produces `{"ok": true, ...}` on success or `{"ok": false, "code": "...", "message": "..."}` on failure.
+Успех: `{"ok": true, ...}`. Ошибка: `{"ok": false, "code": "...", "message": "..."}`.
 
-Pass `--format table` for human-readable output. Default is `--format json`.
+`--format table` — человекочитаемый вид. По умолчанию `--format json`.
 
-## Exit codes
+## Коды завершения
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | User error (validation, auth, not found) |
-| 4 | Configuration or I/O error |
-| 5 | Network or API error |
+| Код | Значение |
+|-----|----------|
+| 0 | Успех |
+| 1 | Ошибка пользователя (валидация, авторизация, не найдено) |
+| 4 | Ошибка конфигурации или ввода/вывода |
+| 5 | Ошибка сети или API |
 
-## Account management
+## Управление аккаунтами
 
-yacli supports multiple accounts. Each account has a short alias derived from the email.
+yacli поддерживает несколько аккаунтов. У каждого есть короткий алиас.
 
-| Command | Description |
-|---------|-------------|
-| `yacli add <EMAIL> [ALIAS]` | Add account |
-| `yacli accounts` | List all accounts |
-| `yacli use <ALIAS>` | Switch current account |
-| `yacli whoami` | Show current account |
-| `yacli status [--account ALIAS]` | Show connected services |
+| Команда | Описание |
+|---------|----------|
+| `yacli add <EMAIL> [ALIAS]` | Добавить аккаунт |
+| `yacli accounts` | Список аккаунтов |
+| `yacli use <ALIAS>` | Переключить текущий аккаунт |
+| `yacli whoami` | Показать текущий аккаунт |
+| `yacli status [--account ALIAS]` | Показать подключённые сервисы |
 
-## Authentication
+## Авторизация
 
-Each service authenticates independently:
-- **Mail**: OAuth XOAUTH2 (default) or app password
-- **Calendar**: App password only
-- **Disk**: OAuth only
+Каждый сервис авторизуется отдельно:
+- **Почта**: OAuth XOAUTH2 (по умолчанию) или пароль приложения
+- **Календарь**: только пароль приложения
+- **Диск**: только OAuth
 
-| Command | Description |
-|---------|-------------|
-| `yacli login [SERVICE]` | Connect mail, calendar, or disk |
-| `yacli login mail --app-password PASSWORD` | Use app password for mail |
-| `yacli login calendar --app-password PASSWORD` | Use app password for calendar |
-| `yacli logout [SERVICE] [--account ALIAS]` | Disconnect one or all services |
+| Команда | Описание |
+|---------|----------|
+| `yacli login [SERVICE]` | Подключить почту, календарь или диск |
+| `yacli login mail --app-password ПАРОЛЬ` | Почта через пароль приложения |
+| `yacli login calendar --app-password ПАРОЛЬ` | Календарь через пароль приложения |
+| `yacli logout [SERVICE] [--account ALIAS]` | Отключить один или все сервисы |
 
-SERVICE is one of: `mail`, `calendar`, `disk`. Omit to connect all.
+SERVICE: `mail`, `calendar`, `disk`. Без аргумента — подключить все.
 
-## Global flags
+## Глобальные флаги
 
-- `--format json|table` — output format (default: json)
-- `--account ALIAS` — target account (default: current)
-- `-h, --help` — show help
-- `-V, --version` — show version
+- `--format json|table` — формат вывода (по умолчанию: json)
+- `--account ALIAS` — целевой аккаунт (по умолчанию: текущий)
+- `-h, --help` — справка
+- `-V, --version` — версия
 
-## Multi-account usage
+## Несколько аккаунтов
 
-Always pass `--account ALIAS` when working with a non-current account:
+Передавай `--account ALIAS` при работе не с текущим аккаунтом:
 
 ```
 yacli mail list --account work

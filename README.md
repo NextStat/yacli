@@ -233,6 +233,14 @@ export YACLI_CALENDAR_APP_PASSWORD='<пароль>'
 yacli login calendar --env-var YACLI_CALENDAR_APP_PASSWORD
 ```
 
+По умолчанию `yacli` больше не держит `store:*` секреты в plaintext TOML: OAuth-токены и пароли приложений сохраняются в системном keyring/keychain. Если у вас остался legacy `credentials.toml`, он будет автоматически мигрирован при первом обращении к secure backend.
+
+Для headless или тестовых окружений можно явно включить legacy plaintext backend:
+
+```bash
+export YACLI_SECRET_BACKEND=file
+```
+
 ## Для автоматизации
 
 По умолчанию `yacli` печатает JSON. Если нужен табличный вывод:
@@ -308,6 +316,7 @@ yacli mcp install
 Поддерживаемые клиенты:
 
 - Claude Code
+- Claude Desktop / Cowork
 - Codex
 - Gemini CLI
 - Cursor
@@ -346,22 +355,79 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 
 И `resources/subscribe` / `resources/unsubscribe` для account/auth resources. В `stdio` и streamable `HTTP` это даёт live notifications через `notifications/resources/updated`.
 
+Для guided workflows сервер теперь также отдает встроенные MCP prompts:
+
+- `shared`
+- `mail`
+- `calendar`
+- `disk`
+- `daily-briefing`
+- `find-and-read`
+- `reply-with-context`
+
+Это MCP-native эквиваленты встроенных `SKILL.md` recipe flows. В клиентах вроде Claude Desktop / Cowork, где отдельный `SKILL.md` surface отсутствует, именно `prompts/list` и `prompts/get` дают переносимый workflow layer поверх тех же `yacli` tools/resources/apps.
+
+Кроме того, встроенные skills теперь доступны и как MCP resources:
+
+- `resource://yacli/skills` — каталог embedded skills
+- `resource://yacli/skill/{skill}` — полный canonical `SKILL.md` конкретного workflow
+
+Каждый prompt теперь указывает на соответствующий `resource://yacli/skill/...`, так что Claude Desktop / Cowork и другие MCP-клиенты могут читать тот же source of truth, что и Claude Code skills.
+
+Сервер также поддерживает `completion/complete` для prompts и resource refs. Это даёт клиентам argument suggestions для:
+
+- account aliases из локального `yacli` config
+- embedded skill names для `resource://yacli/skill/{skill}`
+- mail folders
+- calendar windows и `default` calendar
+- disk path starters
+- dashboard resource arguments (`account`, `section`, `resource`, `tool`)
+
+Для клиентов, которые объявляют MCP `roots` capability, `yacli` теперь также поднимает tool `yacli.roots.list`. Он делает реальный server-to-client `roots/list` request и возвращает текущие filesystem roots клиента в model/app surface.
+
+По состоянию текущего stable surface MCP mail-tools уже поддерживают не только чтение, но и write actions:
+
+- `yacli.mail.send`
+- `yacli.mail.reply`
+- `yacli.mail.forward`
+
+И MCP calendar-tools теперь тоже поддерживают write actions:
+
+- `yacli.calendar.create`
+- `yacli.calendar.delete`
+
+И MCP disk-tools теперь тоже поддерживают базовые write actions:
+
+- `yacli.disk.mkdir`
+- `yacli.disk.upload`
+
 Важно:
 
 - `Claude Code`, `Codex` и `Gemini CLI` умеют native HTTP registration, поэтому `yacli` поддерживает и `stdio`, и `http` install flow;
+- `Claude Desktop / Cowork` использует отдельный config `claude_desktop_config.json`, поэтому `yacli mcp install --client claude` теперь регистрирует сервер и в Claude Code, и в Claude Desktop surface;
 - для `Cursor`, `Zed`, `Windsurf`, `Warp` и `Antigravity` current stable install path в `yacli` остаётся `stdio`-ориентированным;
 - skills автоматически устанавливаются для `Claude Code`, `Codex`, `Gemini CLI`, `Cursor`, `Windsurf`, `Warp` и `Antigravity`; для `Zed` MCP registration поддерживается, но отдельного skills surface сейчас нет;
+- Claude Desktop / Cowork MCP registration поддерживается, но `SKILL.md` surface туда не устанавливается;
+- Claude Desktop / Cowork при этом всё равно получает встроенные yacli workflows через стандартные MCP prompts;
 - сервер может работать и как `stdio`, и как локальный HTTP transport на `/mcp`;
 - `stdio` transport автоматически согласует framing между `Content-Length` и JSONL, поэтому Claude Code подключается без отдельного compatibility mode;
+- если клиент объявляет `roots` capability, `tools/list` дополнительно рекламирует `yacli.roots.list`, а `notifications/roots/list_changed` инвалидирует кеш roots и заставляет сервер заново запросить `roots/list`;
+- в `HTTP` это работает через `POST /mcp` с `Accept: text/event-stream`: сервер отвечает SSE stream, внутри которого сначала отправляет nested `roots/list`, а затем финальный JSON-RPC result для исходного `tools/call`;
 - HTTP transport поддерживает session-scoped SSE stream для server-push notifications;
 - если задан `YACLI_MCP_HTTP_BEARER_TOKEN`, защищённые HTTP tool calls требуют `Authorization: Bearer <token>`;
 - `YACLI_MCP_HTTP_AUTH_ISSUER` опционален и нужен только если вы хотите включить Protected Resource Metadata и `resource_metadata` в `WWW-Authenticate` challenge;
 - `yacli mcp install` не копирует секреты в клиентские конфиги;
-- MCP Apps поддерживается с первого релиза через ресурс `ui://yacli/dashboard`, deep-link template `ui://yacli/dashboard{?account,section,resource,tool}`, app-only tool `yacli.app.snapshot`, read-only tool `yacli.update.check` и встроенный resource inspector для templated resources;
-- dashboard теперь сам поддерживает round-trip deep links: по мере смены account/resource/tool он пересобирает канонический `ui://yacli/dashboard?...` current view URI и может шарить его обратно в host;
+- MCP Apps поддерживается с первого релиза через ресурс `ui://yacli/dashboard`, deep-link template `ui://yacli/dashboard{?account,section,resource,tool,skill,prompt}`, app-only tool `yacli.app.snapshot`, read-only tool `yacli.update.check` и встроенный resource inspector для templated resources;
+- dashboard теперь сам поддерживает round-trip deep links: по мере смены account/resource/tool/skill он пересобирает канонический `ui://yacli/dashboard?...` current view URI и может шарить его обратно в host;
+- dashboard resource inspector теперь умеет читать не только account/auth resources, но и embedded skills catalog plus individual `resource://yacli/skill/{skill}` resources;
+- dashboard теперь также поднимает unified searchable browser поверх `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` и `resource://yacli/skills`, так что Apps-capable клиенты получают один searchable catalog по tools/prompts/resources/templates/skills;
+- dashboard tools panel теперь также умеет работать как universal MCP tool runner: можно выбрать любой tool из текущего `tools/list`, увидеть его `inputSchema`, отредактировать JSON args и вызвать его прямо из hosted app, не оставаясь на нескольких hardcoded кнопках;
+- dashboard теперь также строит capability-aware host profile: он показывает, что конкретный MCP Apps host реально умеет (`open-link`, `message`, `update-model-context`, `server resources`, `subscriptions`, `display modes`) и рекомендует лучший workflow для rich/hybrid/text-first host surface;
 - dashboard также сохраняет последнее локальное view state в браузерном storage и восстанавливает его при следующем открытии, если новый URI не переопределяет эти поля явно;
 - dashboard также показывает auth escalation surface: auth discovery, resource metadata и host actions для recovery у protected tools;
 - dashboard также умеет безопасно проверять наличие нового release из Apps runtime через `Check updates`, не пытаясь self-replace живой MCP server process;
+- prompts `mail`, `reply-with-context`, `calendar` и `disk` теперь могут вести клиента и через реальные MCP write-tools, а не только через read-only анализ;
+- prompts дополнены MCP completions, так что Apps-capable и text MCP clients могут подсказывать аргументы без hardcoded client-side логики;
 - обычные текстовые MCP-клиенты продолжают работать без UI.
 
 ## Где лежат настройки

@@ -1,37 +1,47 @@
 ---
 name: yacli-reply-with-context
-description: "Reply to an email with calendar context: read the message, check schedule, then reply with relevant information. Use when a reply needs scheduling awareness."
+description: "Ответить на письмо с учётом расписания: прочитать сообщение, проверить календарь, составить и отправить ответ. Используй когда ответ зависит от расписания — предложить время встречи, подтвердить дату, согласовать созвон."
 metadata:
   author: NextStat
 ---
 
-# Reply with context
+# Ответить на письмо с учётом расписания
 
-A multi-step workflow to reply to an email with awareness of your schedule.
+Многошаговый сценарий: чтение → проверка календаря → ответ.
 
-## Steps
+## Шаги
 
-1. Read the original message:
+1. Прочитай оригинальное письмо:
 
 ```
 yacli mail read UID
 ```
 
-2. Check calendar for relevant dates mentioned in the message:
+2. Определи из текста письма даты, которые нужно проверить (предложенные встречи, дедлайны, даты созвонов).
+
+3. Проверь календарь на эти даты:
 
 ```
 yacli calendar events FROM TO
 ```
 
-3. Compose and send the reply:
+4. Составь и отправь ответ с учётом расписания:
 
 ```
-yacli mail reply UID "Your reply text here"
+yacli mail reply UID "Текст ответа"
 ```
 
-## Notes
+## Примеры
 
-- Extract dates from the message body in step 1 to use as FROM/TO in step 2.
-- The reply preserves threading headers automatically.
-- Use `--cc EMAIL` to add recipients to the reply.
-- Use `--html "<p>formatted reply</p>"` for rich-text replies.
+Письмо: «Давай созвонимся в четверг или пятницу?»
+→ Проверь четверг и пятницу в календаре → Ответь с учётом свободных слотов.
+
+Письмо: «Подтверди участие во встрече 15 марта в 14:00»
+→ Проверь 15 марта → Ответь есть ли конфликт.
+
+## Заметки
+
+- Заголовки цепочки (threading) сохраняются автоматически.
+- `--cc EMAIL` чтобы добавить получателей в ответ.
+- `--html "<p>форматированный ответ</p>"` для HTML.
+- Если в письме несколько предложенных дат — проверь все через `calendar events`.

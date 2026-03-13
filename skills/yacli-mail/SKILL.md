@@ -1,75 +1,75 @@
 ---
 name: yacli-mail
-description: "Yandex Mail: search, read, send, reply, and forward emails via IMAP/SMTP. Use when the task involves email."
+description: "Яндекс Почта: поиск, чтение, отправка, ответ и пересылка писем через IMAP/SMTP. Используй для любых задач с почтой — прочитать письмо, отправить email, найти сообщение, ответить, переслать."
 metadata:
   author: NextStat
 ---
 
-# yacli mail
+# yacli mail — Яндекс Почта
 
-Read `yacli-shared` first for account and auth setup.
+Сначала прочитай `yacli-shared` для настройки аккаунта и авторизации.
 
-## Commands
+## Команды
 
-### List folders
+### Список папок
 
 ```
 yacli mail folders [--account ALIAS]
 ```
 
-### List messages
+### Список писем
 
 ```
 yacli mail list [--folder FOLDER] [--limit N] [--account ALIAS]
 ```
 
-Defaults: folder=INBOX, limit=20. Returns array of messages with `uid`, `from`, `subject`, `date`.
+По умолчанию: folder=INBOX, limit=20. Возвращает массив с `uid`, `from`, `subject`, `date`.
 
-### Search messages
+### Поиск писем
 
 ```
-yacli mail search QUERY [--folder FOLDER] [--limit N] [--account ALIAS]
+yacli mail search ЗАПРОС [--folder FOLDER] [--limit N] [--account ALIAS]
 ```
 
-QUERY is a text string. Searches subject and body. Returns same format as `mail list`.
+ЗАПРОС — текстовая строка. Ищет по теме и телу письма. Формат как у `mail list`.
 
-### Read a message
+### Чтение письма
 
 ```
 yacli mail read UID [--folder FOLDER] [--max-bytes N] [--account ALIAS]
 ```
 
-UID comes from `mail list` or `mail search` output. Returns full message with `body`, `from`, `to`, `subject`, `date`, `attachments`.
+UID берётся из вывода `mail list` или `mail search`. Возвращает полное письмо: `body`, `from`, `to`, `subject`, `date`, `attachments`.
 
-### Send a message
-
-```
-yacli mail send TO SUBJECT [BODY] [--cc EMAIL]... [--bcc EMAIL]... [--html HTML] [--account ALIAS]
-```
-
-BODY is plain text. Use `--html` for HTML content.
-
-### Reply to a message
+### Отправка письма
 
 ```
-yacli mail reply UID [BODY] [--folder FOLDER] [--cc EMAIL]... [--html HTML] [--account ALIAS]
+yacli mail send КОМУ ТЕМА [ТЕКСТ] [--cc EMAIL]... [--bcc EMAIL]... [--html HTML] [--account ALIAS]
 ```
 
-Replies to the message identified by UID. Preserves threading headers.
+ТЕКСТ — простой текст. `--html` для HTML-содержимого.
 
-### Forward a message
+### Ответ на письмо
 
 ```
-yacli mail forward UID TO [BODY] [--folder FOLDER] [--cc EMAIL]... [--bcc EMAIL]... [--html HTML] [--account ALIAS]
+yacli mail reply UID [ТЕКСТ] [--folder FOLDER] [--cc EMAIL]... [--html HTML] [--account ALIAS]
 ```
 
-Forwards the message identified by UID including original content.
+Отвечает на письмо по UID. Сохраняет заголовки цепочки.
 
-## Typical flow
+### Пересылка письма
 
-1. `yacli mail list` — see recent messages, note UIDs
-2. `yacli mail read UID` — read a specific message
-3. `yacli mail reply UID "response text"` — reply
-4. `yacli mail search "keyword"` — find messages by text
+```
+yacli mail forward UID КОМУ [ТЕКСТ] [--folder FOLDER] [--cc EMAIL]... [--bcc EMAIL]... [--html HTML] [--account ALIAS]
+```
 
-Always use the `uid` field from list/search output as the ID argument for read/reply/forward.
+Пересылает письмо с оригинальным содержимым.
+
+## Типичный порядок работы
+
+1. `yacli mail list` — просмотреть входящие, запомнить UID
+2. `yacli mail read UID` — прочитать письмо
+3. `yacli mail reply UID "текст ответа"` — ответить
+4. `yacli mail search "ключевое слово"` — найти письма по тексту
+
+UID из вывода list/search — обязательный аргумент для read/reply/forward.

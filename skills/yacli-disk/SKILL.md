@@ -1,72 +1,72 @@
 ---
 name: yacli-disk
-description: "Yandex Disk: list files, create folders, upload and download via REST API. Use when the task involves file storage."
+description: "Яндекс Диск: файлы, папки, загрузка и скачивание через REST API. Используй для задач с файлами — посмотреть что на диске, загрузить документ, скачать файл, создать папку, публичные ссылки."
 metadata:
   author: NextStat
 ---
 
-# yacli disk
+# yacli disk — Яндекс Диск
 
-Read `yacli-shared` first for account and auth setup.
+Сначала прочитай `yacli-shared` для настройки аккаунта и авторизации.
 
-## Commands
+## Команды
 
-### Disk info
+### Информация о диске
 
 ```
 yacli disk info [--account ALIAS]
 ```
 
-Returns quota: total, used, and available space.
+Возвращает квоту: общий объём, занято, свободно.
 
-### List files
-
-```
-yacli disk list [PATH] [--limit N] [--offset N] [--account ALIAS]
-```
-
-PATH uses `disk:/` prefix. Defaults: path=disk:/, limit=100, offset=0.
-
-Example:
-```
-yacli disk list disk:/Documents --limit 50
-```
-
-### Create a folder
+### Список файлов
 
 ```
-yacli disk mkdir PATH [--account ALIAS]
+yacli disk list [ПУТЬ] [--limit N] [--offset N] [--account ALIAS]
 ```
 
-Example:
-```
-yacli disk mkdir disk:/Documents/reports
-```
+ПУТЬ использует префикс `disk:/`. По умолчанию: path=disk:/, limit=100, offset=0.
 
-### Upload a file
-
+Пример:
 ```
-yacli disk upload FILE PATH [--overwrite] [--account ALIAS]
+yacli disk list disk:/Документы --limit 50
 ```
 
-FILE is a local path. PATH is the remote destination.
-
-Example:
-```
-yacli disk upload ./report.pdf disk:/Documents/report.pdf --overwrite
-```
-
-### Public files
+### Создать папку
 
 ```
-yacli disk public show --public-key URL [--path PATH] [--account ALIAS]
-yacli disk public download --public-key URL --output FILE [--path PATH] [--force] [--account ALIAS]
+yacli disk mkdir ПУТЬ [--account ALIAS]
 ```
 
-Access shared files by their public link.
+Пример:
+```
+yacli disk mkdir disk:/Документы/отчёты
+```
 
-## Typical flow
+### Загрузить файл
 
-1. `yacli disk info` — check available space
-2. `yacli disk list disk:/path` — browse files
-3. `yacli disk upload ./file disk:/path/file` — upload a file
+```
+yacli disk upload ФАЙЛ ПУТЬ [--overwrite] [--account ALIAS]
+```
+
+ФАЙЛ — локальный путь. ПУТЬ — место назначения на диске.
+
+Пример:
+```
+yacli disk upload ./отчёт.pdf disk:/Документы/отчёт.pdf --overwrite
+```
+
+### Публичные файлы
+
+```
+yacli disk public show --public-key URL [--path ПУТЬ] [--account ALIAS]
+yacli disk public download --public-key URL --output ФАЙЛ [--path ПУТЬ] [--force] [--account ALIAS]
+```
+
+Доступ к расшаренным файлам по публичной ссылке.
+
+## Типичный порядок работы
+
+1. `yacli disk info` — проверить свободное место
+2. `yacli disk list disk:/путь` — просмотреть файлы
+3. `yacli disk upload ./файл disk:/путь/файл` — загрузить файл

@@ -6,6 +6,7 @@ use url::Url;
 use crate::error::{Result, YacliError};
 use crate::model::{AccountConfig, AccountsFile};
 use crate::paths::accounts_path;
+use crate::persist::write_config_file;
 
 #[derive(Clone, Debug)]
 pub struct AccountStore {
@@ -28,13 +29,8 @@ impl AccountStore {
 
     pub fn save(&self) -> Result<()> {
         let path = accounts_path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
         let content = toml::to_string_pretty(&self.file)?;
-        fs::write(path, content)?;
-        Ok(())
+        write_config_file(&path, &content)
     }
 
     pub fn add_account(&mut self, name: String, mut account: AccountConfig) -> Result<()> {

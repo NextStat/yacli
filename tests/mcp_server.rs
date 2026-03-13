@@ -1,5 +1,6 @@
 use assert_cmd::Command;
-use mockito::Server;
+use base64::Engine;
+use mockito::{Matcher, Server};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -7,11 +8,14 @@ use std::process::{Command as StdCommand, Stdio};
 use tempfile::tempdir;
 
 const APP_RESOURCE_URI: &str = "ui://yacli/dashboard";
-const APP_RESOURCE_URI_TEMPLATE: &str = "ui://yacli/dashboard{?account,section,resource,tool}";
+const APP_RESOURCE_URI_TEMPLATE: &str =
+    "ui://yacli/dashboard{?account,section,resource,tool,skill,prompt}";
 const APP_RESOURCE_MIME_TYPE: &str = "text/html;profile=mcp-app";
 
 fn yacli() -> Command {
-    Command::cargo_bin("yacli").expect("binary exists")
+    let mut command = Command::cargo_bin("yacli").expect("binary exists");
+    command.env("YACLI_SECRET_BACKEND", "file");
+    command
 }
 
 fn current_release_update_target() -> &'static str {
@@ -57,6 +61,16 @@ fn mcp_notification(method: &str, params: Value) -> String {
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
 }
 
+fn mcp_response(id: u64, result: Value) -> String {
+    let body = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    }))
+    .expect("response json");
+    format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
+}
+
 fn json_line_notification(method: &str, params: Value) -> String {
     serde_json::to_string(&json!({
         "jsonrpc": "2.0",
@@ -68,7 +82,18 @@ fn json_line_notification(method: &str, params: Value) -> String {
 }
 
 fn initialize_request(ui_enabled: bool) -> String {
-    let capabilities = if ui_enabled {
+    initialize_request_with_capabilities(ui_enabled, None)
+}
+
+fn initialize_request_with_roots(ui_enabled: bool, list_changed: bool) -> String {
+    initialize_request_with_capabilities(ui_enabled, Some(list_changed))
+}
+
+fn initialize_request_with_capabilities(
+    ui_enabled: bool,
+    roots_list_changed: Option<bool>,
+) -> String {
+    let mut capabilities = if ui_enabled {
         json!({
             "extensions": {
                 "io.modelcontextprotocol/ui": {
@@ -79,6 +104,11 @@ fn initialize_request(ui_enabled: bool) -> String {
     } else {
         json!({})
     };
+    if let Some(list_changed) = roots_list_changed {
+        capabilities["roots"] = json!({
+            "listChanged": list_changed
+        });
+    }
 
     mcp_request(
         1,
@@ -172,6 +202,118 @@ fn write_accounts_file(config_dir: &std::path::Path, content: &str) {
     fs::write(config_dir.join("accounts.toml"), content).expect("accounts file");
 }
 
+fn write_credentials_file(config_dir: &std::path::Path, content: &str) {
+    fs::create_dir_all(config_dir).expect("config dir");
+    fs::write(config_dir.join("credentials.toml"), content).expect("credentials file");
+}
+
+fn write_mock_mail_account(config_dir: &std::path::Path) {
+    write_accounts_file(
+        config_dir,
+        r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+credential_ref = "store:mail"
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "https://cloud-api.yandex.net"
+"#,
+    );
+}
+
+fn write_mock_calendar_account(config_dir: &std::path::Path, caldav_base_url: &str) {
+    write_accounts_file(
+        config_dir,
+        &format!(
+            r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "{caldav_base_url}"
+credential_ref = "store:calendar"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "https://cloud-api.yandex.net"
+"#,
+        ),
+    );
+}
+
+fn write_mock_disk_account(config_dir: &std::path::Path, disk_base_url: &str) {
+    write_accounts_file(
+        config_dir,
+        &format!(
+            r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "{disk_base_url}"
+credential_ref = "store:disk"
+"#,
+        ),
+    );
+}
+
+fn basic_auth_header(account: &str, app_password: &str) -> String {
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("{account}:{app_password}"))
+    )
+}
+
 #[test]
 fn mcp_stdio_initialize_returns_capabilities() {
     let output = yacli()
@@ -186,6 +328,11 @@ fn mcp_stdio_initialize_returns_capabilities() {
     let response = parse_responses(&output).remove(0);
     assert_eq!(response["result"]["protocolVersion"], "2025-11-25");
     assert_eq!(response["result"]["serverInfo"]["name"], "yacli");
+    assert_eq!(response["result"]["capabilities"]["completions"], json!({}));
+    assert_eq!(
+        response["result"]["capabilities"]["prompts"]["listChanged"],
+        false
+    );
     assert_eq!(
         response["result"]["capabilities"]["experimental"]["io.modelcontextprotocol/ui"]["resourceTemplates"],
         true
@@ -237,6 +384,31 @@ fn mcp_stdio_accepts_claude_code_json_line_messages() {
         snapshot_tool["_meta"]["ui"]["resourceUri"],
         APP_RESOURCE_URI
     );
+
+    let prompts_input = [
+        json_line_initialize_request(true),
+        json_line_notification("notifications/initialized", json!({})),
+        json_line_request(2, "prompts/list", json!({})),
+    ]
+    .concat();
+
+    let prompts_output = yacli()
+        .args(["mcp"])
+        .write_stdin(prompts_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let prompts_responses = parse_json_line_responses(&prompts_output);
+    let prompts = prompts_responses[1]["result"]["prompts"]
+        .as_array()
+        .expect("prompts array");
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "daily-briefing")
+    );
 }
 
 #[test]
@@ -257,6 +429,823 @@ fn mcp_stdio_rejects_operational_requests_before_initialize() {
             .as_str()
             .expect("message")
             .contains("initialize")
+    );
+}
+
+#[test]
+fn mcp_stdio_lists_and_renders_embedded_prompts() {
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "prompts/list", json!({})),
+        mcp_request(
+            3,
+            "prompts/get",
+            json!({
+                "name": "find-and-read",
+                "arguments": {
+                    "query": "invoice",
+                    "account": "work"
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let prompts = responses[1]["result"]["prompts"]
+        .as_array()
+        .expect("prompts array");
+    assert_eq!(prompts.len(), 7);
+    let mail_prompt = prompts
+        .iter()
+        .find(|prompt| prompt["name"] == "mail")
+        .expect("mail prompt");
+    assert_eq!(mail_prompt["title"], "yacli Mail Workflow");
+
+    let rendered = responses[2]["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .expect("prompt text");
+    assert!(rendered.contains("Query: invoice"));
+    assert!(rendered.contains("Account: work"));
+    assert!(rendered.contains("yacli.mail.search"));
+    assert!(rendered.contains("yacli.mail.read"));
+}
+
+#[test]
+fn mcp_stdio_completes_prompt_and_resource_arguments() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(
+            2,
+            "completion/complete",
+            json!({
+                "ref": {
+                    "type": "ref/prompt",
+                    "name": "mail"
+                },
+                "argument": {
+                    "name": "folder",
+                    "value": "in"
+                }
+            }),
+        ),
+        mcp_request(
+            3,
+            "completion/complete",
+            json!({
+                "ref": {
+                    "type": "ref/resource",
+                    "uri": "resource://yacli/account/{account}"
+                },
+                "argument": {
+                    "name": "account",
+                    "value": "mo"
+                }
+            }),
+        ),
+        mcp_request(
+            4,
+            "completion/complete",
+            json!({
+                "ref": {
+                    "type": "ref/resource",
+                    "uri": "resource://yacli/skill/{skill}"
+                },
+                "argument": {
+                    "name": "skill",
+                    "value": "yacli-ma"
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    assert_eq!(responses[1]["result"]["completion"]["values"][0], "INBOX");
+    assert_eq!(responses[1]["result"]["completion"]["hasMore"], false);
+    assert_eq!(responses[2]["result"]["completion"]["values"][0], "mock");
+    assert_eq!(
+        responses[3]["result"]["completion"]["values"][0],
+        "yacli-mail"
+    );
+}
+
+#[test]
+fn mcp_stdio_requests_client_roots_and_refreshes_after_list_changed() {
+    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("yacli"))
+        .arg("mcp")
+        .env("YACLI_SECRET_BACKEND", "file")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn yacli mcp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+
+    stdin
+        .write_all(initialize_request_with_roots(true, true).as_bytes())
+        .expect("write initialize");
+    let initialize = read_response(&mut reader);
+    assert_eq!(initialize["result"]["protocolVersion"], "2025-11-25");
+
+    stdin
+        .write_all(mcp_notification("notifications/initialized", json!({})).as_bytes())
+        .expect("write initialized");
+    stdin
+        .write_all(mcp_request(2, "tools/list", json!({})).as_bytes())
+        .expect("write tools/list");
+    let tools_list = read_response(&mut reader);
+    let tools = tools_list["result"]["tools"].as_array().expect("tools");
+    let roots_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.roots.list")
+        .expect("roots tool");
+    assert_eq!(roots_tool["_meta"]["ui"]["resourceUri"], APP_RESOURCE_URI);
+
+    stdin
+        .write_all(
+            mcp_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "yacli.roots.list",
+                    "arguments": {}
+                }),
+            )
+            .as_bytes(),
+        )
+        .expect("write roots tool call");
+    let outbound_roots_request = read_response(&mut reader);
+    assert_eq!(outbound_roots_request["method"], "roots/list");
+    let request_id = outbound_roots_request["id"].as_u64().expect("request id");
+
+    stdin
+        .write_all(
+            mcp_response(
+                request_id,
+                json!({
+                    "roots": [
+                        {
+                            "uri": "file:///tmp/project-a",
+                            "name": "project-a"
+                        }
+                    ]
+                }),
+            )
+            .as_bytes(),
+        )
+        .expect("write roots response");
+    let roots_tool_result = read_response(&mut reader);
+    assert_eq!(
+        roots_tool_result["result"]["structuredContent"]["roots"][0]["uri"],
+        "file:///tmp/project-a"
+    );
+    assert_eq!(
+        roots_tool_result["result"]["structuredContent"]["roots"][0]["name"],
+        "project-a"
+    );
+
+    stdin
+        .write_all(mcp_notification("notifications/roots/list_changed", json!({})).as_bytes())
+        .expect("write roots changed");
+    stdin
+        .write_all(
+            mcp_request(
+                4,
+                "tools/call",
+                json!({
+                    "name": "yacli.roots.list",
+                    "arguments": {}
+                }),
+            )
+            .as_bytes(),
+        )
+        .expect("write second roots tool call");
+    let refreshed_outbound_roots_request = read_response(&mut reader);
+    assert_eq!(refreshed_outbound_roots_request["method"], "roots/list");
+    let refreshed_request_id = refreshed_outbound_roots_request["id"]
+        .as_u64()
+        .expect("request id");
+    assert_ne!(refreshed_request_id, request_id);
+
+    stdin
+        .write_all(
+            mcp_response(
+                refreshed_request_id,
+                json!({
+                    "roots": [
+                        {
+                            "uri": "file:///tmp/project-b",
+                            "name": "project-b"
+                        }
+                    ]
+                }),
+            )
+            .as_bytes(),
+        )
+        .expect("write refreshed roots response");
+    let refreshed_roots_result = read_response(&mut reader);
+    assert_eq!(
+        refreshed_roots_result["result"]["structuredContent"]["roots"][0]["uri"],
+        "file:///tmp/project-b"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_stdio_does_not_advertise_roots_without_client_capability() {
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+    ]
+    .concat();
+
+    let output = yacli()
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(tools.iter().all(|tool| tool["name"] != "yacli.roots.list"));
+}
+
+#[test]
+fn mcp_stdio_exposes_mail_write_tools_and_validates_send_reply_forward() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+"#,
+    );
+
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+        mcp_request(
+            3,
+            "tools/call",
+            json!({
+                "name": "yacli.mail.send",
+                "arguments": {
+                    "account": "mock",
+                    "to": "broken-recipient",
+                    "subject": "Hello",
+                    "text": "Body"
+                }
+            }),
+        ),
+        mcp_request(
+            4,
+            "tools/call",
+            json!({
+                "name": "yacli.mail.reply",
+                "arguments": {
+                    "account": "mock",
+                    "uid": 42
+                }
+            }),
+        ),
+        mcp_request(
+            5,
+            "tools/call",
+            json!({
+                "name": "yacli.mail.forward",
+                "arguments": {
+                    "account": "mock",
+                    "uid": 42,
+                    "to": "broken-recipient"
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.send"));
+    assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.reply"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.forward")
+    );
+
+    assert_eq!(responses[2]["error"]["code"], -32602);
+    assert!(
+        responses[2]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("mail send recipient must contain `@`")
+    );
+
+    assert_eq!(responses[3]["error"]["code"], -32602);
+    assert!(
+        responses[3]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("mail reply requires text or --html")
+    );
+
+    assert_eq!(responses[4]["error"]["code"], -32602);
+    assert!(
+        responses[4]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("mail forward recipient must contain `@`")
+    );
+}
+
+#[test]
+fn mcp_stdio_exposes_calendar_write_tools_and_executes_create_delete() {
+    let temp = tempdir().expect("tempdir");
+    let mut caldav = Server::new();
+    write_mock_calendar_account(temp.path(), &caldav.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.calendar]
+kind = "app_password"
+secret = "calendar-secret"
+"#,
+    );
+
+    let auth = basic_auth_header("me@yandex.ru", "calendar-secret");
+
+    let _principal = caldav
+        .mock("PROPFIND", "/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "0")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:current-user-principal>
+          <d:href>/principals/users/me@yandex.ru/</d:href>
+        </d:current-user-principal>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .expect(2)
+        .create();
+
+    let _home = caldav
+        .mock("PROPFIND", "/principals/users/me@yandex.ru/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "0")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/principals/users/me@yandex.ru/</d:href>
+    <d:propstat>
+      <d:prop>
+        <c:calendar-home-set>
+          <d:href>/calendars/me@yandex.ru/</d:href>
+        </c:calendar-home-set>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .expect(2)
+        .create();
+
+    let _collections = caldav
+        .mock("PROPFIND", "/calendars/me@yandex.ru/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "1")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/me@yandex.ru/default/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:displayname>Личный</d:displayname>
+        <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .expect(4)
+        .create();
+
+    let _put = caldav
+        .mock(
+            "PUT",
+            Matcher::Regex("/calendars/me@yandex\\.ru/default/[^/]+\\.ics".to_string()),
+        )
+        .match_header("authorization", auth.as_str())
+        .match_header("content-type", "text/calendar; charset=utf-8")
+        .match_header("if-none-match", "*")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex("SUMMARY:Синк команды".to_string()),
+            Matcher::Regex("DTSTART:20260312T090000Z".to_string()),
+            Matcher::Regex("DTEND:20260312T100000Z".to_string()),
+        ]))
+        .with_status(201)
+        .with_header("etag", "\"new-evt\"")
+        .create();
+
+    let _create_report = caldav
+        .mock("REPORT", "/calendars/me@yandex.ru/default/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "1")
+        .match_body(Matcher::Regex("prop-filter name=\"UID\"".to_string()))
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body_from_request(|request| {
+            let body = request
+                .utf8_lossy_body()
+                .expect("request body available")
+                .into_owned();
+            let uid = body
+                .split("<c:text-match collation=\"i;octet\">")
+                .nth(1)
+                .and_then(|value| value.split("</c:text-match>").next())
+                .expect("uid filter present");
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/me@yandex.ru/default/canonical-event.ics</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getetag>"new-evt"</d:getetag>
+        <c:calendar-data><![CDATA[BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:{uid}
+SUMMARY:Синк команды
+DTSTART:20260312T090000Z
+DTEND:20260312T100000Z
+END:VEVENT
+END:VCALENDAR]]></c:calendar-data>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#
+            )
+            .into_bytes()
+        })
+        .create();
+
+    let _delete_report = caldav
+        .mock("REPORT", "/calendars/me@yandex.ru/default/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "1")
+        .match_body(Matcher::Regex(
+            "text-match collation=\"i;octet\">event-1<".to_string(),
+        ))
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/me@yandex.ru/default/event-1.ics</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getetag>"evt-1"</d:getetag>
+        <c:calendar-data><![CDATA[BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:event-1
+SUMMARY:Удаляемое событие
+DTSTART:20260312T090000Z
+DTEND:20260312T100000Z
+END:VEVENT
+END:VCALENDAR]]></c:calendar-data>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let _delete = caldav
+        .mock("DELETE", "/calendars/me@yandex.ru/default/event-1.ics")
+        .match_header("authorization", auth.as_str())
+        .match_header("if-match", "\"evt-1\"")
+        .with_status(204)
+        .create();
+
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+        mcp_request(
+            3,
+            "tools/call",
+            json!({
+                "name": "yacli.calendar.create",
+                "arguments": {
+                    "account": "mock",
+                    "summary": "Синк команды",
+                    "start": "2026-03-12T09:00:00Z",
+                    "end": "2026-03-12T10:00:00Z"
+                }
+            }),
+        ),
+        mcp_request(
+            4,
+            "tools/call",
+            json!({
+                "name": "yacli.calendar.delete",
+                "arguments": {
+                    "account": "mock",
+                    "uid": "event-1"
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.calendar.create")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.calendar.delete")
+    );
+
+    assert_eq!(
+        responses[2]["result"]["structuredContent"]["calendar"]["id"],
+        "default"
+    );
+    assert_eq!(
+        responses[2]["result"]["structuredContent"]["event"]["summary"],
+        "Синк команды"
+    );
+    assert_eq!(
+        responses[3]["result"]["structuredContent"]["deleted_event"]["uid"],
+        "event-1"
+    );
+    assert_eq!(
+        responses[3]["result"]["structuredContent"]["deleted_event"]["summary"],
+        "Удаляемое событие"
+    );
+}
+
+#[test]
+fn mcp_stdio_exposes_disk_write_tools_and_executes_mkdir_upload() {
+    let temp = tempdir().expect("tempdir");
+    let mut disk = Server::new();
+    write_mock_disk_account(temp.path(), &disk.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let source_path = temp.path().join("note.txt");
+    fs::write(&source_path, b"hello disk").expect("source file");
+
+    let _mkdir = disk
+        .mock("PUT", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/new-folder".into(),
+        ))
+        .with_status(201)
+        .create();
+
+    let _mkdir_metadata = disk
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/new-folder".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "new-folder",
+  "path": "disk:/docs/new-folder",
+  "type": "dir",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:00+00:00",
+  "revision": 18,
+  "_embedded": {
+    "limit": 100,
+    "offset": 0,
+    "total": 0,
+    "items": []
+  }
+}"#,
+        )
+        .create();
+
+    let _ticket = disk
+        .mock("GET", "/v1/disk/resources/upload")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/note.txt".into()),
+            Matcher::UrlEncoded("overwrite".into(), "false".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "href": "{}/upload-target/note.txt",
+  "method": "PUT",
+  "templated": false
+}}"#,
+            disk.url()
+        ))
+        .create();
+
+    let _upload = disk
+        .mock("PUT", "/upload-target/note.txt")
+        .match_body(Matcher::Exact("hello disk".to_string()))
+        .with_status(201)
+        .create();
+
+    let _upload_metadata = disk
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/note.txt".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "note.txt",
+  "path": "disk:/docs/note.txt",
+  "type": "file",
+  "size": 10,
+  "mime_type": "text/plain",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .create();
+
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+        mcp_request(
+            3,
+            "tools/call",
+            json!({
+                "name": "yacli.disk.mkdir",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/new-folder"
+                }
+            }),
+        ),
+        mcp_request(
+            4,
+            "tools/call",
+            json!({
+                "name": "yacli.disk.upload",
+                "arguments": {
+                    "account": "mock",
+                    "source": source_path.to_str().expect("utf8 path"),
+                    "path": "disk:/docs/note.txt"
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(tools.iter().any(|tool| tool["name"] == "yacli.disk.mkdir"));
+    assert!(tools.iter().any(|tool| tool["name"] == "yacli.disk.upload"));
+
+    assert_eq!(
+        responses[2]["result"]["structuredContent"]["resource"]["resource_type"],
+        "dir"
+    );
+    assert_eq!(
+        responses[3]["result"]["structuredContent"]["resource"]["resource_type"],
+        "file"
+    );
+    assert_eq!(
+        responses[3]["result"]["structuredContent"]["upload"]["bytes_written"],
+        10
     );
 }
 
@@ -372,10 +1361,21 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("tools/call"));
     assert!(html.contains("yacli.app.snapshot"));
     assert!(html.contains("Refresh snapshot"));
+    assert!(html.contains("tool-name-input"));
+    assert!(html.contains("tool-args-input"));
+    assert!(html.contains("tool-schema-json"));
+    assert!(html.contains("Run selected tool"));
     assert!(html.contains("ui/open-link"));
     assert!(html.contains("ui/request-display-mode"));
     assert!(html.contains("ui/update-model-context"));
     assert!(html.contains("ui/message"));
+    assert!(html.contains("Host profile"));
+    assert!(html.contains("host-profile-summary"));
+    assert!(html.contains("host-capability-grid"));
+    assert!(html.contains("host-recommendations"));
+    assert!(html.contains("apps-rich"));
+    assert!(html.contains("hybrid"));
+    assert!(html.contains("text-first"));
     assert!(html.contains("Open auth issuer"));
     assert!(html.contains("Open resource metadata"));
     assert!(html.contains("Share auth context"));
@@ -387,6 +1387,24 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("resources/read"));
     assert!(html.contains("Read account resource"));
     assert!(html.contains("Read auth resource"));
+    assert!(html.contains("Read skills catalog"));
+    assert!(html.contains("Read selected skill"));
+    assert!(html.contains("skill-input"));
+    assert!(html.contains("Searchable browser"));
+    assert!(html.contains("browser-query-input"));
+    assert!(html.contains("browser-filter-select"));
+    assert!(html.contains("browser-results"));
+    assert!(html.contains("Refresh browser"));
+    assert!(html.contains("notifications/prompts/list_changed"));
+    assert!(html.contains("notifications/tools/list_changed"));
+    assert!(html.contains("tools/list"));
+    assert!(html.contains("Prompt browser"));
+    assert!(html.contains("List prompts"));
+    assert!(html.contains("Render selected prompt"));
+    assert!(html.contains("prompt-name-input"));
+    assert!(html.contains("prompt-args-input"));
+    assert!(html.contains("prompt-list-json"));
+    assert!(html.contains("prompt-json"));
     assert!(html.contains("Share snapshot"));
     assert!(html.contains("Share current view"));
     assert!(html.contains("Current yacli dashboard view"));
@@ -445,6 +1463,74 @@ fn mcp_stdio_reads_account_aware_dashboard_resource() {
     assert!(html.contains("\"runtime restored\""));
     assert!(html.contains("\"View: \" + uri"));
     assert!(html.contains("panel-auth"));
+}
+
+#[test]
+fn mcp_stdio_reads_skill_aware_dashboard_resource() {
+    let input = [
+        initialize_request(true),
+        mcp_request(
+            2,
+            "resources/read",
+            json!({
+                "uri": "ui://yacli/dashboard?section=resources&resource=skill&skill=yacli-mail"
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let contents = responses[1]["result"]["contents"]
+        .as_array()
+        .expect("contents array");
+    let html = contents[0]["text"].as_str().expect("html");
+    assert!(html.contains("\"preferredResource\":\"skill\""));
+    assert!(html.contains("\"preferredSkill\":\"yacli-mail\""));
+    assert!(html.contains("resource://yacli/skill/"));
+    assert!(html.contains("readSkillResource"));
+}
+
+#[test]
+fn mcp_stdio_reads_prompt_aware_dashboard_resource() {
+    let input = [
+        initialize_request(true),
+        mcp_request(
+            2,
+            "resources/read",
+            json!({
+                "uri": "ui://yacli/dashboard?section=prompts&prompt=mail"
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let contents = responses[1]["result"]["contents"]
+        .as_array()
+        .expect("contents array");
+    let html = contents[0]["text"].as_str().expect("html");
+    assert!(html.contains("\"preferredSection\":\"prompts\""));
+    assert!(html.contains("\"preferredPrompt\":\"mail\""));
+    assert!(html.contains("renderSelectedPrompt"));
+    assert!(html.contains("prompts/get"));
 }
 
 #[test]
@@ -541,6 +1627,20 @@ rest_base_url = "https://cloud-api.yandex.net"
                 "uri": "resource://yacli/auth/personal"
             }),
         ),
+        mcp_request(
+            5,
+            "resources/read",
+            json!({
+                "uri": "resource://yacli/skills"
+            }),
+        ),
+        mcp_request(
+            6,
+            "resources/read",
+            json!({
+                "uri": "resource://yacli/skill/yacli-mail"
+            }),
+        ),
     ]
     .concat();
 
@@ -567,6 +1667,11 @@ rest_base_url = "https://cloud-api.yandex.net"
         templates
             .iter()
             .any(|template| template["uriTemplate"] == "resource://yacli/auth/{account}")
+    );
+    assert!(
+        templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/skill/{skill}")
     );
     assert!(
         !templates
@@ -600,6 +1705,32 @@ rest_base_url = "https://cloud-api.yandex.net"
         auth_payload["services"]["mail"]["credential_state"],
         "env_missing"
     );
+
+    let skills_catalog_contents = responses[4]["result"]["contents"]
+        .as_array()
+        .expect("skills catalog contents");
+    let skills_catalog_payload: Value = serde_json::from_str(
+        skills_catalog_contents[0]["text"]
+            .as_str()
+            .expect("skills catalog text"),
+    )
+    .expect("skills catalog json");
+    assert_eq!(skills_catalog_payload["count"], 7);
+    assert!(
+        skills_catalog_payload["items"]
+            .as_array()
+            .expect("skill items")
+            .iter()
+            .any(|item| item["name"] == "yacli-mail")
+    );
+
+    let skill_contents = responses[5]["result"]["contents"]
+        .as_array()
+        .expect("skill contents");
+    assert_eq!(skill_contents[0]["mimeType"], "text/markdown");
+    let skill_text = skill_contents[0]["text"].as_str().expect("skill text");
+    assert!(skill_text.contains("# yacli mail"));
+    assert!(skill_text.contains("yacli mail send"));
 }
 
 #[test]
@@ -794,6 +1925,7 @@ rest_base_url = "https://cloud-api.yandex.net"
 
     let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("yacli"))
         .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_SECRET_BACKEND", "file")
         .args(["mcp"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

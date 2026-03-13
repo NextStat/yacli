@@ -31,6 +31,7 @@ struct ServerRegistration {
 enum InstallClient {
     Antigravity,
     Claude,
+    ClaudeDesktop,
     Codex,
     Cursor,
     Gemini,
@@ -162,6 +163,7 @@ fn resolve_clients(selected: Vec<McpClientArg>) -> Vec<InstallClient> {
     if selected.is_empty() {
         clients.extend([
             InstallClient::Claude,
+            InstallClient::ClaudeDesktop,
             InstallClient::Codex,
             InstallClient::Gemini,
             InstallClient::Warp,
@@ -172,7 +174,11 @@ fn resolve_clients(selected: Vec<McpClientArg>) -> Vec<InstallClient> {
         ]);
     } else {
         for client in selected {
-            clients.insert(InstallClient::from(client));
+            let resolved = InstallClient::from(client);
+            clients.insert(resolved);
+            if resolved == InstallClient::Claude {
+                clients.insert(InstallClient::ClaudeDesktop);
+            }
         }
     }
 
@@ -196,6 +202,13 @@ fn install_client(client: InstallClient, registration: &ServerRegistration) -> R
             "claude",
             &["mcp", "get", SERVER_NAME],
             &build_claude_add_args(registration),
+        ),
+        InstallClient::ClaudeDesktop => install_json_file(
+            client,
+            &claude_desktop_config_path()?,
+            &[],
+            "mcpServers",
+            registration,
         ),
         InstallClient::Codex => install_native_get_add(
             client,
@@ -662,6 +675,13 @@ fn client_detected(client: InstallClient) -> bool {
         Err(_) => return false,
     };
     match client {
+        InstallClient::ClaudeDesktop => {
+            let config_path = match claude_desktop_config_path() {
+                Ok(path) => path,
+                Err(_) => return false,
+            };
+            config_path.exists() || config_path.parent().is_some_and(|parent| parent.exists())
+        }
         InstallClient::Cursor => {
             home.join(".cursor").exists()
                 || home.join("Library/Application Support/Cursor").exists()
@@ -695,6 +715,17 @@ fn home_dir() -> Result<PathBuf> {
 
 fn cursor_config_path() -> Result<PathBuf> {
     Ok(home_dir()?.join(".cursor/mcp.json"))
+}
+
+fn claude_desktop_config_path() -> Result<PathBuf> {
+    let home = home_dir()?;
+    if cfg!(target_os = "macos") {
+        Ok(home.join("Library/Application Support/Claude/claude_desktop_config.json"))
+    } else if cfg!(target_os = "windows") {
+        Ok(home.join("AppData/Roaming/Claude/claude_desktop_config.json"))
+    } else {
+        Ok(home.join(".config/Claude/claude_desktop_config.json"))
+    }
 }
 
 fn windsurf_config_path() -> Result<PathBuf> {
@@ -763,6 +794,7 @@ impl InstallClient {
         match self {
             Self::Antigravity => "antigravity",
             Self::Claude => "claude",
+            Self::ClaudeDesktop => "claude-desktop",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
             Self::Gemini => "gemini",
@@ -775,7 +807,7 @@ impl InstallClient {
     fn mechanism(self) -> &'static str {
         match self {
             Self::Claude | Self::Codex | Self::Gemini | Self::Antigravity => "native_cli",
-            Self::Cursor | Self::Windsurf | Self::Zed => "json_file",
+            Self::ClaudeDesktop | Self::Cursor | Self::Windsurf | Self::Zed => "json_file",
             Self::Warp => "json_file",
         }
     }
@@ -790,6 +822,7 @@ impl InstallClient {
 
     fn primary_path(self) -> Option<PathBuf> {
         match self {
+            Self::ClaudeDesktop => claude_desktop_config_path().ok(),
             Self::Cursor => cursor_config_path().ok(),
             Self::Windsurf => windsurf_config_path().ok(),
             Self::Warp => warp_config_path().ok(),
@@ -801,6 +834,7 @@ impl InstallClient {
     fn skills_dir(self, home: &Path) -> Option<PathBuf> {
         match self {
             Self::Claude => Some(home.join(".claude/skills")),
+            Self::ClaudeDesktop => None,
             Self::Codex => Some(home.join(".agents/skills")),
             Self::Gemini => Some(home.join(".agents/skills")),
             Self::Cursor => Some(home.join(".cursor/skills")),
@@ -816,6 +850,7 @@ impl From<McpClientArg> for InstallClient {
     fn from(value: McpClientArg) -> Self {
         match value {
             McpClientArg::Claude => Self::Claude,
+            McpClientArg::ClaudeDesktop => Self::ClaudeDesktop,
             McpClientArg::Codex => Self::Codex,
             McpClientArg::Gemini => Self::Gemini,
             McpClientArg::Warp => Self::Warp,

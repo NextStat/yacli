@@ -17,6 +17,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace
+      - name: Smoke stable product surface
+        run: sh ./scripts/smoke-product-surface.sh target/debug/yacli
       - name: Test
         run: cargo test --workspace
       - name: Clippy
