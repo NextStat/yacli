@@ -40,6 +40,33 @@ pub enum GuideTopicArg {
     Disk,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum McpClientArg {
+    Claude,
+    Codex,
+    Gemini,
+    Warp,
+    Zed,
+    Cursor,
+    Antigravity,
+    Windsurf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum McpTransportArg {
+    Stdio,
+    Http,
+}
+
+impl McpTransportArg {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::Http => "http",
+        }
+    }
+}
+
 const HELP_TEMPLATE: &str = "\
 {before-help}{about-with-newline}\
 Использование:\n    {usage}\n\
@@ -143,6 +170,73 @@ pub enum Command {
     Mail {
         #[command(subcommand)]
         action: MailCommand,
+    },
+    /// Запустить MCP сервер по stdio или установить его в поддерживаемые клиенты.
+    Mcp {
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = McpTransportArg::Stdio,
+            value_name = "ТРАНСПОРТ",
+            help = "Транспорт MCP сервера"
+        )]
+        transport: McpTransportArg,
+        #[arg(
+            long,
+            default_value = "127.0.0.1:8787",
+            value_name = "АДРЕС",
+            help = "Адрес для HTTP транспорта"
+        )]
+        listen: String,
+        #[arg(
+            long,
+            value_name = "URL",
+            help = "Канонический публичный URL MCP сервера для HTTP auth discovery"
+        )]
+        public_url: Option<String>,
+        #[command(subcommand)]
+        action: Option<McpCommand>,
+    },
+    /// Обновить yacli из GitHub Releases.
+    Update {
+        #[arg(
+            long,
+            default_value = "latest",
+            value_name = "ВЕРСИЯ",
+            help = "Версия без префикса v или latest"
+        )]
+        version: String,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить, доступно ли обновление"
+        )]
+        check: bool,
+        #[arg(long, hide = true, value_name = "URL")]
+        base_url: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    /// Установить yacli MCP сервер в локально доступные клиенты.
+    Install {
+        #[arg(long = "client", value_enum, value_name = "КЛИЕНТ")]
+        client: Vec<McpClientArg>,
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = McpTransportArg::Stdio,
+            value_name = "ТРАНСПОРТ",
+            help = "Какой транспорт регистрировать в клиенте"
+        )]
+        transport: McpTransportArg,
+        #[arg(
+            long,
+            value_name = "URL",
+            help = "URL MCP HTTP сервера, если выбран HTTP транспорт"
+        )]
+        url: Option<String>,
     },
 }
 

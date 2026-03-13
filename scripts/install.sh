@@ -78,11 +78,6 @@ detect_asset() {
             ;;
     esac
 
-    if [ "$platform" = "unknown-linux-gnu" ] && [ "$cpu" = "aarch64" ]; then
-        echo "Linux arm64 artifacts are not published yet. Use cargo install or build from source." >&2
-        exit 1
-    fi
-
     printf 'yacli-%s-%s.tar.gz' "$cpu" "$platform"
 }
 

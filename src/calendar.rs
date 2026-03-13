@@ -318,9 +318,9 @@ impl CaldavClient {
 
         let summary = request.summary.trim();
         if summary.is_empty() {
-                return Err(YacliError::Validation(
-                    "calendar create <SUMMARY> не должен быть пустым".to_string(),
-                ));
+            return Err(YacliError::Validation(
+                "calendar create <SUMMARY> не должен быть пустым".to_string(),
+            ));
         }
 
         let uid = generate_calendar_uid();

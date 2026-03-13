@@ -1,0 +1,1849 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>yacli MCP Dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4ead9;
+        --bg-accent: #efe1c8;
+        --panel: rgba(255, 252, 245, 0.92);
+        --panel-strong: #fffdf7;
+        --ink: #172126;
+        --muted: #5d6a70;
+        --line: rgba(23, 33, 38, 0.1);
+        --brand: #0e7c66;
+        --brand-strong: #0a5f4e;
+        --brand-soft: rgba(14, 124, 102, 0.12);
+        --warn: #9a4b1f;
+        --shadow: 0 22px 70px rgba(24, 28, 22, 0.16);
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(255, 255, 255, 0.72), transparent 36%),
+          radial-gradient(circle at top right, rgba(14, 124, 102, 0.15), transparent 28%),
+          linear-gradient(160deg, var(--bg), var(--bg-accent));
+      }
+
+      body[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #10181c;
+        --bg-accent: #152126;
+        --panel: rgba(16, 24, 28, 0.92);
+        --panel-strong: rgba(18, 28, 33, 0.98);
+        --ink: #f1efe8;
+        --muted: #adb8bc;
+        --line: rgba(241, 239, 232, 0.12);
+        --brand: #6fd0b8;
+        --brand-strong: #8ce1cd;
+        --brand-soft: rgba(111, 208, 184, 0.16);
+        --warn: #ffb082;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+      }
+
+      body[data-display-mode="fullscreen"] main {
+        max-width: 1320px;
+      }
+
+      main {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 24px auto;
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: linear-gradient(180deg, var(--panel), rgba(255, 255, 255, 0.68));
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.85fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .card {
+        background: var(--panel-strong);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        scroll-margin-top: 24px;
+        transition: box-shadow 180ms ease, border-color 180ms ease, transform 180ms ease;
+      }
+
+      .card[data-focused="true"] {
+        border-color: rgba(14, 124, 102, 0.5);
+        box-shadow:
+          var(--shadow),
+          0 0 0 4px rgba(14, 124, 102, 0.14);
+        transform: translateY(-1px);
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+        margin-top: 18px;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+        gap: 18px;
+      }
+
+      .headline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: var(--brand-soft);
+        color: var(--brand-strong);
+        font: 600 12px/1.1 ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+
+      h1 {
+        font-size: clamp(2.1rem, 3vw, 3rem);
+        line-height: 0.95;
+        max-width: 12ch;
+      }
+
+      h2 {
+        font-size: 1.15rem;
+      }
+
+      h3 {
+        font-size: 0.95rem;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .hero-copy {
+        display: grid;
+        gap: 18px;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.62), transparent);
+      }
+
+      .metric strong,
+      .metric span {
+        display: block;
+      }
+
+      .metric strong {
+        font: 700 0.78rem/1.2 ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .metric span {
+        margin-top: 8px;
+        font-size: 1.1rem;
+        color: var(--ink);
+      }
+
+      .status-panel {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+      }
+
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        width: fit-content;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(23, 33, 38, 0.06);
+        font: 600 0.86rem/1.2 ui-sans-serif, system-ui, sans-serif;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--warn);
+        box-shadow: 0 0 0 4px rgba(154, 75, 31, 0.14);
+      }
+
+      .status-badge[data-state="ready"] .status-dot {
+        background: var(--brand);
+        box-shadow: 0 0 0 4px rgba(14, 124, 102, 0.16);
+      }
+
+      .status-badge[data-state="running"] .status-dot {
+        background: #d59600;
+        box-shadow: 0 0 0 4px rgba(213, 150, 0, 0.14);
+      }
+
+      .status-badge[data-state="error"] .status-dot {
+        background: #d94a4a;
+        box-shadow: 0 0 0 4px rgba(217, 74, 74, 0.14);
+      }
+
+      .toolbox {
+        display: grid;
+        gap: 14px;
+      }
+
+      .controls {
+        display: grid;
+        gap: 10px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button,
+      input {
+        font: 500 0.95rem/1.2 ui-sans-serif, system-ui, sans-serif;
+      }
+
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 16px;
+        cursor: pointer;
+        color: #fffdf7;
+        background: linear-gradient(135deg, var(--brand), var(--brand-strong));
+        box-shadow: 0 14px 30px rgba(14, 124, 102, 0.18);
+        transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+      }
+
+      button.secondary {
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.56);
+        border: 1px solid var(--line);
+        box-shadow: none;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+        transform: none;
+      }
+
+      input {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.64);
+      }
+
+      .field-label {
+        display: block;
+        margin-bottom: 8px;
+        font: 700 0.74rem/1.2 ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .panel-note {
+        font: 500 0.82rem/1.3 ui-sans-serif, system-ui, sans-serif;
+        color: var(--muted);
+      }
+
+      .uri-chip {
+        display: block;
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.45);
+        font: 500 0.82rem/1.45 "SFMono-Regular", "Menlo", "Consolas", monospace;
+        color: var(--ink);
+        word-break: break-word;
+      }
+
+      .json-frame {
+        min-height: 240px;
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent),
+          rgba(12, 16, 18, 0.04);
+        overflow: auto;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 500 0.85rem/1.55 "SFMono-Regular", "Menlo", "Consolas", monospace;
+        color: var(--ink);
+      }
+
+      .empty {
+        min-height: 120px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .event-log {
+        display: grid;
+        gap: 10px;
+      }
+
+      .event-chip {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.42);
+        font: 500 0.82rem/1.45 ui-sans-serif, system-ui, sans-serif;
+        color: var(--muted);
+      }
+
+      .event-chip strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ink);
+      }
+
+      .footer {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 10px;
+        font: 500 0.8rem/1.4 ui-sans-serif, system-ui, sans-serif;
+        color: var(--muted);
+      }
+
+      @media (max-width: 900px) {
+        main {
+          width: min(100vw - 18px, 100%);
+          margin: 10px auto;
+          padding: 14px;
+          border-radius: 22px;
+        }
+
+        .hero,
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body data-theme="light" data-display-mode="inline">
+    <main>
+      <section class="hero">
+        <article class="card hero-copy">
+          <div class="headline">
+            <span class="eyebrow">MCP Apps Runtime</span>
+          </div>
+          <h1>yacli dashboard for host-aware workflows.</h1>
+          <p>
+            This view speaks the MCP Apps postMessage lifecycle directly. It
+            initializes against the host, reacts to tool input and tool result
+            notifications, and can invoke yacli tools from inside the app.
+          </p>
+          <div class="hero-grid">
+            <div class="metric">
+              <strong>Session</strong>
+              <span id="session-state">Booting host handshake</span>
+            </div>
+            <div class="metric">
+              <strong>Display mode</strong>
+              <span id="display-mode">inline</span>
+            </div>
+            <div class="metric">
+              <strong>Theme</strong>
+              <span id="theme-value">light</span>
+            </div>
+            <div class="metric">
+              <strong>Last tool</strong>
+              <span id="last-tool">waiting for host</span>
+            </div>
+          </div>
+        </article>
+
+        <aside class="card status-panel">
+          <div class="status-badge" id="status-badge" data-state="booting">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="status-text">Connecting to host</span>
+          </div>
+          <div>
+            <h2>Host context</h2>
+            <p>
+              The dashboard keeps host capabilities, sizing, and live tool
+              activity visible so the MCP Apps surface is inspectable.
+            </p>
+          </div>
+          <div class="json-frame">
+            <pre id="host-context-json">Awaiting ui/initialize result...</pre>
+          </div>
+        </aside>
+      </section>
+
+      <section class="stack">
+        <section class="workspace">
+          <article class="card toolbox" id="panel-tools">
+            <div class="panel-header">
+              <div>
+                <h2>Run yacli tools</h2>
+                <p class="panel-note">
+                  These calls go through the host via MCP Apps transport.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div>
+                <label class="field-label" for="account-input">Account alias</label>
+                <input id="account-input" name="account" placeholder="personal" autocomplete="off">
+              </div>
+              <div class="actions">
+                <button id="action-app-snapshot" data-tool="yacli.app.snapshot">Refresh snapshot</button>
+                <button id="action-account-list" data-tool="yacli.account.list">List accounts</button>
+                <button id="action-account-current" class="secondary" data-tool="yacli.account.current">Current account</button>
+                <button id="action-auth-status" class="secondary" data-tool="yacli.auth.status">Auth status</button>
+                <button id="action-update-check" class="secondary" data-tool="yacli.update.check">Check updates</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card toolbox" id="panel-host-actions">
+            <div class="panel-header">
+              <div>
+                <h2>Host actions</h2>
+                <p class="panel-note">
+                  These requests go to the host bridge, not directly to the server.
+                </p>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="action-toggle-display" class="secondary">Toggle fullscreen</button>
+              <button id="action-share-snapshot" class="secondary">Share snapshot</button>
+              <button id="action-share-view" class="secondary">Share current view</button>
+              <button id="action-open-docs" class="secondary">Open MCP Apps docs</button>
+            </div>
+            <div id="current-view-uri" class="uri-chip">ui://yacli/dashboard</div>
+          </article>
+
+          <article class="card" id="panel-events">
+            <div class="panel-header">
+              <div>
+                <h2>Event stream</h2>
+                <p class="panel-note">
+                  Lifecycle checkpoints from the embedded app runtime.
+                </p>
+              </div>
+            </div>
+            <div id="event-log" class="event-log">
+              <div class="event-chip">
+                <strong>boot</strong>
+                dashboard HTML loaded
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="workspace">
+          <article class="card" id="panel-tool-input">
+            <div class="panel-header">
+              <div>
+                <h2>Tool input</h2>
+                <p class="panel-note">
+                  Last payload observed through the host bridge.
+                </p>
+              </div>
+            </div>
+            <div class="json-frame">
+              <pre id="tool-input-json">No tool input yet.</pre>
+            </div>
+          </article>
+
+          <article class="card" id="panel-tool-result">
+            <div class="panel-header">
+              <div>
+                <h2>Tool result</h2>
+                <p class="panel-note">
+                  Structured content and host-returned result snapshot.
+                </p>
+              </div>
+            </div>
+            <div class="json-frame">
+              <pre id="tool-result-json">No tool result yet.</pre>
+            </div>
+          </article>
+        </section>
+
+        <section class="workspace">
+          <article class="card" id="panel-resources">
+            <div class="panel-header">
+              <div>
+                <h2>Resource inspector</h2>
+                <p class="panel-note">
+                  Reads templated yacli resources through the host MCP bridge.
+                </p>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="action-read-account-resource" class="secondary">Read account resource</button>
+              <button id="action-read-auth-resource" class="secondary">Read auth resource</button>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="resource-templates-json">No resource templates fetched yet.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="resource-json">No resource read yet.</pre>
+            </div>
+          </article>
+
+          <article class="card" id="panel-auth">
+            <div class="panel-header">
+              <div>
+                <h2>Auth escalation</h2>
+                <p class="panel-note">
+                  Surfaces MCP auth discovery and protected-tool recovery paths.
+                </p>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="action-open-auth-server" class="secondary">Open auth issuer</button>
+              <button id="action-open-resource-metadata" class="secondary">Open resource metadata</button>
+              <button id="action-share-auth-context" class="secondary">Share auth context</button>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="auth-json">No auth challenge yet.</pre>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <div class="footer">
+        <span id="transport-hint">Transport: waiting for postMessage bridge</span>
+        <span id="current-view-summary">View: ui://yacli/dashboard</span>
+        <span>Lifecycle: ui/initialize -> ui/notifications/initialized -> tools/call</span>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        const APP_RESOURCE_URI = "ui://yacli/dashboard";
+        const APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+        const APP_PROTOCOL_VERSION = "2025-11-25";
+        const APP_INFO = { name: "yacli-dashboard", version: "__YACLI_VERSION__" };
+        const APP_BOOTSTRAP = __YACLI_BOOTSTRAP__;
+        const APP_VIEW_STATE_STORAGE_KEY = "yacli.mcp.dashboard.view-state.v1";
+        const APP_RUNTIME_STATE_STORAGE_KEY = "yacli.mcp.dashboard.runtime-state.v1";
+
+        function sanitizeBootstrapState(value) {
+          const source = value && typeof value === "object" ? value : {};
+          return {
+            defaultAccount:
+              typeof source.defaultAccount === "string" && source.defaultAccount.length > 0
+                ? source.defaultAccount
+                : "",
+            preferredSection:
+              typeof source.preferredSection === "string" && source.preferredSection.length > 0
+                ? source.preferredSection
+                : "",
+            preferredResource:
+              typeof source.preferredResource === "string" && source.preferredResource.length > 0
+                ? source.preferredResource
+                : "",
+            preferredTool:
+              typeof source.preferredTool === "string" && source.preferredTool.length > 0
+                ? source.preferredTool
+                : "",
+            resourceUri:
+              typeof source.resourceUri === "string" && source.resourceUri.length > 0
+                ? source.resourceUri
+                : APP_RESOURCE_URI,
+          };
+        }
+
+        function loadPersistedViewState() {
+          try {
+            const raw = window.localStorage.getItem(APP_VIEW_STATE_STORAGE_KEY);
+            if (!raw) {
+              return sanitizeBootstrapState({});
+            }
+            return sanitizeBootstrapState(JSON.parse(raw));
+          } catch (_error) {
+            return sanitizeBootstrapState({});
+          }
+        }
+
+        function mergeBootstrapState(bootstrap, persisted) {
+          const explicit = sanitizeBootstrapState(bootstrap);
+          const stored = sanitizeBootstrapState(persisted);
+          return {
+            defaultAccount: explicit.defaultAccount || stored.defaultAccount,
+            preferredSection: explicit.preferredSection || stored.preferredSection,
+            preferredResource: explicit.preferredResource || stored.preferredResource,
+            preferredTool: explicit.preferredTool || stored.preferredTool,
+            resourceUri: explicit.resourceUri || stored.resourceUri || APP_RESOURCE_URI,
+          };
+        }
+
+        function sanitizeRuntimeState(value) {
+          const source = value && typeof value === "object" ? value : {};
+          return {
+            authChallenge:
+              source.authChallenge != null && typeof source.authChallenge === "object"
+                ? source.authChallenge
+                : null,
+            currentResourceUri:
+              typeof source.currentResourceUri === "string" && source.currentResourceUri.length > 0
+                ? source.currentResourceUri
+                : null,
+            dashboardSnapshot:
+              source.dashboardSnapshot != null && typeof source.dashboardSnapshot === "object"
+                ? source.dashboardSnapshot
+                : null,
+            lastToolInput: source.lastToolInput != null ? source.lastToolInput : null,
+            lastToolName:
+              typeof source.lastToolName === "string" && source.lastToolName.length > 0
+                ? source.lastToolName
+                : null,
+            lastToolResult: source.lastToolResult != null ? source.lastToolResult : null,
+            resourcePayload: source.resourcePayload != null ? source.resourcePayload : null,
+            resourceTemplatesPayload:
+              source.resourceTemplatesPayload != null ? source.resourceTemplatesPayload : null,
+          };
+        }
+
+        function loadPersistedRuntimeState() {
+          try {
+            const raw = window.localStorage.getItem(APP_RUNTIME_STATE_STORAGE_KEY);
+            if (!raw) {
+              return sanitizeRuntimeState({});
+            }
+            return sanitizeRuntimeState(JSON.parse(raw));
+          } catch (_error) {
+            return sanitizeRuntimeState({});
+          }
+        }
+
+        const state = {
+          authChallenge: null,
+          bootstrap: mergeBootstrapState(APP_BOOTSTRAP, loadPersistedViewState()),
+          currentResourceUri: null,
+          displayMode: "inline",
+          hostCapabilities: null,
+          theme: "light",
+          hostContext: null,
+          hostInit: null,
+          dashboardSnapshot: null,
+          lastToolName: null,
+          lastToolInput: null,
+          lastToolResult: null,
+          lastSize: null,
+          resourcePayload: null,
+          resourceTemplatesPayload: null,
+        };
+
+        const SECTION_TO_PANEL_ID = {
+          tools: "panel-tools",
+          resources: "panel-resources",
+          auth: "panel-auth",
+        };
+
+        const pending = new Map();
+        let nextRequestId = 1;
+        let disposed = false;
+
+        const elements = {
+          accountInput: document.getElementById("account-input"),
+          actionOpenAuthServer: document.getElementById("action-open-auth-server"),
+          actionOpenDocs: document.getElementById("action-open-docs"),
+          actionOpenResourceMetadata: document.getElementById("action-open-resource-metadata"),
+          actionReadAccountResource: document.getElementById("action-read-account-resource"),
+          actionReadAuthResource: document.getElementById("action-read-auth-resource"),
+          actionShareAuthContext: document.getElementById("action-share-auth-context"),
+          actionShareSnapshot: document.getElementById("action-share-snapshot"),
+          actionToggleDisplay: document.getElementById("action-toggle-display"),
+          authJson: document.getElementById("auth-json"),
+          displayMode: document.getElementById("display-mode"),
+          eventLog: document.getElementById("event-log"),
+          hostContextJson: document.getElementById("host-context-json"),
+          lastTool: document.getElementById("last-tool"),
+          currentViewSummary: document.getElementById("current-view-summary"),
+          currentViewUri: document.getElementById("current-view-uri"),
+          resourceJson: document.getElementById("resource-json"),
+          resourceTemplatesJson: document.getElementById("resource-templates-json"),
+          sessionState: document.getElementById("session-state"),
+          statusBadge: document.getElementById("status-badge"),
+          statusText: document.getElementById("status-text"),
+          actionShareView: document.getElementById("action-share-view"),
+          themeValue: document.getElementById("theme-value"),
+          toolInputJson: document.getElementById("tool-input-json"),
+          toolResultJson: document.getElementById("tool-result-json"),
+          transportHint: document.getElementById("transport-hint"),
+        };
+
+        const toolButtons = Array.from(document.querySelectorAll("[data-tool]"));
+        const focusablePanels = Array.from(document.querySelectorAll(".card[id^='panel-']"));
+        const transportTarget =
+          window.parent && window.parent !== window
+            ? window.parent
+            : window.opener || window;
+
+        function safeStringify(value) {
+          return JSON.stringify(value, null, 2);
+        }
+
+        function logEvent(title, detail) {
+          const item = document.createElement("div");
+          item.className = "event-chip";
+          item.innerHTML =
+            "<strong>" +
+            escapeHtml(title) +
+            "</strong>" +
+            escapeHtml(detail);
+          elements.eventLog.prepend(item);
+          while (elements.eventLog.children.length > 6) {
+            elements.eventLog.removeChild(elements.eventLog.lastChild);
+          }
+        }
+
+        function escapeHtml(value) {
+          return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;");
+        }
+
+        function setStatus(stateName, text) {
+          elements.statusBadge.dataset.state = stateName;
+          elements.statusText.textContent = text;
+          elements.sessionState.textContent = text;
+        }
+
+        function focusPanel(panelId) {
+          focusablePanels.forEach(function (panel) {
+            panel.dataset.focused = panel.id === panelId ? "true" : "false";
+          });
+
+          const section = Object.entries(SECTION_TO_PANEL_ID).find(function (entry) {
+            return entry[1] === panelId;
+          });
+          if (section) {
+            state.bootstrap.preferredSection = section[0];
+            renderCurrentViewUri();
+          }
+
+          const element = panelId ? document.getElementById(panelId) : null;
+          if (element) {
+            element.scrollIntoView({ block: "start", behavior: "smooth" });
+          }
+        }
+
+        function buildCurrentViewUri() {
+          const account = elements.accountInput.value.trim();
+          const params = new URLSearchParams();
+          if (account) {
+            params.set("account", account);
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredSection === "string" &&
+            state.bootstrap.preferredSection.length > 0
+          ) {
+            params.set("section", state.bootstrap.preferredSection);
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredResource === "string" &&
+            state.bootstrap.preferredResource.length > 0
+          ) {
+            params.set("resource", state.bootstrap.preferredResource);
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredTool === "string" &&
+            state.bootstrap.preferredTool.length > 0
+          ) {
+            params.set("tool", state.bootstrap.preferredTool);
+          }
+          const query = params.toString();
+          return query ? APP_RESOURCE_URI + "?" + query : APP_RESOURCE_URI;
+        }
+
+        function renderCurrentViewUri() {
+          const uri = buildCurrentViewUri();
+          state.bootstrap.resourceUri = uri;
+          elements.currentViewUri.textContent = uri;
+          elements.currentViewSummary.textContent = "View: " + uri;
+          savePersistedViewState();
+        }
+
+        function savePersistedViewState() {
+          try {
+            window.localStorage.setItem(
+              APP_VIEW_STATE_STORAGE_KEY,
+              JSON.stringify({
+                defaultAccount: elements.accountInput.value.trim(),
+                preferredSection: state.bootstrap.preferredSection || "",
+                preferredResource: state.bootstrap.preferredResource || "",
+                preferredTool: state.bootstrap.preferredTool || "",
+                resourceUri: state.bootstrap.resourceUri || APP_RESOURCE_URI,
+              }),
+            );
+          } catch (_error) {
+            // Persisted view state is best-effort only.
+          }
+        }
+
+        function savePersistedRuntimeState() {
+          try {
+            window.localStorage.setItem(
+              APP_RUNTIME_STATE_STORAGE_KEY,
+              JSON.stringify({
+                authChallenge: state.authChallenge,
+                currentResourceUri: state.currentResourceUri,
+                dashboardSnapshot: state.dashboardSnapshot,
+                lastToolInput: state.lastToolInput,
+                lastToolName: state.lastToolName,
+                lastToolResult: state.lastToolResult,
+                resourcePayload: state.resourcePayload,
+                resourceTemplatesPayload: state.resourceTemplatesPayload,
+              }),
+            );
+          } catch (_error) {
+            // Persisted runtime state is best-effort only.
+          }
+        }
+
+        function restorePersistedRuntimeState() {
+          const persisted = loadPersistedRuntimeState();
+          state.authChallenge = persisted.authChallenge;
+          state.currentResourceUri = persisted.currentResourceUri;
+          state.dashboardSnapshot = persisted.dashboardSnapshot;
+          state.lastToolInput = persisted.lastToolInput;
+          state.lastToolName = persisted.lastToolName;
+          state.lastToolResult = persisted.lastToolResult;
+          state.resourcePayload = persisted.resourcePayload;
+          state.resourceTemplatesPayload = persisted.resourceTemplatesPayload;
+
+          if (
+            state.dashboardSnapshot ||
+            state.lastToolResult ||
+            state.resourcePayload ||
+            state.authChallenge
+          ) {
+            logEvent("runtime restored", "dashboard restored cached runtime state");
+          }
+        }
+
+        function updateMetrics() {
+          elements.displayMode.textContent = state.displayMode || "inline";
+          elements.themeValue.textContent = state.theme || "light";
+          elements.lastTool.textContent = state.lastToolName || "waiting for host";
+          document.body.dataset.displayMode = state.displayMode || "inline";
+          document.body.dataset.theme = state.theme || "light";
+          renderCurrentViewUri();
+          syncHostActionAvailability();
+        }
+
+        function renderHostContext() {
+          const payload = state.hostInit || { status: "awaiting initialize result" };
+          elements.hostContextJson.textContent = safeStringify(payload);
+        }
+
+        function renderToolInput(payload) {
+          if (arguments.length > 0) {
+            state.lastToolInput = payload;
+          }
+          const value = state.lastToolInput || "No tool input yet.";
+          elements.toolInputJson.textContent =
+            typeof value === "string" ? value : safeStringify(value);
+          savePersistedRuntimeState();
+        }
+
+        function renderToolResult(payload) {
+          if (arguments.length > 0) {
+            state.lastToolResult = payload;
+          }
+          const value = state.lastToolResult || "No tool result yet.";
+          elements.toolResultJson.textContent =
+            typeof value === "string" ? value : safeStringify(value);
+          savePersistedRuntimeState();
+        }
+
+        function renderResourceTemplates(payload) {
+          if (arguments.length > 0) {
+            state.resourceTemplatesPayload = payload;
+          }
+          elements.resourceTemplatesJson.textContent =
+            state.resourceTemplatesPayload == null
+              ? "No resource templates fetched yet."
+              : typeof state.resourceTemplatesPayload === "string"
+                ? state.resourceTemplatesPayload
+                : safeStringify(state.resourceTemplatesPayload);
+          savePersistedRuntimeState();
+        }
+
+        function renderResource(payload) {
+          if (arguments.length > 0) {
+            state.resourcePayload = payload;
+          }
+          elements.resourceJson.textContent =
+            state.resourcePayload == null
+              ? "No resource read yet."
+              : typeof state.resourcePayload === "string"
+                ? state.resourcePayload
+                : safeStringify(state.resourcePayload);
+          savePersistedRuntimeState();
+        }
+
+        function renderAuth(payload) {
+          if (arguments.length > 0) {
+            state.authChallenge = payload;
+          }
+          elements.authJson.textContent =
+            state.authChallenge == null
+              ? "No auth challenge yet."
+              : typeof state.authChallenge === "string"
+                ? state.authChallenge
+                : safeStringify(state.authChallenge);
+          savePersistedRuntimeState();
+        }
+
+        function applyHostContext(hostContext) {
+          if (!hostContext || typeof hostContext !== "object") {
+            return;
+          }
+
+          state.hostContext = hostContext;
+          state.displayMode =
+            hostContext.displayMode ||
+            hostContext.display_mode ||
+            state.displayMode ||
+            "inline";
+          state.theme =
+            hostContext.theme ||
+            hostContext.colorScheme ||
+            hostContext.color_scheme ||
+            state.theme ||
+            "light";
+
+          const styleVariables =
+            hostContext.styles &&
+            hostContext.styles.variables &&
+            typeof hostContext.styles.variables === "object"
+              ? hostContext.styles.variables
+              : null;
+          if (styleVariables) {
+            Object.entries(styleVariables).forEach(function (entry) {
+              document.documentElement.style.setProperty(entry[0], String(entry[1]));
+            });
+          }
+
+          updateMetrics();
+        }
+
+        function applyHostCapabilities(payload) {
+          if (!payload || typeof payload !== "object") {
+            return;
+          }
+          state.hostCapabilities =
+            payload.hostCapabilities || payload.capabilities || state.hostCapabilities;
+          syncHostActionAvailability();
+        }
+
+        function hostSupportsOpenLinks() {
+          return Boolean(
+            state.hostCapabilities &&
+              typeof state.hostCapabilities === "object" &&
+              state.hostCapabilities.openLinks,
+          );
+        }
+
+        function hostSupportsMessages() {
+          const message = state.hostCapabilities && state.hostCapabilities.message;
+          return Boolean(message && typeof message === "object" && message.text);
+        }
+
+        function hostSupportsModelContext() {
+          return Boolean(
+            state.hostCapabilities &&
+              typeof state.hostCapabilities === "object" &&
+              state.hostCapabilities.updateModelContext,
+          );
+        }
+
+        function hostSupportsServerResources() {
+          const value =
+            state.hostCapabilities &&
+            typeof state.hostCapabilities === "object" &&
+            state.hostCapabilities.serverResources;
+          return Boolean(value);
+        }
+
+        function hostSupportsResourceSubscriptions() {
+          if (!hostSupportsServerResources()) {
+            return false;
+          }
+
+          const value = state.hostCapabilities.serverResources;
+          if (typeof value === "boolean") {
+            return value;
+          }
+          return Boolean(value && typeof value === "object" && value.subscribe !== false);
+        }
+
+        function authDiscoveryFromSnapshot() {
+          return (
+            state.dashboardSnapshot &&
+            typeof state.dashboardSnapshot === "object" &&
+            state.dashboardSnapshot.authDiscovery &&
+            typeof state.dashboardSnapshot.authDiscovery === "object"
+          )
+            ? state.dashboardSnapshot.authDiscovery
+            : null;
+        }
+
+        function effectiveAuthChallenge() {
+          return state.authChallenge || authDiscoveryFromSnapshot();
+        }
+
+        function getAlternateDisplayMode() {
+          const available =
+            (state.hostContext && state.hostContext.availableDisplayModes) || [];
+          if (!Array.isArray(available)) {
+            return null;
+          }
+          if (
+            state.displayMode !== "fullscreen" &&
+            available.includes("fullscreen")
+          ) {
+            return "fullscreen";
+          }
+          if (available.includes("inline")) {
+            return "inline";
+          }
+          if (state.displayMode !== "pip" && available.includes("pip")) {
+            return "pip";
+          }
+          return null;
+        }
+
+        function syncHostActionAvailability() {
+          if (!elements.actionOpenDocs) {
+            return;
+          }
+
+          const alternateMode = getAlternateDisplayMode();
+          elements.actionOpenDocs.disabled = !hostSupportsOpenLinks() || disposed;
+          elements.actionShareSnapshot.disabled =
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !state.dashboardSnapshot ||
+            disposed;
+          elements.actionShareView.disabled =
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            disposed;
+          elements.actionReadAccountResource.disabled =
+            !hostSupportsServerResources() || disposed;
+          elements.actionReadAuthResource.disabled =
+            !hostSupportsServerResources() || disposed;
+          const authChallenge = effectiveAuthChallenge();
+          const hasAuthIssuer =
+            authChallenge &&
+            Array.isArray(authChallenge.authorizationServers) &&
+            authChallenge.authorizationServers.length > 0;
+          const hasResourceMetadata =
+            authChallenge &&
+            typeof authChallenge.resourceMetadataUrl === "string" &&
+            authChallenge.resourceMetadataUrl.length > 0;
+          elements.actionOpenAuthServer.disabled =
+            !hostSupportsOpenLinks() || !hasAuthIssuer || disposed;
+          elements.actionOpenResourceMetadata.disabled =
+            !hostSupportsOpenLinks() || !hasResourceMetadata || disposed;
+          elements.actionShareAuthContext.disabled =
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !authChallenge ||
+            disposed;
+          elements.actionToggleDisplay.disabled = !alternateMode || disposed;
+          elements.actionToggleDisplay.textContent =
+            state.displayMode === "fullscreen"
+              ? "Return inline"
+              : alternateMode === "fullscreen"
+                ? "Toggle fullscreen"
+                : alternateMode === "pip"
+                  ? "Enter picture-in-picture"
+                  : "Display mode unavailable";
+        }
+
+        function postMessage(message) {
+          transportTarget.postMessage(message, "*");
+        }
+
+        function sendResponse(id, result) {
+          postMessage({
+            jsonrpc: "2.0",
+            id: id,
+            result: result,
+          });
+        }
+
+        function sendNotification(method, params) {
+          postMessage({
+            jsonrpc: "2.0",
+            method: method,
+            params: params || {},
+          });
+        }
+
+        function sendRequest(method, params) {
+          return new Promise(function (resolve, reject) {
+            const id = nextRequestId++;
+            pending.set(id, { resolve: resolve, reject: reject, method: method });
+            postMessage({
+              jsonrpc: "2.0",
+              id: id,
+              method: method,
+              params: params || {},
+            });
+          });
+        }
+
+        function normalizeToolPayload(params) {
+          if (!params || typeof params !== "object") {
+            return params;
+          }
+          return params.toolResult || params.toolInput || params.result || params.input || params;
+        }
+
+        function authChallengeFromError(error) {
+          if (!error || typeof error !== "object") {
+            return null;
+          }
+
+          const data = error.data && typeof error.data === "object" ? error.data : null;
+          const resourceMetadataUrl =
+            (data && data.resource_metadata) ||
+            (data && data.resourceMetadataUrl) ||
+            null;
+          const scope =
+            (data && data.scope) ||
+            null;
+          const authorizationServers =
+            data &&
+            Array.isArray(data.authorization_servers) &&
+            data.authorization_servers.length > 0
+              ? data.authorization_servers
+              : null;
+
+          if (!resourceMetadataUrl && !scope && !authorizationServers) {
+            return null;
+          }
+
+          return {
+            enabled: true,
+            authorizationServers:
+              authorizationServers ||
+              (authDiscoveryFromSnapshot() &&
+              Array.isArray(authDiscoveryFromSnapshot().authorizationServers)
+                ? authDiscoveryFromSnapshot().authorizationServers
+                : []),
+            resourceMetadataUrl: resourceMetadataUrl,
+            scope: scope,
+            detail:
+              error.message ||
+              (data && data.message) ||
+              "Protected MCP tool requires authorization.",
+          };
+        }
+
+        async function runTool(toolName) {
+          if (disposed) {
+            return;
+          }
+
+          const account = elements.accountInput.value.trim();
+          const args = {};
+          if (toolName === "yacli.auth.status" && account) {
+            args.account = account;
+          }
+
+          state.lastToolName = toolName;
+          state.bootstrap.preferredSection = "tools";
+          state.bootstrap.preferredTool = toolName;
+          state.lastToolInput = { name: toolName, arguments: args };
+          renderToolInput();
+          updateMetrics();
+          setStatus("running", "Running " + toolName);
+          setButtonsDisabled(true);
+          logEvent("tools/call", toolName);
+
+          try {
+            const result = await sendRequest("tools/call", {
+              name: toolName,
+              arguments: args,
+            });
+            if (
+              toolName === "yacli.app.snapshot" &&
+              result &&
+              typeof result === "object" &&
+              result.structuredContent
+            ) {
+              state.dashboardSnapshot = result.structuredContent;
+              applySnapshotDefaults();
+              state.authChallenge = authDiscoveryFromSnapshot();
+              renderAuth(state.authChallenge);
+            }
+            state.lastToolResult = result;
+            renderToolResult();
+            setStatus("ready", toolName === "yacli.app.snapshot" ? "Dashboard snapshot refreshed" : "Host connected and app initialized");
+            logEvent("tool result", toolName + " completed");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            state.lastToolResult = error || { error: detail };
+            state.authChallenge = authChallengeFromError(error) || state.authChallenge;
+            renderToolResult();
+            renderAuth(state.authChallenge);
+            setStatus("error", "Tool call failed");
+            logEvent("tool error", detail);
+          } finally {
+            setButtonsDisabled(false);
+            syncHostActionAvailability();
+          }
+        }
+
+        function setButtonsDisabled(disabled) {
+          toolButtons.forEach(function (button) {
+            button.disabled = disabled;
+          });
+          syncHostActionAvailability();
+        }
+
+        function snapshotMarkdown(snapshot) {
+          const accountLines = Array.isArray(snapshot.accounts)
+            ? snapshot.accounts.map(function (account) {
+                return "- " + account.name + " <" + account.email + ">";
+              })
+            : [];
+          return (
+            "---\n" +
+            "generated-at: " +
+            String(snapshot.generatedAt || "unknown") +
+            "\n" +
+            "account-count: " +
+            String(snapshot.accountCount || 0) +
+            "\n" +
+            "current-account: " +
+            String(snapshot.currentAccount || "none") +
+            "\n" +
+            "---\n" +
+            "yacli dashboard snapshot:\n" +
+            (accountLines.length ? accountLines.join("\n") : "- no configured accounts")
+          );
+        }
+
+        async function shareSnapshot() {
+          if (!state.dashboardSnapshot) {
+            logEvent("share blocked", "dashboard snapshot is not ready yet");
+            return;
+          }
+          if (!hostSupportsModelContext() || !hostSupportsMessages()) {
+            logEvent("share blocked", "host does not support message + model context");
+            return;
+          }
+
+          setStatus("running", "Sending snapshot to host");
+          try {
+            await sendRequest("ui/update-model-context", {
+              content: [
+                {
+                  type: "text",
+                  text: snapshotMarkdown(state.dashboardSnapshot),
+                },
+              ],
+              structuredContent: state.dashboardSnapshot,
+            });
+            await sendRequest("ui/message", {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Summarize my current yacli account posture and call out missing auth.",
+                },
+              ],
+            });
+            setStatus("ready", "Snapshot shared with host");
+            logEvent("ui/message", "shared snapshot context with the host");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Host message failed");
+            logEvent("ui/message error", detail);
+          } finally {
+            syncHostActionAvailability();
+          }
+        }
+
+        async function shareCurrentView() {
+          if (!hostSupportsModelContext() || !hostSupportsMessages()) {
+            logEvent("share view blocked", "host does not support message + model context");
+            return;
+          }
+
+          const uri = buildCurrentViewUri();
+          setStatus("running", "Sharing current view");
+          try {
+            await sendRequest("ui/update-model-context", {
+              content: [
+                {
+                  type: "text",
+                  text: "Current yacli dashboard view:\n" + uri,
+                },
+              ],
+              structuredContent: {
+                resourceUri: uri,
+              },
+            });
+            await sendRequest("ui/message", {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Open or reason about this yacli MCP Apps view: " + uri,
+                },
+              ],
+            });
+            setStatus("ready", "Current view shared with host");
+            logEvent("ui/message", "shared current view URI with the host");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Current view share failed");
+            logEvent("share view error", detail);
+          } finally {
+            syncHostActionAvailability();
+          }
+        }
+
+        async function requestAlternateDisplayMode() {
+          const mode = getAlternateDisplayMode();
+          if (!mode) {
+            logEvent("display blocked", "host does not offer an alternate display mode");
+            return;
+          }
+
+          setStatus("running", "Requesting " + mode + " mode");
+          try {
+            const result = await sendRequest("ui/request-display-mode", { mode: mode });
+            state.displayMode =
+              (result && typeof result === "object" && result.mode) || mode;
+            updateMetrics();
+            setStatus("ready", "Display mode updated");
+            logEvent("ui/request-display-mode", "host switched to " + state.displayMode);
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Display mode request failed");
+            logEvent("display error", detail);
+          }
+        }
+
+        async function openDocs() {
+          if (!hostSupportsOpenLinks()) {
+            logEvent("open blocked", "host does not support ui/open-link");
+            return;
+          }
+
+          try {
+            await sendRequest("ui/open-link", {
+              url: "https://apps.extensions.modelcontextprotocol.io/api/documents/Overview.html",
+            });
+            logEvent("ui/open-link", "opened MCP Apps documentation");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Open link failed");
+            logEvent("open error", detail);
+          }
+        }
+
+        async function openAuthIssuer() {
+          const challenge = effectiveAuthChallenge();
+          if (
+            !challenge ||
+            !Array.isArray(challenge.authorizationServers) ||
+            challenge.authorizationServers.length === 0
+          ) {
+            logEvent("auth open blocked", "no authorization server available");
+            return;
+          }
+
+          try {
+            await sendRequest("ui/open-link", {
+              url: challenge.authorizationServers[0],
+            });
+            logEvent("ui/open-link", "opened auth issuer");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Open auth issuer failed");
+            logEvent("auth issuer error", detail);
+          }
+        }
+
+        async function openResourceMetadata() {
+          const challenge = effectiveAuthChallenge();
+          if (!challenge || !challenge.resourceMetadataUrl) {
+            logEvent("metadata open blocked", "no resource metadata URL available");
+            return;
+          }
+
+          try {
+            await sendRequest("ui/open-link", {
+              url: challenge.resourceMetadataUrl,
+            });
+            logEvent("ui/open-link", "opened resource metadata");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Open resource metadata failed");
+            logEvent("resource metadata error", detail);
+          }
+        }
+
+        async function shareAuthContext() {
+          const challenge = effectiveAuthChallenge();
+          if (!challenge) {
+            logEvent("share auth blocked", "no auth challenge available");
+            return;
+          }
+          if (!hostSupportsModelContext() || !hostSupportsMessages()) {
+            logEvent("share auth blocked", "host does not support message + model context");
+            return;
+          }
+
+          setStatus("running", "Sharing auth context");
+          try {
+            await sendRequest("ui/update-model-context", {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "Protected yacli tool requires authorization.\n" +
+                    "scope: " + String(challenge.scope || "unknown") + "\n" +
+                    "resource_metadata: " + String(challenge.resourceMetadataUrl || "unavailable") + "\n" +
+                    "authorization_server: " + String(
+                      Array.isArray(challenge.authorizationServers) &&
+                      challenge.authorizationServers.length > 0
+                        ? challenge.authorizationServers[0]
+                        : "unavailable",
+                    ),
+                },
+              ],
+              structuredContent: challenge,
+            });
+            await sendRequest("ui/message", {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Explain how to complete authorization for this yacli MCP session.",
+                },
+              ],
+            });
+            setStatus("ready", "Auth context shared with host");
+            logEvent("ui/message", "shared auth challenge with the host");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Auth message failed");
+            logEvent("auth message error", detail);
+          }
+        }
+
+        function accountAlias() {
+          const value = elements.accountInput.value.trim();
+          return value || "personal";
+        }
+
+        function applyBootstrapState() {
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.defaultAccount === "string" &&
+            state.bootstrap.defaultAccount.length > 0
+          ) {
+            elements.accountInput.value = state.bootstrap.defaultAccount;
+            logEvent(
+              "state restored",
+              "dashboard opened for account " + state.bootstrap.defaultAccount,
+            );
+          }
+
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredSection === "string" &&
+            state.bootstrap.preferredSection.length > 0
+          ) {
+            const panelId = SECTION_TO_PANEL_ID[state.bootstrap.preferredSection];
+            if (panelId) {
+              focusPanel(panelId);
+              logEvent(
+                "section restored",
+                "dashboard focused section " + state.bootstrap.preferredSection,
+              );
+            }
+          }
+          renderCurrentViewUri();
+        }
+
+        function applySnapshotDefaults() {
+          if (
+            !elements.accountInput.value.trim() &&
+            state.dashboardSnapshot &&
+            typeof state.dashboardSnapshot === "object" &&
+            typeof state.dashboardSnapshot.currentAccount === "string" &&
+            state.dashboardSnapshot.currentAccount.length > 0
+          ) {
+            elements.accountInput.value = state.dashboardSnapshot.currentAccount;
+            renderCurrentViewUri();
+            savePersistedRuntimeState();
+          }
+        }
+
+        async function refreshResourceTemplates() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderResourceTemplates("Host does not expose server resources.");
+            return;
+          }
+
+          try {
+            const result = await sendRequest("resources/templates/list", {});
+            renderResourceTemplates(result);
+            logEvent("resources/templates/list", "fetched resource templates");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderResourceTemplates({ error: detail });
+            logEvent("resource templates error", detail);
+          }
+        }
+
+        async function setCurrentResourceSubscription(nextUri) {
+          if (!hostSupportsResourceSubscriptions() || disposed) {
+            state.currentResourceUri = nextUri;
+            return;
+          }
+
+          const previousUri = state.currentResourceUri;
+          if (previousUri && previousUri !== nextUri) {
+            try {
+              await sendRequest("resources/unsubscribe", { uri: previousUri });
+              logEvent("resources/unsubscribe", previousUri);
+            } catch (error) {
+              logEvent(
+                "unsubscribe error",
+                error && error.message ? error.message : String(error),
+              );
+            }
+          }
+
+          state.currentResourceUri = nextUri;
+          if (!nextUri || previousUri === nextUri) {
+            return;
+          }
+
+          try {
+            await sendRequest("resources/subscribe", { uri: nextUri });
+            logEvent("resources/subscribe", nextUri);
+          } catch (error) {
+            logEvent(
+              "subscribe error",
+              error && error.message ? error.message : String(error),
+            );
+          }
+        }
+
+        async function readResource(uri) {
+          if (!hostSupportsServerResources()) {
+            logEvent("resource blocked", "host does not support server resources");
+            return;
+          }
+
+          setStatus("running", "Reading resource");
+          try {
+            const result = await sendRequest("resources/read", { uri: uri });
+            renderResource(result);
+            await setCurrentResourceSubscription(uri);
+            setStatus("ready", "Resource loaded");
+            logEvent("resources/read", uri);
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderResource({ error: detail, uri: uri });
+            setStatus("error", "Resource read failed");
+            logEvent("resource error", detail);
+          }
+        }
+
+        function readAccountResource() {
+          state.bootstrap.preferredResource = "account";
+          focusPanel("panel-resources");
+          readResource("resource://yacli/account/" + accountAlias());
+        }
+
+        function readAuthResource() {
+          state.bootstrap.preferredResource = "auth";
+          focusPanel("panel-auth");
+          readResource("resource://yacli/auth/" + accountAlias());
+        }
+
+        async function restoreBootstrapFocus() {
+          if (!state.bootstrap || typeof state.bootstrap !== "object") {
+            if (elements.accountInput.value.trim()) {
+              await readAccountResource();
+            }
+            return;
+          }
+
+          const preferredTool =
+            typeof state.bootstrap.preferredTool === "string"
+              ? state.bootstrap.preferredTool
+              : "";
+          const preferredResource =
+            typeof state.bootstrap.preferredResource === "string"
+              ? state.bootstrap.preferredResource
+              : "";
+
+          if (preferredResource === "account") {
+            await readAccountResource();
+          } else if (preferredResource === "auth") {
+            await readAuthResource();
+          } else if (elements.accountInput.value.trim()) {
+            await readAccountResource();
+          }
+
+          if (preferredTool && preferredTool !== "yacli.app.snapshot") {
+            focusPanel("panel-tools");
+            await runTool(preferredTool);
+          }
+        }
+
+        function handleHostNotification(message) {
+          const method = message.method;
+          const params = message.params || {};
+
+          if (method === "ui/notifications/tool-input") {
+            state.lastToolInput = normalizeToolPayload(params);
+            renderToolInput();
+            logEvent("tool input", "host pushed tool input");
+            return;
+          }
+
+          if (method === "ui/notifications/tool-input-partial") {
+            state.lastToolInput = normalizeToolPayload(params);
+            renderToolInput();
+            logEvent("tool input partial", "host pushed partial tool input");
+            return;
+          }
+
+          if (method === "ui/notifications/tool-result") {
+            state.lastToolResult = normalizeToolPayload(params);
+            renderToolResult();
+            logEvent("tool result", "host pushed tool result");
+            return;
+          }
+
+          if (method === "ui/notifications/host-context-changed") {
+            applyHostCapabilities(params);
+            applyHostContext(params.hostContext || params.context || params);
+            renderHostContext();
+            logEvent("host context", "host context changed");
+            return;
+          }
+
+          if (method === "ui/notifications/size-changed") {
+            state.lastSize = params;
+            logEvent("size changed", safeStringify(params));
+            return;
+          }
+
+          if (method === "notifications/resources/list_changed") {
+            logEvent("resources changed", "host reported resource template changes");
+            refreshResourceTemplates();
+            return;
+          }
+
+          if (method === "notifications/resources/updated") {
+            const uri = params && params.uri;
+            logEvent("resource updated", uri || "unknown resource");
+            if (uri && uri === state.currentResourceUri) {
+              readResource(uri);
+            }
+            return;
+          }
+
+          if (method === "notifications/initialized") {
+            logEvent("initialized", "host acknowledged initialization");
+            return;
+          }
+
+          if (method === "ui/resource-teardown") {
+            disposed = true;
+            savePersistedViewState();
+            savePersistedRuntimeState();
+            window.removeEventListener("message", onMessage);
+            setStatus("error", "Host requested teardown");
+            logEvent("teardown", "resource teardown requested by host");
+            if (Object.prototype.hasOwnProperty.call(message, "id")) {
+              sendResponse(message.id, {});
+            }
+          }
+        }
+
+        function onMessage(event) {
+          const message = event.data;
+          if (!message || message.jsonrpc !== "2.0") {
+            return;
+          }
+
+          if (Object.prototype.hasOwnProperty.call(message, "id") && pending.has(message.id)) {
+            const deferred = pending.get(message.id);
+            pending.delete(message.id);
+            if (message.error) {
+              deferred.reject(message.error);
+            } else {
+              deferred.resolve(message.result);
+            }
+            return;
+          }
+
+          if (message.method) {
+            handleHostNotification(message);
+          }
+        }
+
+        async function initializeApp() {
+          setStatus("running", "Negotiating host capabilities");
+          elements.transportHint.textContent = "Transport: window.postMessage bridge active";
+          restorePersistedRuntimeState();
+          updateMetrics();
+          renderHostContext();
+          renderToolInput(state.lastToolInput);
+          renderToolResult(state.lastToolResult);
+          renderAuth(state.authChallenge);
+          renderResourceTemplates(state.resourceTemplatesPayload);
+          renderResource(state.resourcePayload);
+          applyBootstrapState();
+          elements.accountInput.addEventListener("input", renderCurrentViewUri);
+          window.addEventListener("pagehide", savePersistedRuntimeState);
+          window.addEventListener("beforeunload", savePersistedRuntimeState);
+          window.addEventListener("message", onMessage);
+
+          toolButtons.forEach(function (button) {
+            button.addEventListener("click", function () {
+              runTool(button.dataset.tool);
+            });
+          });
+
+          try {
+            const result = await sendRequest("ui/initialize", {
+              protocolVersion: APP_PROTOCOL_VERSION,
+              appInfo: APP_INFO,
+              appCapabilities: {
+                availableDisplayModes: ["inline", "fullscreen"],
+              },
+            });
+            state.hostInit = result;
+            applyHostCapabilities(result);
+            applyHostContext(result.hostContext || result.context || result);
+            renderHostContext();
+            sendNotification("ui/notifications/initialized", {});
+            setStatus("ready", "Host connected and app initialized");
+            logEvent("ui/initialize", "host handshake completed");
+            elements.actionOpenAuthServer.addEventListener("click", openAuthIssuer);
+            elements.actionOpenDocs.addEventListener("click", openDocs);
+            elements.actionOpenResourceMetadata.addEventListener("click", openResourceMetadata);
+            elements.actionReadAccountResource.addEventListener("click", readAccountResource);
+            elements.actionReadAuthResource.addEventListener("click", readAuthResource);
+            elements.actionShareAuthContext.addEventListener("click", shareAuthContext);
+            elements.actionShareSnapshot.addEventListener("click", shareSnapshot);
+            elements.actionShareView.addEventListener("click", shareCurrentView);
+            elements.actionToggleDisplay.addEventListener("click", requestAlternateDisplayMode);
+            await refreshResourceTemplates();
+            await runTool("yacli.app.snapshot");
+            await restoreBootstrapFocus();
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            state.hostInit = { error: detail };
+            renderHostContext();
+            setStatus("error", "Host handshake failed");
+            logEvent("initialize error", detail);
+          }
+        }
+
+        initializeApp();
+      })();
+    </script>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 # yacli
 
-`yacli` — утилита командной строки для Яндекс Почты, Календаря и Диска.
+`yacli` — утилита командной строки для Яндекс Почты, Календаря и Диска, рассчитанная и на людей, и на AI-агентов.
 
 С ее помощью можно:
 
@@ -33,12 +33,34 @@ irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | 
 
 Готовые сборки лежат в [GitHub Releases](https://github.com/NextStat/yacli/releases).
 
+Публикуемые архивы:
+
+- macOS `x86_64` и `arm64`;
+- Linux `x86_64` и `arm64`;
+- Windows `x86_64`.
+
 ### Из исходников
 
 Этот вариант нужен только тем, кто хочет собирать `yacli` самостоятельно:
 
 ```bash
 cargo install --path .
+```
+
+### Обновление
+
+Если `yacli` уже установлен из release-бинарника или в доступный для записи bin-dir, обновить его можно прямо из CLI:
+
+```bash
+yacli update
+yacli update --check
+```
+
+Если нужен private release mirror или локальный test feed, можно переопределить base URL:
+
+```bash
+export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.2.0'
+yacli update --check
 ```
 
 ## Начало работы
@@ -225,6 +247,119 @@ yacli --format table mail list
 yacli guide
 yacli guide --topic mail
 ```
+
+## MCP
+
+`yacli` можно запускать как MCP сервер по `stdio`:
+
+```bash
+yacli mcp
+```
+
+Если нужен локальный HTTP transport для Apps-capable клиентов:
+
+```bash
+yacli mcp --transport http --listen 127.0.0.1:8787
+```
+
+Если сервер публикуется за прокси или через внешний URL, укажите канонический адрес:
+
+```bash
+yacli mcp --transport http --listen 127.0.0.1:8787 --public-url https://mcp.example.test/mcp
+```
+
+Этот HTTP transport теперь streamable:
+
+- `POST /mcp` обрабатывает JSON-RPC requests и batch payloads;
+- `GET /mcp` с `Accept: text/event-stream` и `Mcp-Session-Id` открывает SSE stream для server-initiated notifications;
+- `DELETE /mcp` завершает HTTP MCP session.
+
+Если нужно защитить HTTP transport bearer-токеном:
+
+```bash
+export YACLI_MCP_HTTP_BEARER_TOKEN='secret-token'
+yacli mcp --transport http --listen 127.0.0.1:8787
+```
+
+Если нужен полноценный auth discovery surface с Protected Resource Metadata и `resource_metadata` в challenge, добавьте issuer:
+
+```bash
+export YACLI_MCP_HTTP_AUTH_ISSUER='https://auth.example.test'
+```
+
+Чтобы автоматически зарегистрировать сервер в локально доступных MCP-клиентах:
+
+```bash
+yacli mcp install
+```
+
+Эта команда не только регистрирует MCP сервер, но и раскладывает встроенные agent skills в клиентские каталоги там, где клиент это поддерживает. Сейчас в бинарь встроены:
+
+- `yacli-shared`
+- `yacli-mail`
+- `yacli-calendar`
+- `yacli-disk`
+- `yacli-daily-briefing`
+- `yacli-find-and-read`
+- `yacli-reply-with-context`
+
+Поддерживаемые клиенты:
+
+- Claude Code
+- Codex
+- Gemini CLI
+- Cursor
+- Zed
+- Windsurf
+- Antigravity
+- Warp
+
+Если нужен только один клиент:
+
+```bash
+yacli mcp install --client codex
+yacli mcp install --client cursor
+```
+
+Если нужен native HTTP registration в клиентах, которые его документируют:
+
+```bash
+yacli mcp install --client claude --transport http --url http://127.0.0.1:8787/mcp
+yacli mcp install --client codex --transport http --url http://127.0.0.1:8787/mcp
+yacli mcp install --client gemini --transport http --url http://127.0.0.1:8787/mcp
+```
+
+Кроме обычных `tools/*` и `resources/read`, сервер также поддерживает resource templates:
+
+```bash
+# список шаблонов ресурсов
+resources/templates/list
+
+# примеры URI, которые можно читать через resources/read
+resource://yacli/account/personal
+resource://yacli/auth/personal
+ui://yacli/dashboard?account=personal
+ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth.status
+```
+
+И `resources/subscribe` / `resources/unsubscribe` для account/auth resources. В `stdio` и streamable `HTTP` это даёт live notifications через `notifications/resources/updated`.
+
+Важно:
+
+- `Claude Code`, `Codex` и `Gemini CLI` умеют native HTTP registration, поэтому `yacli` поддерживает и `stdio`, и `http` install flow;
+- для `Cursor`, `Zed`, `Windsurf`, `Warp` и `Antigravity` current stable install path в `yacli` остаётся `stdio`-ориентированным;
+- skills автоматически устанавливаются для `Claude Code`, `Codex`, `Gemini CLI`, `Cursor`, `Windsurf`, `Warp` и `Antigravity`; для `Zed` MCP registration поддерживается, но отдельного skills surface сейчас нет;
+- сервер может работать и как `stdio`, и как локальный HTTP transport на `/mcp`;
+- HTTP transport поддерживает session-scoped SSE stream для server-push notifications;
+- если задан `YACLI_MCP_HTTP_BEARER_TOKEN`, защищённые HTTP tool calls требуют `Authorization: Bearer <token>`;
+- `YACLI_MCP_HTTP_AUTH_ISSUER` опционален и нужен только если вы хотите включить Protected Resource Metadata и `resource_metadata` в `WWW-Authenticate` challenge;
+- `yacli mcp install` не копирует секреты в клиентские конфиги;
+- MCP Apps поддерживается с первого релиза через ресурс `ui://yacli/dashboard`, deep-link template `ui://yacli/dashboard{?account,section,resource,tool}`, app-only tool `yacli.app.snapshot`, read-only tool `yacli.update.check` и встроенный resource inspector для templated resources;
+- dashboard теперь сам поддерживает round-trip deep links: по мере смены account/resource/tool он пересобирает канонический `ui://yacli/dashboard?...` current view URI и может шарить его обратно в host;
+- dashboard также сохраняет последнее локальное view state в браузерном storage и восстанавливает его при следующем открытии, если новый URI не переопределяет эти поля явно;
+- dashboard также показывает auth escalation surface: auth discovery, resource metadata и host actions для recovery у protected tools;
+- dashboard также умеет безопасно проверять наличие нового release из Apps runtime через `Check updates`, не пытаясь self-replace живой MCP server process;
+- обычные текстовые MCP-клиенты продолжают работать без UI.
 
 ## Где лежат настройки
 

@@ -10,6 +10,23 @@ fn yacli() -> Command {
     Command::cargo_bin("yacli").expect("binary exists")
 }
 
+fn current_release_update_target() -> (&'static str, &'static str) {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => ("yacli-aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin"),
+        ("macos", "x86_64") => ("yacli-x86_64-apple-darwin.tar.gz", "x86_64-apple-darwin"),
+        ("linux", "aarch64") => (
+            "yacli-aarch64-unknown-linux-gnu.tar.gz",
+            "aarch64-unknown-linux-gnu",
+        ),
+        ("linux", "x86_64") => (
+            "yacli-x86_64-unknown-linux-gnu.tar.gz",
+            "x86_64-unknown-linux-gnu",
+        ),
+        ("windows", "x86_64") => ("yacli-x86_64-pc-windows-msvc.zip", "x86_64-pc-windows-msvc"),
+        (os, arch) => panic!("unsupported published auto-update target {arch}-{os}"),
+    }
+}
+
 fn write_accounts_file(config_dir: &std::path::Path, content: &str) {
     fs::write(config_dir.join("accounts.toml"), content).expect("accounts file written");
 }
@@ -226,11 +243,14 @@ fn top_level_help_hides_agent_guide_command() {
         .stdout(predicate::str::contains("[OPTIONS] <КОМАНДА>"))
         .stdout(predicate::str::contains("add"))
         .stdout(predicate::str::contains("login"))
+        .stdout(predicate::str::contains("update"))
         .stdout(predicate::str::contains("mail"))
         .stdout(predicate::str::contains("calendar"))
         .stdout(predicate::str::contains("disk"))
         .stdout(predicate::str::contains("Письма и папки Яндекс Почты"))
-        .stdout(predicate::str::contains("Календари и события Яндекс Календаря"))
+        .stdout(predicate::str::contains(
+            "Календари и события Яндекс Календаря",
+        ))
         .stdout(predicate::str::contains("Файлы и папки Яндекс Диска"))
         .stdout(predicate::str::contains("guide").not())
         .stdout(predicate::str::contains("Usage:").not())
@@ -239,7 +259,54 @@ fn top_level_help_hides_agent_guide_command() {
         .stdout(predicate::str::contains("Arguments:").not())
         .stdout(predicate::str::contains("Print help").not())
         .stdout(predicate::str::contains("Print version").not())
-        .stdout(predicate::str::contains("Print this message or the help of the given subcommand(s)").not());
+        .stdout(
+            predicate::str::contains("Print this message or the help of the given subcommand(s)")
+                .not(),
+        );
+}
+
+#[test]
+fn update_help_describes_release_update_surface() {
+    yacli()
+        .args(["update", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Обновить yacli из GitHub Releases",
+        ))
+        .stdout(predicate::str::contains("--version"))
+        .stdout(predicate::str::contains("--check"));
+}
+
+#[test]
+fn update_check_uses_release_checksum_mirror_and_reports_available_target() {
+    let (asset, target) = current_release_update_target();
+    let mut server = Server::new();
+    let base_url = format!("{}/releases/download/v9.9.9", server.url());
+
+    let _checksums = server
+        .mock("GET", "/releases/download/v9.9.9/SHA256SUMS")
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body(format!("deadbeef  {asset}\n"))
+        .create();
+
+    let output = yacli()
+        .args(["update", "--check", "--base-url", &base_url])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "update.check");
+    assert_eq!(value["status"], "update_available");
+    assert_eq!(value["requested_version"], "latest");
+    assert_eq!(value["target_version"], "9.9.9");
+    assert_eq!(value["asset"], asset);
+    assert_eq!(value["target"], target);
+    assert_eq!(value["base_url"], base_url);
 }
 
 #[test]
@@ -253,7 +320,10 @@ fn mail_read_help_uses_positional_id() {
         .stdout(predicate::str::contains("--uid").not())
         .stdout(predicate::str::contains("--folder <ПАПКА>"))
         .stdout(predicate::str::contains("Команды:").not())
-        .stdout(predicate::str::contains("Print this message or the help of the given subcommand(s)").not());
+        .stdout(
+            predicate::str::contains("Print this message or the help of the given subcommand(s)")
+                .not(),
+        );
 }
 
 #[test]
@@ -262,7 +332,9 @@ fn mail_search_help_uses_positional_text() {
         .args(["mail", "search", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("yacli mail search [OPTIONS] <ТЕКСТ>"))
+        .stdout(predicate::str::contains(
+            "yacli mail search [OPTIONS] <ТЕКСТ>",
+        ))
         .stdout(predicate::str::contains("--query").not());
 }
 
@@ -272,7 +344,9 @@ fn mail_reply_help_uses_positional_text() {
         .args(["mail", "reply", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("yacli mail reply [OPTIONS] <ID> [ТЕКСТ]"))
+        .stdout(predicate::str::contains(
+            "yacli mail reply [OPTIONS] <ID> [ТЕКСТ]",
+        ))
         .stdout(predicate::str::contains("--text").not());
 }
 
@@ -350,9 +424,7 @@ fn disk_list_help_uses_optional_positional_path() {
         .args(["disk", "list", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "yacli disk list [OPTIONS] [ПУТЬ]",
-        ))
+        .stdout(predicate::str::contains("yacli disk list [OPTIONS] [ПУТЬ]"))
         .stdout(predicate::str::contains("--path").not());
 }
 
@@ -394,7 +466,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.32");
+    assert_eq!(value["version"], "0.2.0");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
@@ -830,7 +902,9 @@ fn status_table_uses_russian_labels_for_people() {
 
     let table = String::from_utf8(output).expect("utf8");
     assert!(table.contains("СЛУЖБА\tСТАТУС\tПОДРОБНОСТИ"));
-    assert!(table.contains("Почта\tПодключено\tиспользуется переменная окружения YACLI_MAIL_SECRET"));
+    assert!(
+        table.contains("Почта\tПодключено\tиспользуется переменная окружения YACLI_MAIL_SECRET")
+    );
     assert!(table.contains("Календарь\tНе подключено\tслужба еще не подключена"));
     assert!(table.contains("Диск\tНе подключено\tслужба еще не подключена"));
 }
@@ -2621,7 +2695,16 @@ END:VCALENDAR]]></c:calendar-data>
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["calendar", "events", "--account", "mock", "2026-03-12", "2026-03-19", "--limit", "10"])
+        .args([
+            "calendar",
+            "events",
+            "--account",
+            "mock",
+            "2026-03-12",
+            "2026-03-19",
+            "--limit",
+            "10",
+        ])
         .assert()
         .success()
         .get_output()
@@ -2996,7 +3079,9 @@ fn calendar_events_rejects_zero_limit() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains("calendar events --limit должен быть больше нуля"));
+        .stderr(predicate::str::contains(
+            "calendar events --limit должен быть больше нуля",
+        ));
 }
 
 #[test]
@@ -3086,7 +3171,9 @@ client_id = "client-123"
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains("disk list --limit должен быть больше нуля"));
+        .stderr(predicate::str::contains(
+            "disk list --limit должен быть больше нуля",
+        ));
 }
 
 #[test]
@@ -3157,7 +3244,17 @@ client_id = "client-123"
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["disk", "list", "--account", "mock", "disk:/docs", "--limit", "2", "--offset", "1"])
+        .args([
+            "disk",
+            "list",
+            "--account",
+            "mock",
+            "disk:/docs",
+            "--limit",
+            "2",
+            "--offset",
+            "1",
+        ])
         .assert()
         .success()
         .get_output()
@@ -3239,7 +3336,9 @@ client_id = "client-123"
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains("disk mkdir <PATH> не должен быть пустым"));
+        .stderr(predicate::str::contains(
+            "disk mkdir <PATH> не должен быть пустым",
+        ));
 }
 
 #[test]
@@ -3303,7 +3402,13 @@ client_id = "client-123"
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["disk", "mkdir", "--account", "mock", "disk:/docs/new-folder"])
+        .args([
+            "disk",
+            "mkdir",
+            "--account",
+            "mock",
+            "disk:/docs/new-folder",
+        ])
         .assert()
         .success()
         .get_output()
@@ -3342,11 +3447,20 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["disk", "upload", "--account", "mock", source_path.to_str().expect("utf8 path"), "disk:/docs/empty.txt"])
+        .args([
+            "disk",
+            "upload",
+            "--account",
+            "mock",
+            source_path.to_str().expect("utf8 path"),
+            "disk:/docs/empty.txt",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains("disk upload: файл не должен быть пустым"));
+        .stderr(predicate::str::contains(
+            "disk upload: файл не должен быть пустым",
+        ));
 }
 
 #[test]
@@ -3424,7 +3538,14 @@ client_id = "client-123"
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["disk", "upload", "--account", "mock", source_path.to_str().expect("utf8 path"), "disk:/docs/note.txt"])
+        .args([
+            "disk",
+            "upload",
+            "--account",
+            "mock",
+            source_path.to_str().expect("utf8 path"),
+            "disk:/docs/note.txt",
+        ])
         .assert()
         .success()
         .get_output()

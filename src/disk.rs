@@ -591,10 +591,7 @@ fn upload_target_error(status: StatusCode, body: &str) -> YacliError {
 fn analyze_upload_source(path: &Path) -> Result<UploadSourceMeta> {
     let metadata = fs::metadata(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
-            YacliError::Validation(format!(
-                "disk upload: файл не найден: {}",
-                path.display()
-            ))
+            YacliError::Validation(format!("disk upload: файл не найден: {}", path.display()))
         } else {
             YacliError::Io(err.to_string())
         }

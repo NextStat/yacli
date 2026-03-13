@@ -12,9 +12,9 @@ use crate::calendar::{
 };
 use crate::cli::{
     AccountCommand, AuthCommand, AuthServiceArg, CalendarCommand, Cli, Command, DiskCommand,
-    DiskPublicCommand, GuideTopicArg, MailCommand, OutputFormat,
+    DiskPublicCommand, GuideTopicArg, MailCommand, McpCommand, OutputFormat,
 };
-use crate::credential_store::{CredentialStore, StoredAppPasswordCredential, StoredCredential};
+use crate::credential_store::{CredentialStore, StoredAppPasswordCredential};
 use crate::disk::{
     DEFAULT_DISK_BASE_URL, DiskInfo, DiskResource, DownloadedFile, PrivateDiskListRequest,
     PrivateDiskMkdirRequest, PrivateDiskUploadRequest, PublicDiskRequest, PublicDownloadRequest,
@@ -24,16 +24,21 @@ use crate::disk::{
 use crate::error::{Result, YacliError};
 use crate::mail::{
     ForwardedMail, MailAttachmentSummary, MailFolder, MailForwardRequest, MailMessage,
-    MailMessageSummary, MailReplyRequest, MailSendRequest, MailSessionAuth, RepliedMail, SentMail,
+    MailMessageSummary, MailReplyRequest, MailSendRequest, RepliedMail, SentMail,
     forward_mail_message, list_mail_folders, list_mail_messages, read_mail_message,
     reply_to_mail_message, search_mail_messages, send_mail_message,
 };
-use crate::model::{AccountConfig, CalendarAuthMode, MailAuthMode, NewAccountInput};
+use crate::mcp::install::execute_install;
+use crate::model::{AccountConfig, MailAuthMode, NewAccountInput};
 use crate::oauth::{
     OauthService, default_yacli_client_id, exchange_authorization_code, start_pkce_authorization,
-    unix_timestamp_now,
 };
 use crate::output::RenderedOutput;
+use crate::runtime_context::{
+    auth_state, ensure_calendar_supports_app_password, resolve_calendar_private_context,
+    resolve_disk_private_context, resolve_mail_private_context,
+};
+use crate::update::execute_update;
 
 pub fn execute(cli: Cli) -> Result<RenderedOutput> {
     match cli.command {
@@ -69,6 +74,23 @@ pub fn execute(cli: Cli) -> Result<RenderedOutput> {
         Command::Disk { action } => execute_disk(cli.format, action),
         Command::Calendar { action } => execute_calendar(cli.format, action),
         Command::Mail { action } => execute_mail(cli.format, action),
+        Command::Mcp {
+            action:
+                Some(McpCommand::Install {
+                    client,
+                    transport,
+                    url,
+                }),
+            ..
+        } => execute_install(cli.format, client, transport, url),
+        Command::Mcp { action: None, .. } => Err(YacliError::UnsupportedOperation(
+            "mcp server mode is handled in main".to_string(),
+        )),
+        Command::Update {
+            version,
+            check,
+            base_url,
+        } => execute_update(cli.format, &version, check, base_url.as_deref()),
     }
 }
 
@@ -1262,33 +1284,8 @@ fn ok_output(
         format,
         json: serde_json::Value::Object(object),
         table,
+        exit_code: 0,
     })
-}
-
-#[derive(Serialize)]
-struct CredentialState {
-    credential_ref: Option<String>,
-    credential_state: &'static str,
-    detail: String,
-}
-
-#[derive(Clone, Copy)]
-enum CredentialReference<'a> {
-    Env(&'a str),
-    Store(&'a str),
-}
-
-struct MailConnectionContext {
-    email: String,
-    imap_host: String,
-    imap_port: u16,
-    smtp_host: String,
-    smtp_port: u16,
-}
-
-struct CalendarConnectionContext {
-    email: String,
-    caldav_base_url: String,
 }
 
 #[derive(Serialize)]
@@ -1307,91 +1304,6 @@ struct GuideWorkflowEntry {
     title: &'static str,
     summary: &'static str,
     steps: Vec<&'static str>,
-}
-
-fn auth_state(
-    credential_store: &CredentialStore,
-    account_name: &str,
-    reference: Option<&str>,
-    service: &str,
-) -> CredentialState {
-    match reference {
-        None => CredentialState {
-            credential_ref: None,
-            credential_state: "not_configured",
-            detail: "служба еще не подключена".to_string(),
-        },
-        Some(raw) => match parse_credential_ref(raw) {
-            Some(CredentialReference::Env(var_name)) => match std::env::var_os(var_name) {
-                Some(_) => CredentialState {
-                    credential_ref: Some(raw.to_string()),
-                    credential_state: "env_present",
-                    detail: format!("используется переменная окружения {var_name}"),
-                },
-                None => CredentialState {
-                    credential_ref: Some(raw.to_string()),
-                    credential_state: "env_missing",
-                    detail: format!("переменная окружения {var_name} не задана"),
-                },
-            },
-            Some(CredentialReference::Store(store_service)) => {
-                if store_service != service {
-                    return CredentialState {
-                        credential_ref: Some(raw.to_string()),
-                        credential_state: "store_mismatch",
-                        detail: format!("ссылка указывает на store:{store_service}"),
-                    };
-                }
-
-                match credential_store.get_service(account_name, service) {
-                    Some(StoredCredential::Oauth(credential)) => {
-                        let now = unix_timestamp_now();
-                        if credential.expires_at_epoch_secs > now.saturating_add(60) {
-                            CredentialState {
-                                credential_ref: Some(raw.to_string()),
-                                credential_state: "store_present",
-                                detail: format!(
-                                    "сохраненный OAuth-токен действует до {}",
-                                    credential.expires_at_epoch_secs
-                                ),
-                            }
-                        } else {
-                            CredentialState {
-                                credential_ref: Some(raw.to_string()),
-                                credential_state: "store_expired",
-                                detail: "сохраненный OAuth-токен истек или скоро истечет; выполните `yacli login` еще раз".to_string(),
-                            }
-                        }
-                    }
-                    Some(StoredCredential::AppPassword(_)) => CredentialState {
-                        credential_ref: Some(raw.to_string()),
-                        credential_state: "store_present",
-                        detail: "пароль приложения сохранен локально".to_string(),
-                    },
-                    None => CredentialState {
-                        credential_ref: Some(raw.to_string()),
-                        credential_state: "store_missing",
-                        detail: format!("локальный секрет для {service} не найден"),
-                    },
-                }
-            }
-            None => CredentialState {
-                credential_ref: Some(raw.to_string()),
-                credential_state: "unsupported_reference",
-                detail: "поддерживаются только env:NAME и store:SERVICE".to_string(),
-            },
-        },
-    }
-}
-
-fn parse_credential_ref(raw: &str) -> Option<CredentialReference<'_>> {
-    if let Some(value) = raw.strip_prefix("env:") {
-        return Some(CredentialReference::Env(value));
-    }
-    if let Some(value) = raw.strip_prefix("store:") {
-        return Some(CredentialReference::Store(value));
-    }
-    None
 }
 
 fn service_label(service: &str) -> String {
@@ -1468,6 +1380,13 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             summary: "Показать текущий активный аккаунт.",
             requires_account: false,
             examples: vec!["yacli whoami"],
+        },
+        GuideCommandEntry {
+            path: "update",
+            topic: "account",
+            summary: "Проверить наличие нового release или обновить установленный yacli по месту.",
+            requires_account: false,
+            examples: vec!["yacli update --check", "yacli update"],
         },
         GuideCommandEntry {
             path: "status",
@@ -1693,11 +1612,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             topic: "disk",
             title: "Просмотреть приватный Яндекс Диск",
             summary: "Поток добавления аккаунта, OAuth-логина и просмотра содержимого папки.",
-            steps: vec![
-                "yacli add me@yandex.ru",
-                "yacli login",
-                "yacli disk list",
-            ],
+            steps: vec!["yacli add me@yandex.ru", "yacli login", "yacli disk list"],
         },
         GuideWorkflowEntry {
             id: "disk_write_flow",
@@ -1828,17 +1743,6 @@ fn oauth_login_services(
     Ok(services)
 }
 
-fn ensure_calendar_supports_app_password(account: &AccountConfig) -> Result<()> {
-    if !matches!(account.calendar.auth_mode, CalendarAuthMode::AppPassword) {
-        return Err(YacliError::UnsupportedOperation(
-            "calendar login currently supports only account.calendar.auth_mode=app_password"
-                .to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 fn oauth_service(value: AuthServiceArg) -> Result<OauthService> {
     match value {
         AuthServiceArg::Mail => Ok(OauthService::Mail),
@@ -1881,186 +1785,6 @@ fn derive_account_name_from_email(email: &str) -> String {
         "account".to_string()
     } else {
         trimmed.to_string()
-    }
-}
-
-fn required_env(name: &str) -> Result<String> {
-    std::env::var(name).map_err(|_| {
-        YacliError::Config(format!("required environment variable is missing: {name}"))
-    })
-}
-
-fn resolve_disk_private_context(account: Option<&str>) -> Result<(String, String, String)> {
-    let account_store = AccountStore::load()?;
-    let name = account_store.resolved_account_name(account)?;
-    let account = account_store.get_account(&name)?;
-    let access_token = resolve_oauth_access_token(
-        &name,
-        account.disk.credential_ref.as_deref(),
-        OauthService::Disk,
-    )?;
-
-    Ok((name, account.disk.rest_base_url.clone(), access_token))
-}
-
-fn resolve_mail_private_context(
-    account: Option<&str>,
-) -> Result<(String, MailSessionAuth, MailConnectionContext)> {
-    let account_store = AccountStore::load()?;
-    let name = account_store.resolved_account_name(account)?;
-    let account = account_store.get_account(&name)?;
-    let email = account.email.clone();
-    let imap_host = account.mail.imap_host.clone();
-    let imap_port = account.mail.imap_port;
-    let smtp_host = account.mail.smtp_host.clone();
-    let smtp_port = account.mail.smtp_port;
-
-    let auth = match account.mail.auth_mode {
-        MailAuthMode::OauthXoauth2 => {
-            let access_token = resolve_oauth_access_token(
-                &name,
-                account.mail.credential_ref.as_deref(),
-                OauthService::Mail,
-            )?;
-            MailSessionAuth::OauthXoauth2 {
-                account: email.clone(),
-                access_token,
-            }
-        }
-        MailAuthMode::AppPassword => {
-            let app_password =
-                resolve_app_password_secret(&name, "mail", account.mail.credential_ref.as_deref())?;
-            MailSessionAuth::AppPassword {
-                account: email.clone(),
-                app_password,
-            }
-        }
-    };
-
-    Ok((
-        name,
-        auth,
-        MailConnectionContext {
-            email,
-            imap_host,
-            imap_port,
-            smtp_host,
-            smtp_port,
-        },
-    ))
-}
-
-fn resolve_calendar_private_context(
-    account: Option<&str>,
-) -> Result<(String, String, CalendarConnectionContext)> {
-    let account_store = AccountStore::load()?;
-    let name = account_store.resolved_account_name(account)?;
-    let account = account_store.get_account(&name)?;
-    ensure_calendar_supports_app_password(account)?;
-
-    let app_password = resolve_app_password_secret(
-        &name,
-        "calendar",
-        account.calendar.credential_ref.as_deref(),
-    )?;
-
-    Ok((
-        name,
-        app_password,
-        CalendarConnectionContext {
-            email: account.email.clone(),
-            caldav_base_url: account.calendar.caldav_base_url.clone(),
-        },
-    ))
-}
-
-fn resolve_oauth_access_token(
-    account_name: &str,
-    reference: Option<&str>,
-    service: OauthService,
-) -> Result<String> {
-    let Some(reference) = reference else {
-        return Err(YacliError::Auth(format!(
-            "{} has no credential configured for {}",
-            account_name,
-            service.as_str()
-        )));
-    };
-
-    match parse_credential_ref(reference) {
-        Some(CredentialReference::Env(var_name)) => required_env(var_name),
-        Some(CredentialReference::Store(store_service)) => {
-            if store_service != service.as_str() {
-                return Err(YacliError::Config(format!(
-                    "credential_ref {} does not match requested service {}",
-                    reference,
-                    service.as_str()
-                )));
-            }
-
-            let credential_store = CredentialStore::load()?;
-            let stored = credential_store
-                .get_oauth(account_name, service.as_str())
-                .ok_or_else(|| {
-                    YacliError::Auth(format!(
-                        "no stored OAuth credential for account {} service {}",
-                        account_name,
-                        service.as_str()
-                    ))
-                })?;
-
-            if stored.expires_at_epoch_secs <= unix_timestamp_now().saturating_add(60) {
-                return Err(YacliError::Auth(format!(
-                    "stored OAuth token expired for account {} service {}; run `yacli login --account {}` again",
-                    account_name,
-                    service.as_str(),
-                    account_name
-                )));
-            }
-
-            Ok(stored.access_token.clone())
-        }
-        None => Err(YacliError::Config(format!(
-            "unsupported credential_ref format: {reference}"
-        ))),
-    }
-}
-
-fn resolve_app_password_secret(
-    account_name: &str,
-    service: &str,
-    reference: Option<&str>,
-) -> Result<String> {
-    let Some(reference) = reference else {
-        return Err(YacliError::Auth(format!(
-            "{account_name} has no credential configured for {service} app password"
-        )));
-    };
-
-    match parse_credential_ref(reference) {
-        Some(CredentialReference::Env(var_name)) => required_env(var_name),
-        Some(CredentialReference::Store(store_service)) => {
-            if store_service != service {
-                return Err(YacliError::Config(format!(
-                    "credential_ref {} does not match requested service {}",
-                    reference, service
-                )));
-            }
-
-            let credential_store = CredentialStore::load()?;
-            let stored = credential_store
-                .get_app_password(account_name, service)
-                .ok_or_else(|| {
-                    YacliError::Auth(format!(
-                        "no stored app password for account {} service {}",
-                        account_name, service
-                    ))
-                })?;
-            Ok(stored.secret.clone())
-        }
-        None => Err(YacliError::Config(format!(
-            "unsupported credential_ref format: {reference}"
-        ))),
     }
 }
 

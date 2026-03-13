@@ -6,6 +6,7 @@ pub struct RenderedOutput {
     pub format: OutputFormat,
     pub json: Value,
     pub table: String,
+    pub exit_code: i32,
 }
 
 pub fn emit(rendered: RenderedOutput) {

@@ -32,6 +32,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             asset: yacli-x86_64-unknown-linux-gnu.tar.gz
             package_kind: unix
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: yacli-aarch64-unknown-linux-gnu.tar.gz
+            package_kind: unix
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: yacli-aarch64-apple-darwin.tar.gz

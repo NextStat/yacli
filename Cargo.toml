@@ -1,6 +1,6 @@
 [package]
 name = "yacli"
-version = "0.1.32"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/NextStat/yacli"
@@ -11,6 +11,7 @@ description = "Yandex Mail, Calendar, and Disk CLI for humans and AI agents"
 members = []
 
 [dependencies]
+axum = "0.8"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 dirs = "6.0"
@@ -21,12 +22,18 @@ serde_json = "1.0"
 sha2 = "0.10"
 tempfile = "3.15"
 thiserror = "2.0"
+tokio = { version = "1.50", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "0.8"
 url = "2.5"
 native-tls = "0.2"
 mailparse = "0.16"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 quick-xml = "0.37"
+flate2 = "1.1"
+self-replace = "1.5.0"
+tar = "0.4"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

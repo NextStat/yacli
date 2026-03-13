@@ -6,6 +6,7 @@ BASE_URL=""
 OUTPUT=""
 SHA_MACOS_ARM64=""
 SHA_MACOS_X64=""
+SHA_LINUX_ARM64=""
 SHA_LINUX_X64=""
 
 usage() {
@@ -19,6 +20,7 @@ Usage:
     --output PATH \
     [--sha256-macos-arm64 SHA256] \
     [--sha256-macos-x64 SHA256] \
+    [--sha256-linux-arm64 SHA256] \
     [--sha256-linux-x64 SHA256]
 EOF
 }
@@ -45,6 +47,10 @@ while [ "$#" -gt 0 ]; do
             SHA_MACOS_X64="$2"
             shift 2
             ;;
+        --sha256-linux-arm64)
+            SHA_LINUX_ARM64="$2"
+            shift 2
+            ;;
         --sha256-linux-x64)
             SHA_LINUX_X64="$2"
             shift 2
@@ -66,7 +72,7 @@ if [ -z "$VERSION" ] || [ -z "$BASE_URL" ] || [ -z "$OUTPUT" ]; then
     exit 1
 fi
 
-if [ -z "$SHA_MACOS_ARM64" ] && [ -z "$SHA_MACOS_X64" ] && [ -z "$SHA_LINUX_X64" ]; then
+if [ -z "$SHA_MACOS_ARM64" ] && [ -z "$SHA_MACOS_X64" ] && [ -z "$SHA_LINUX_ARM64" ] && [ -z "$SHA_LINUX_X64" ]; then
     echo "At least one platform checksum is required." >&2
     exit 1
 fi
@@ -125,18 +131,47 @@ EOF
 EOF
     fi
 
-    if [ -n "$SHA_LINUX_X64" ]; then
+    if [ -n "$SHA_LINUX_ARM64" ] || [ -n "$SHA_LINUX_X64" ]; then
         cat <<EOF
   on_linux do
-    if Hardware::CPU.intel?
+EOF
+        if [ -n "$SHA_LINUX_ARM64" ] && [ -n "$SHA_LINUX_X64" ]; then
+            cat <<EOF
+    if Hardware::CPU.arm?
+      url "${BASE_URL}/yacli-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "${SHA_LINUX_ARM64}"
+    elsif Hardware::CPU.intel?
       url "${BASE_URL}/yacli-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "${SHA_LINUX_X64}"
     else
-      odie "yacli Homebrew packages are not published for Linux arm64 yet. Use the install script or cargo install."
+      odie "yacli Homebrew packages are not published for this Linux CPU."
     end
   end
 
 EOF
+        elif [ -n "$SHA_LINUX_ARM64" ]; then
+            cat <<EOF
+    if Hardware::CPU.arm?
+      url "${BASE_URL}/yacli-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "${SHA_LINUX_ARM64}"
+    else
+      odie "yacli Homebrew packages are not published for Linux x86_64 yet."
+    end
+  end
+
+EOF
+        else
+            cat <<EOF
+    if Hardware::CPU.intel?
+      url "${BASE_URL}/yacli-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "${SHA_LINUX_X64}"
+    else
+      odie "yacli Homebrew packages are not published for Linux arm64 yet."
+    end
+  end
+
+EOF
+        fi
     else
         cat <<'EOF'
   on_linux do
