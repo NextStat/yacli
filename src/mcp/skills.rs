@@ -38,12 +38,20 @@ const SKILLS: &[Skill] = &[
         content: include_str!("../../skills/yacli-reply-with-context/SKILL.md"),
     },
     Skill {
+        name: "yacli-attachment-to-disk",
+        content: include_str!("../../skills/yacli-attachment-to-disk/SKILL.md"),
+    },
+    Skill {
+        name: "yacli-send-file-by-mail",
+        content: include_str!("../../skills/yacli-send-file-by-mail/SKILL.md"),
+    },
+    Skill {
         name: "yacli-invite-to-calendar",
         content: include_str!("../../skills/yacli-invite-to-calendar/SKILL.md"),
     },
 ];
 
-pub const SKILL_COUNT: usize = 8;
+pub const SKILL_COUNT: usize = 10;
 
 pub fn skill_names() -> Vec<&'static str> {
     SKILLS.iter().map(|s| s.name).collect()
@@ -70,6 +78,8 @@ pub fn skill_prompt_name(name: &str) -> Option<&'static str> {
         "yacli-daily-briefing" => Some("daily-briefing"),
         "yacli-find-and-read" => Some("find-and-read"),
         "yacli-reply-with-context" => Some("reply-with-context"),
+        "yacli-attachment-to-disk" => Some("attachment-to-disk"),
+        "yacli-send-file-by-mail" => Some("send-file-by-mail"),
         "yacli-invite-to-calendar" => Some("invite-to-calendar"),
         _ => None,
     }
@@ -136,6 +146,8 @@ mod tests {
         assert!(names.contains(&"yacli-daily-briefing"));
         assert!(names.contains(&"yacli-find-and-read"));
         assert!(names.contains(&"yacli-reply-with-context"));
+        assert!(names.contains(&"yacli-attachment-to-disk"));
+        assert!(names.contains(&"yacli-send-file-by-mail"));
         assert!(names.contains(&"yacli-invite-to-calendar"));
     }
 
@@ -278,6 +290,14 @@ mod tests {
         assert_eq!(
             skill_prompt_name("yacli-reply-with-context"),
             Some("reply-with-context")
+        );
+        assert_eq!(
+            prompt_skill_name("attachment-to-disk"),
+            Some("yacli-attachment-to-disk")
+        );
+        assert_eq!(
+            skill_prompt_name("yacli-send-file-by-mail"),
+            Some("send-file-by-mail")
         );
         assert_eq!(
             prompt_skill_name("invite-to-calendar"),

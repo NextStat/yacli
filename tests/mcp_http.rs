@@ -377,6 +377,16 @@ fn mcp_http_initialize_returns_session_header_and_supports_follow_up_requests() 
     assert!(
         prompts
             .iter()
+            .any(|prompt| prompt["name"] == "attachment-to-disk")
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "send-file-by-mail")
+    );
+    assert!(
+        prompts
+            .iter()
             .any(|prompt| prompt["name"] == "invite-to-calendar")
     );
 }
@@ -2254,7 +2264,7 @@ rest_base_url = "https://cloud-api.yandex.net"
             .expect("skills catalog text"),
     )
     .expect("skills catalog payload");
-    assert_eq!(skills_catalog_payload["count"], 8);
+    assert_eq!(skills_catalog_payload["count"], 10);
 
     let skill_resource = post_json(
         &client,

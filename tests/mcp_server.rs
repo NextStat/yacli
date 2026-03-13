@@ -412,6 +412,16 @@ fn mcp_stdio_accepts_claude_code_json_line_messages() {
     assert!(
         prompts
             .iter()
+            .any(|prompt| prompt["name"] == "attachment-to-disk")
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "send-file-by-mail")
+    );
+    assert!(
+        prompts
+            .iter()
             .any(|prompt| prompt["name"] == "invite-to-calendar")
     );
 }
@@ -470,7 +480,7 @@ fn mcp_stdio_lists_and_renders_embedded_prompts() {
     let prompts = responses[1]["result"]["prompts"]
         .as_array()
         .expect("prompts array");
-    assert_eq!(prompts.len(), 8);
+    assert_eq!(prompts.len(), 10);
     let mail_prompt = prompts
         .iter()
         .find(|prompt| prompt["name"] == "mail")
@@ -493,6 +503,11 @@ fn mcp_stdio_lists_and_renders_embedded_prompts() {
         invite_prompt["title"],
         "Создать событие из приглашения в письме"
     );
+    let send_file_prompt = prompts
+        .iter()
+        .find(|prompt| prompt["name"] == "send-file-by-mail")
+        .expect("send-file prompt");
+    assert_eq!(send_file_prompt["title"], "Отправить файл с диска по почте");
 }
 
 #[test]
@@ -2002,7 +2017,7 @@ rest_base_url = "https://cloud-api.yandex.net"
             .expect("skills catalog text"),
     )
     .expect("skills catalog json");
-    assert_eq!(skills_catalog_payload["count"], 8);
+    assert_eq!(skills_catalog_payload["count"], 10);
     assert!(
         skills_catalog_payload["items"]
             .as_array()

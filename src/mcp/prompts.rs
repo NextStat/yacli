@@ -169,6 +169,57 @@ const REPLY_WITH_CONTEXT_ARGUMENTS: &[PromptArgument] = &[
     },
 ];
 
+const ATTACHMENT_TO_DISK_ARGUMENTS: &[PromptArgument] = &[
+    PromptArgument {
+        name: "query",
+        description: "Поисковая фраза, чтобы найти письмо с нужным вложением.",
+        required: true,
+    },
+    PromptArgument {
+        name: "account",
+        description: "Optional yacli account alias.",
+        required: false,
+    },
+    PromptArgument {
+        name: "folder",
+        description: "Mailbox folder, defaults to INBOX when omitted.",
+        required: false,
+    },
+    PromptArgument {
+        name: "output_path",
+        description: "Куда сохранить выбранное вложение локально.",
+        required: false,
+    },
+];
+
+const SEND_FILE_BY_MAIL_ARGUMENTS: &[PromptArgument] = &[
+    PromptArgument {
+        name: "to",
+        description: "Email получателя.",
+        required: true,
+    },
+    PromptArgument {
+        name: "subject",
+        description: "Тема письма.",
+        required: true,
+    },
+    PromptArgument {
+        name: "attachment_path",
+        description: "Путь к локальному файлу, который нужно приложить.",
+        required: true,
+    },
+    PromptArgument {
+        name: "body",
+        description: "Текст письма.",
+        required: false,
+    },
+    PromptArgument {
+        name: "account",
+        description: "Optional yacli account alias.",
+        required: false,
+    },
+];
+
 const INVITE_TO_CALENDAR_ARGUMENTS: &[PromptArgument] = &[
     PromptArgument {
         name: "query",
@@ -234,6 +285,18 @@ const PROMPTS: &[PromptDefinition] = &[
         title: "Ответить с учётом контекста",
         description: "Прочитать письмо, сверить расписание и подготовить или отправить ответ с учётом календарного контекста.",
         arguments: REPLY_WITH_CONTEXT_ARGUMENTS,
+    },
+    PromptDefinition {
+        name: "attachment-to-disk",
+        title: "Сохранить вложение из письма на диск",
+        description: "Найти письмо, выбрать нужное вложение и сохранить его в локальный файл.",
+        arguments: ATTACHMENT_TO_DISK_ARGUMENTS,
+    },
+    PromptDefinition {
+        name: "send-file-by-mail",
+        title: "Отправить файл с диска по почте",
+        description: "Подготовить письмо и отправить локальный файл как email-вложение.",
+        arguments: SEND_FILE_BY_MAIL_ARGUMENTS,
     },
     PromptDefinition {
         name: "invite-to-calendar",
@@ -369,6 +432,8 @@ fn prompt_messages(name: &str, arguments: &Value) -> Result<Vec<Value>> {
         "daily-briefing" => render_daily_briefing_prompt(arguments),
         "find-and-read" => render_find_and_read_prompt(arguments)?,
         "reply-with-context" => render_reply_with_context_prompt(arguments)?,
+        "attachment-to-disk" => render_attachment_to_disk_prompt(arguments)?,
+        "send-file-by-mail" => render_send_file_by_mail_prompt(arguments)?,
         "invite-to-calendar" => render_invite_to_calendar_prompt(arguments)?,
         _ => {
             return Err(YacliError::Validation(format!(
@@ -397,6 +462,7 @@ fn complete_prompt_reference(
         ("mail", "folder")
         | ("find-and-read", "folder")
         | ("reply-with-context", "folder")
+        | ("attachment-to-disk", "folder")
         | ("invite-to-calendar", "folder") => {
             ["INBOX", "Sent", "Drafts", "Archive", "Trash", "Spam"]
                 .into_iter()
@@ -705,6 +771,56 @@ UID письма: {uid}\n\
     ))
 }
 
+fn render_attachment_to_disk_prompt(arguments: &Value) -> Result<String> {
+    let query = required_string(arguments, "query")?;
+    let account = optional_string(arguments, "account").unwrap_or("current");
+    let folder = optional_string(arguments, "folder").unwrap_or("INBOX");
+    let output_path = optional_string(arguments, "output_path").unwrap_or("./attachment.bin");
+
+    Ok(format!(
+        "Помоги сохранить вложение из письма на локальный диск через MCP-сервер yacli.\n\
+Поисковый запрос: {query}\n\
+Аккаунт: {account}\n\
+Папка: {folder}\n\
+Путь сохранения: {output_path}\n\
+\n\
+Используй такой workflow:\n\
+1. Найди письмо через `yacli.mail.search` и выбери самый релевантный UID.\n\
+2. Если нужно уточнить список вложений, вызови `yacli.mail.read`.\n\
+3. Сохрани нужное вложение через `yacli.mail.attachment.export` с явным `output_path`.\n\
+4. Если у письма несколько вложений, явно объясни, почему выбран именно этот attachment.\n\
+5. В финальном ответе зафиксируй UID письма, имя вложения и локальный путь сохранения.\n\
+\n\
+Если локальный файл уже существует, не перезаписывай его молча: либо используй `force`, либо сначала явно проговори риск overwrite."
+    ))
+}
+
+fn render_send_file_by_mail_prompt(arguments: &Value) -> Result<String> {
+    let to = required_string(arguments, "to")?;
+    let subject = required_string(arguments, "subject")?;
+    let attachment_path = required_string(arguments, "attachment_path")?;
+    let body = optional_string(arguments, "body").unwrap_or("Во вложении файл.");
+    let account = optional_string(arguments, "account").unwrap_or("current");
+
+    Ok(format!(
+        "Помоги отправить локальный файл по почте через MCP-сервер yacli.\n\
+Получатель: {to}\n\
+Тема: {subject}\n\
+Вложение: {attachment_path}\n\
+Аккаунт: {account}\n\
+\n\
+Используй такой workflow:\n\
+1. Проверь, что путь `{attachment_path}` указывает на локальный файл.\n\
+2. Если у пользователя нет текста письма, используй минимальный вежливый body.\n\
+3. Отправь письмо через `yacli.mail.send` и передай файл в `attachments`.\n\
+4. В финальном ответе кратко зафиксируй получателя, тему и имя отправленного файла.\n\
+\n\
+Текст письма по умолчанию: {body}\n\
+\n\
+Если файл не существует или путь указывает на директорию, не пытайся отправлять письмо молча: явно объясни проблему."
+    ))
+}
+
 fn render_invite_to_calendar_prompt(arguments: &Value) -> Result<String> {
     let query = required_string(arguments, "query")?;
     let account = optional_string(arguments, "account").unwrap_or("current");
@@ -752,7 +868,7 @@ mod tests {
     #[test]
     fn prompt_definitions_expose_all_embedded_prompts() {
         let prompts = prompt_definitions();
-        assert_eq!(prompts.len(), 8);
+        assert_eq!(prompts.len(), 10);
         assert!(prompts.iter().any(|prompt| prompt["name"] == "shared"));
         assert!(prompts.iter().any(|prompt| prompt["name"] == "mail"));
         assert!(prompts.iter().any(|prompt| prompt["name"] == "calendar"));
@@ -771,6 +887,16 @@ mod tests {
             prompts
                 .iter()
                 .any(|prompt| prompt["name"] == "reply-with-context")
+        );
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "attachment-to-disk")
+        );
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "send-file-by-mail")
         );
         assert!(
             prompts
@@ -833,6 +959,45 @@ mod tests {
             .expect("prompt text");
         assert!(text.contains("используй `yacli.mail.reply`"));
         assert!(text.contains("это только предложенный draft"));
+    }
+
+    #[test]
+    fn attachment_to_disk_prompt_mentions_export_tool() {
+        let prompt = get_prompt(json!({
+            "name": "attachment-to-disk",
+            "arguments": {
+                "query": "invoice",
+                "output_path": "./invoice.pdf"
+            }
+        }))
+        .expect("prompt");
+
+        let text = prompt["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(text.contains("Путь сохранения: ./invoice.pdf"));
+        assert!(text.contains("`yacli.mail.attachment.export`"));
+        assert!(text.contains("resource://yacli/skill/yacli-attachment-to-disk"));
+    }
+
+    #[test]
+    fn send_file_by_mail_prompt_mentions_send_tool() {
+        let prompt = get_prompt(json!({
+            "name": "send-file-by-mail",
+            "arguments": {
+                "to": "person@example.com",
+                "subject": "Счёт",
+                "attachment_path": "./invoice.pdf"
+            }
+        }))
+        .expect("prompt");
+
+        let text = prompt["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(text.contains("Получатель: person@example.com"));
+        assert!(text.contains("`yacli.mail.send`"));
+        assert!(text.contains("resource://yacli/skill/yacli-send-file-by-mail"));
     }
 
     #[test]

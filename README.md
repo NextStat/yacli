@@ -1,22 +1,164 @@
-# yacli
+<p align="center">
+  <img src="./assets/readme-hero.svg" alt="yacli hero" width="100%" />
+</p>
 
-`yacli` — CLI и MCP Apps-сервер для Яндекс Почты, Календаря и Диска, рассчитанный и на людей, и на AI-агентов.
+<h1 align="center">yacli</h1>
 
-Это один продуктовый surface для двух режимов работы:
+<p align="center"><strong>CLI и MCP Apps-сервер для Яндекс Почты, Календаря и Диска для людей, AI-агентов и MCP-хостов.</strong></p>
 
-- как повседневный CLI для почты, календаря и файлов;
-- как MCP server для Claude Code, Claude Desktop / Cowork, Codex, Gemini CLI, Cursor, Windsurf, Zed, Warp и других MCP-клиентов;
-- как MCP Apps runtime с dashboard, resources, prompts, completions, roots и embedded workflow skills.
+<p align="center">
+  <a href="https://github.com/NextStat/yacli/releases"><img src="https://img.shields.io/github/v/release/NextStat/yacli?display_name=tag&style=flat-square" alt="Release"></a>
+  <a href="https://github.com/NextStat/yacli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/NextStat/yacli/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <img src="https://img.shields.io/badge/MCP-Apps-ffb703?style=flat-square" alt="MCP Apps">
+  <img src="https://img.shields.io/badge/Linux-ARM64-219ebc?style=flat-square" alt="Linux ARM64">
+  <img src="https://img.shields.io/badge/Auto--update-ready-8ecae6?style=flat-square" alt="Auto update">
+  <a href="https://github.com/NextStat/yacli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-90be6d?style=flat-square" alt="MIT"></a>
+</p>
 
-С его помощью можно:
+<p align="center">
+  <a href="#установка">Установка</a> •
+  <a href="#начало-работы">Быстрый старт</a> •
+  <a href="#mcp">MCP</a> •
+  <a href="#повседневные-команды">Команды</a> •
+  <a href="#для-автоматизации">Автоматизация</a>
+</p>
+
+`yacli` даёт один продуктовый surface для трёх режимов работы:
+
+- повседневный CLI для почты, календаря и файлов;
+- MCP server для `Claude Code`, `Claude Desktop / Cowork`, `Codex`, `Gemini CLI`, `Cursor`, `Windsurf`, `Zed`, `Warp` и других MCP-клиентов;
+- MCP Apps runtime с dashboard, prompts, skills, resources, completions и roots.
+
+## Почему yacli
+
+| Surface | Что это даёт |
+| --- | --- |
+| `Один runtime` | Почта, календарь и диск живут в одном бинаре, одном конфиге и одном agent-facing contract. |
+| `Apps-first MCP` | `yacli` умеет не только tools, но и `MCP Apps`: dashboard, prompts, embedded skills, resources, live subscriptions. |
+| `Кросс-сервисные workflows` | Можно пройти путь `письмо -> вложение -> .ics -> событие`, `файл -> письмо`, `агент -> MCP prompt -> реальное действие`. |
+| `Ship-ready` | Готовые релизы для macOS, Linux `x86_64`/`arm64`, Windows `x86_64`, плюс `yacli update`. |
+
+```mermaid
+flowchart LR
+    U["Пользователь / агент"] --> CLI["yacli CLI"]
+    U --> MCP["yacli MCP server"]
+    MCP --> APPS["MCP Apps dashboard"]
+    MCP --> PROMPTS["prompts / skills / resources"]
+    CLI --> MAIL["Яндекс Почта"]
+    CLI --> CAL["Яндекс Календарь"]
+    CLI --> DISK["Яндекс Диск"]
+    MCP --> MAIL
+    MCP --> CAL
+    MCP --> DISK
+    APPS --> MAIL
+    APPS --> CAL
+    APPS --> DISK
+```
+
+## Что умеет
 
 - читать, искать, отправлять, пересылать и отвечать на письма;
 - скачивать вложения, разбирать `.ics` / `text/calendar` и создавать события из email-приглашений;
 - смотреть календари и события, создавать и удалять встречи;
 - просматривать приватный Диск, создавать папки и загружать файлы;
-- работать с несколькими учетными записями и быстро переключаться между ними.
+- работать с несколькими учетными записями и быстро переключаться между ними;
+- устанавливаться как MCP server и как workflow layer для агентских клиентов.
 
-Если коротко: `yacli` нужен, когда хочется управлять Яндекс Почтой, Календарём и Диском из терминала, AI-агента или MCP Apps-хоста без отдельных интеграционных костылей.
+## Запуск за минуту
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
+yacli add me@yandex.ru
+yacli login
+yacli login calendar --app-password <пароль>
+yacli mcp install --client claude
+```
+
+После этого у вас есть:
+
+- локальный CLI для Яндекс Почты, Календаря и Диска;
+- MCP server, который умеют подключать Claude / Codex / Gemini и другие клиенты;
+- MCP prompts, embedded skills и Apps-ready dashboard для более богатого агентского UX.
+
+## Где это работает лучше всего
+
+| Клиент / surface | Install path | MCP | Apps / UI | Skills | Prompts |
+| --- | --- | --- | --- | --- | --- |
+| `Claude Code` | `yacli mcp install --client claude` | `stdio` + `http` | Да | Да | Да |
+| `Claude Desktop / Cowork` | `yacli mcp install --client claude` | Да | Да | Нет | Да |
+| `Codex` | `yacli mcp install --client codex` | `stdio` + `http` | Да | Да | Да |
+| `Gemini CLI` | `yacli mcp install --client gemini` | `stdio` + `http` | Да | Да | Да |
+| `Cursor / Windsurf / Warp / Zed` | `yacli mcp install --client <client>` | Да | зависит от хоста | частично | Да |
+
+Если нужен самый богатый surface, ориентир простой:
+
+- `Claude Code` и `Codex` — лучший общий опыт для CLI + skills + MCP;
+- `Claude Desktop / Cowork` — сильный surface для MCP prompts, resources и Apps;
+- `Gemini CLI` — хороший native MCP path, если нужен ещё и HTTP registration.
+
+## Готовые сценарии
+
+| Сценарий | Что запускается |
+| --- | --- |
+| `Письмо -> вложение -> локальный файл` | `mail read` -> `mail attachment export` |
+| `Письмо -> .ics -> событие` | `mail search` -> `mail invite inspect` -> `mail invite create-event` |
+| `Локальный файл -> письмо` | `mail send --attach` |
+| `Агент -> prompt -> реальное действие` | MCP `prompts/get` -> `tools/call` -> `ui://yacli/dashboard` |
+
+Минимальные примеры:
+
+```bash
+yacli mail attachment export 1353 --index 1 --output ./invoice.pdf
+yacli mail invite create-event 1353 --name invite.ics --calendar team
+yacli mail send person@example.com "Счёт" "Во вложении файл" --attach ./invoice.pdf
+yacli mcp --transport http --listen 127.0.0.1:8787
+```
+
+## Примеры кросс-сервисных skills и workflows
+
+Эти сценарии уже реально есть в текущем surface `yacli` и работают либо как embedded `SKILL.md`, либо как MCP prompt / Apps workflow:
+
+| Skill / workflow | Что связывает | Как выглядит запрос |
+| --- | --- | --- |
+| `yacli-daily-briefing` / `daily-briefing` | Почта + календарь | `Собери утреннюю сводку по письмам и встречам` |
+| `yacli-reply-with-context` / `reply-with-context` | Почта + календарь | `Ответь на письмо с учётом моего расписания` |
+| `yacli-attachment-to-disk` / `attachment-to-disk` | Почта + локальный диск | `Найди письмо и сохрани вложение в файл` |
+| `yacli-send-file-by-mail` / `send-file-by-mail` | Локальный диск + почта | `Отправь файл с диска по почте` |
+| `yacli-invite-to-calendar` / `invite-to-calendar` | Почта + календарь | `Найди письмо с приглашением и добавь встречу в календарь` |
+
+CLI / MCP примеры для этих сценариев:
+
+```bash
+# daily briefing
+yacli mail list --limit 10
+yacli calendar events
+
+# reply with context
+yacli mail read 1353
+yacli calendar events 2026-03-14 2026-03-16
+yacli mail reply 1353 "Подтверждаю, это окно подходит"
+
+# attachment to disk
+yacli mail search "invoice"
+yacli mail attachment export 1353 --name invoice.pdf --output ./invoice.pdf
+
+# send file by mail
+yacli mail send person@example.com "Счёт" "Во вложении файл" --attach ./invoice.pdf
+
+# invite to calendar
+yacli mail search "приглашение"
+yacli mail invite inspect 1353 --index 1
+yacli mail invite create-event 1353 --index 1 --calendar team
+```
+
+Для MCP-клиентов эти же сценарии доступны через:
+
+- `prompts/get` для `daily-briefing`, `reply-with-context`, `attachment-to-disk`, `send-file-by-mail`, `invite-to-calendar`;
+- `resource://yacli/skill/yacli-daily-briefing`
+- `resource://yacli/skill/yacli-reply-with-context`
+- `resource://yacli/skill/yacli-attachment-to-disk`
+- `resource://yacli/skill/yacli-send-file-by-mail`
+- `resource://yacli/skill/yacli-invite-to-calendar`
 
 Важно:
 
@@ -279,6 +421,8 @@ yacli guide --topic mail
 
 ## MCP
 
+### Быстрый MCP старт
+
 `yacli` можно запускать как MCP сервер по `stdio`:
 
 ```bash
@@ -299,7 +443,14 @@ yacli mcp --transport http --listen 127.0.0.1:8787
 yacli mcp --transport http --listen 127.0.0.1:8787 --public-url https://mcp.example.test/mcp
 ```
 
-Этот HTTP transport теперь streamable:
+### Транспорты
+
+| Transport | Когда использовать | Что важно |
+| --- | --- | --- |
+| `stdio` | Claude Code, локальные CLI MCP-клиенты | Автосогласование `Content-Length` и JSONL |
+| `http` | Apps-capable клиенты и локальный networked MCP | Streamable HTTP + SSE notifications |
+
+HTTP transport у `yacli` streamable:
 
 - `POST /mcp` обрабатывает JSON-RPC requests и batch payloads;
 - `GET /mcp` с `Accept: text/event-stream` и `Mcp-Session-Id` открывает SSE stream для server-initiated notifications;
@@ -318,6 +469,8 @@ yacli mcp --transport http --listen 127.0.0.1:8787
 export YACLI_MCP_HTTP_AUTH_ISSUER='https://auth.example.test'
 ```
 
+### Установка в клиенты
+
 Чтобы автоматически зарегистрировать сервер в локально доступных MCP-клиентах:
 
 ```bash
@@ -333,6 +486,8 @@ yacli mcp install
 - `yacli-daily-briefing`
 - `yacli-find-and-read`
 - `yacli-reply-with-context`
+- `yacli-attachment-to-disk`
+- `yacli-send-file-by-mail`
 - `yacli-invite-to-calendar`
 
 Поддерживаемые клиенты:
@@ -346,6 +501,16 @@ yacli mcp install
 - Windsurf
 - Antigravity
 - Warp
+
+### Что получает MCP-клиент
+
+| Слой | Что есть в `yacli` |
+| --- | --- |
+| `tools` | mail, calendar, disk, account, auth, update, roots |
+| `resources` | account/auth resources, skills catalog, templated resources |
+| `prompts` | `shared`, `mail`, `calendar`, `disk`, `daily-briefing`, `find-and-read`, `reply-with-context`, `attachment-to-disk`, `send-file-by-mail`, `invite-to-calendar` |
+| `apps` | `ui://yacli/dashboard` с dashboard, browser, tool runner и update check |
+| `completions` | accounts, folders, calendars, skills, dashboard args |
 
 Если нужен только один клиент:
 
@@ -361,6 +526,8 @@ yacli mcp install --client claude --transport http --url http://127.0.0.1:8787/m
 yacli mcp install --client codex --transport http --url http://127.0.0.1:8787/mcp
 yacli mcp install --client gemini --transport http --url http://127.0.0.1:8787/mcp
 ```
+
+### Resource templates и guided workflows
 
 Кроме обычных `tools/*` и `resources/read`, сервер также поддерживает resource templates:
 
@@ -386,13 +553,19 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 - `daily-briefing`
 - `find-and-read`
 - `reply-with-context`
+- `attachment-to-disk`
+- `send-file-by-mail`
 - `invite-to-calendar`
 
 Это MCP-native эквиваленты встроенных `SKILL.md` recipe flows. В клиентах вроде Claude Desktop / Cowork, где отдельный `SKILL.md` surface отсутствует, именно `prompts/list` и `prompts/get` дают переносимый workflow layer поверх тех же `yacli` tools/resources/apps.
 
 Важно: prompt titles, descriptions и сами prompt messages теперь русскоязычные, чтобы Claude Desktop / Cowork и другие MCP-клиенты могли лучше матчить естественные русские запросы вроде «сводка по письмам», «найди письмо» или «ответь с учётом расписания».
 
-Для новых кросс-сервисных сценариев сервер теперь также отдаёт first-class workflow `invite-to-calendar`: он связывает поиск письма, разбор `.ics`/`text/calendar` вложения и импорт нужного VEVENT в календарь через `yacli.mail.invite.create_event`.
+Для новых кросс-сервисных сценариев сервер теперь также отдаёт first-class workflows:
+
+- `attachment-to-disk`: поиск письма и сохранение вложения через `yacli.mail.attachment.export`;
+- `send-file-by-mail`: отправка локального файла через `yacli.mail.send` с `attachments`;
+- `invite-to-calendar`: поиск письма, разбор `.ics`/`text/calendar` вложения и импорт нужного VEVENT в календарь через `yacli.mail.invite.create_event`.
 
 Кроме того, встроенные skills теперь доступны и как MCP resources:
 
@@ -411,6 +584,8 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 - dashboard resource arguments (`account`, `section`, `resource`, `tool`)
 
 Для клиентов, которые объявляют MCP `roots` capability, `yacli` теперь также поднимает tool `yacli.roots.list`. Он делает реальный server-to-client `roots/list` request и возвращает текущие filesystem roots клиента в model/app surface.
+
+### Write-capable MCP surface
 
 По состоянию текущего stable surface MCP mail-tools уже поддерживают не только чтение, но и write actions:
 
@@ -433,6 +608,8 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 
 - `yacli.disk.mkdir`
 - `yacli.disk.upload`
+
+### Поведение по клиентам и хостам
 
 Важно:
 
@@ -462,6 +639,38 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 - prompts `mail`, `reply-with-context`, `calendar` и `disk` теперь могут вести клиента и через реальные MCP write-tools, а не только через read-only анализ;
 - prompts дополнены MCP completions, так что Apps-capable и text MCP clients могут подсказывать аргументы без hardcoded client-side логики;
 - обычные текстовые MCP-клиенты продолжают работать без UI.
+
+<details>
+<summary><strong>Развернуть полный список MCP возможностей</strong></summary>
+
+- `Claude Code`, `Codex` и `Gemini CLI` умеют native HTTP registration, поэтому `yacli` поддерживает и `stdio`, и `http` install flow;
+- `Claude Desktop / Cowork` использует отдельный config `claude_desktop_config.json`, поэтому `yacli mcp install --client claude` теперь регистрирует сервер и в Claude Code, и в Claude Desktop surface;
+- для `Cursor`, `Zed`, `Windsurf`, `Warp` и `Antigravity` current stable install path в `yacli` остаётся `stdio`-ориентированным;
+- skills автоматически устанавливаются для `Claude Code`, `Codex`, `Gemini CLI`, `Cursor`, `Windsurf`, `Warp` и `Antigravity`; для `Zed` MCP registration поддерживается, но отдельного skills surface сейчас нет;
+- Claude Desktop / Cowork MCP registration поддерживается, но `SKILL.md` surface туда не устанавливается;
+- Claude Desktop / Cowork при этом всё равно получает встроенные yacli workflows через стандартные MCP prompts;
+- сервер может работать и как `stdio`, и как локальный HTTP transport на `/mcp`;
+- `stdio` transport автоматически согласует framing между `Content-Length` и JSONL, поэтому Claude Code подключается без отдельного compatibility mode;
+- если клиент объявляет `roots` capability, `tools/list` дополнительно рекламирует `yacli.roots.list`, а `notifications/roots/list_changed` инвалидирует кеш roots и заставляет сервер заново запросить `roots/list`;
+- в `HTTP` это работает через `POST /mcp` с `Accept: text/event-stream`: сервер отвечает SSE stream, внутри которого сначала отправляет nested `roots/list`, а затем финальный JSON-RPC result для исходного `tools/call`;
+- HTTP transport поддерживает session-scoped SSE stream для server-push notifications;
+- если задан `YACLI_MCP_HTTP_BEARER_TOKEN`, защищённые HTTP tool calls требуют `Authorization: Bearer <token>`;
+- `YACLI_MCP_HTTP_AUTH_ISSUER` опционален и нужен только если вы хотите включить Protected Resource Metadata и `resource_metadata` в `WWW-Authenticate` challenge;
+- `yacli mcp install` не копирует секреты в клиентские конфиги;
+- MCP Apps поддерживается с первого релиза через ресурс `ui://yacli/dashboard`, deep-link template `ui://yacli/dashboard{?account,section,resource,tool,skill,prompt}`, app-only tool `yacli.app.snapshot`, read-only tool `yacli.update.check` и встроенный resource inspector для templated resources;
+- dashboard теперь сам поддерживает round-trip deep links: по мере смены account/resource/tool/skill он пересобирает канонический `ui://yacli/dashboard?...` current view URI и может шарить его обратно в host;
+- dashboard resource inspector теперь умеет читать не только account/auth resources, но и embedded skills catalog plus individual `resource://yacli/skill/{skill}` resources;
+- dashboard теперь также поднимает unified searchable browser поверх `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` и `resource://yacli/skills`, так что Apps-capable клиенты получают один searchable catalog по tools/prompts/resources/templates/skills;
+- dashboard tools panel теперь также умеет работать как universal MCP tool runner: можно выбрать любой tool из текущего `tools/list`, увидеть его `inputSchema`, отредактировать JSON args и вызвать его прямо из hosted app, не оставаясь на нескольких hardcoded кнопках;
+- dashboard теперь также строит capability-aware host profile: он показывает, что конкретный MCP Apps host реально умеет (`open-link`, `message`, `update-model-context`, `server resources`, `subscriptions`, `display modes`) и рекомендует лучший workflow для rich/hybrid/text-first host surface;
+- dashboard также сохраняет последнее локальное view state в браузерном storage и восстанавливает его при следующем открытии, если новый URI не переопределяет эти поля явно;
+- dashboard также показывает auth escalation surface: auth discovery, resource metadata и host actions для recovery у protected tools;
+- dashboard также умеет безопасно проверять наличие нового release из Apps runtime через `Check updates`, не пытаясь self-replace живой MCP server process;
+- prompts `mail`, `reply-with-context`, `calendar` и `disk` теперь могут вести клиента и через реальные MCP write-tools, а не только через read-only анализ;
+- prompts дополнены MCP completions, так что Apps-capable и text MCP clients могут подсказывать аргументы без hardcoded client-side логики;
+- обычные текстовые MCP-клиенты продолжают работать без UI.
+
+</details>
 
 ## Где лежат настройки
 

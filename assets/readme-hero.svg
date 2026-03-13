@@ -1,0 +1,61 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="1180" y2="600" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF4CC"/>
+      <stop offset="0.42" stop-color="#D8F3FF"/>
+      <stop offset="1" stop-color="#E9E2FF"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="140" y1="120" x2="1120" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#162035"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFB703"/>
+      <stop offset="1" stop-color="#FB8500"/>
+    </linearGradient>
+    <filter id="shadow" x="96" y="86" width="1088" height="468" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="10"/>
+      <feGaussianBlur stdDeviation="22"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.027451 0 0 0 0 0.0470588 0 0 0 0 0.101961 0 0 0 0.25 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" rx="32" fill="url(#bg)"/>
+  <circle cx="150" cy="112" r="88" fill="#FFD166" fill-opacity="0.24"/>
+  <circle cx="1110" cy="520" r="118" fill="#7BDFF2" fill-opacity="0.18"/>
+  <circle cx="1000" cy="110" r="72" fill="#B8F2E6" fill-opacity="0.22"/>
+
+  <g filter="url(#shadow)">
+    <rect x="140" y="120" width="1000" height="380" rx="28" fill="url(#panel)"/>
+  </g>
+
+  <rect x="188" y="172" width="176" height="34" rx="17" fill="#202B44"/>
+  <circle cx="214" cy="189" r="7" fill="#FFB703"/>
+  <text x="232" y="195" fill="#EAF2FF" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">CLI + MCP + Apps</text>
+
+  <text x="188" y="278" fill="#FFFFFF" font-family="Verdana, Arial, sans-serif" font-size="74" font-weight="800">yacli</text>
+  <text x="188" y="330" fill="#A8B8D8" font-family="Verdana, Arial, sans-serif" font-size="28" font-weight="600">Yandex Mail, Calendar, Disk</text>
+  <text x="188" y="372" fill="#D9E3F6" font-family="Verdana, Arial, sans-serif" font-size="27">One product surface for humans, agents, and MCP hosts.</text>
+
+  <rect x="188" y="406" width="292" height="54" rx="14" fill="url(#accent)"/>
+  <text x="214" y="440" fill="#16120A" font-family="Verdana, Arial, sans-serif" font-size="24" font-weight="800">mail  calendar  disk</text>
+
+  <rect x="738" y="174" width="340" height="76" rx="18" fill="#111A2C" stroke="#2B3A58"/>
+  <text x="764" y="204" fill="#7BDFF2" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Agent-ready</text>
+  <text x="764" y="232" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Claude, Codex, Gemini, Cursor</text>
+
+  <rect x="738" y="268" width="340" height="76" rx="18" fill="#111A2C" stroke="#2B3A58"/>
+  <text x="764" y="298" fill="#B8F2E6" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">MCP Apps</text>
+  <text x="764" y="326" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Dashboard, prompts, skills, resources</text>
+
+  <rect x="738" y="362" width="340" height="76" rx="18" fill="#111A2C" stroke="#2B3A58"/>
+  <text x="764" y="392" fill="#FFD166" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Cross-service workflows</text>
+  <text x="764" y="420" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Mail invite to calendar. File to mail.</text>
+
+  <text x="188" y="548" fill="#31415F" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Rust  |  Linux ARM64 releases  |  Auto-update  |  Streamable HTTP  |  Stdio JSONL</text>
+</svg>
