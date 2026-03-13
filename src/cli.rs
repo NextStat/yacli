@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -40,6 +40,13 @@ pub enum GuideTopicArg {
     Disk,
 }
 
+const HELP_TEMPLATE: &str = "\
+{before-help}{about-with-newline}\
+Использование:\n    {usage}\n\
+\n\
+{all-args}{after-help}\
+";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "yacli",
@@ -47,7 +54,14 @@ pub enum GuideTopicArg {
     about = "Командная строка для Яндекс Почты, Календаря и Диска"
 )]
 pub struct Cli {
-    #[arg(long, value_enum, global = true, default_value_t = OutputFormat::Json)]
+    #[arg(
+        long,
+        value_enum,
+        global = true,
+        default_value_t = OutputFormat::Json,
+        value_name = "ФОРМАТ",
+        help = "Формат вывода"
+    )]
     pub format: OutputFormat,
     #[command(subcommand)]
     pub command: Command,
@@ -64,7 +78,7 @@ pub enum Command {
     Add {
         #[arg(value_name = "EMAIL")]
         email: String,
-        #[arg(value_name = "ALIAS")]
+        #[arg(value_name = "ПСЕВДОНИМ")]
         name: Option<String>,
     },
     /// Показать все настроенные аккаунты.
@@ -78,19 +92,20 @@ pub enum Command {
     Whoami,
     /// Показать, что подключено у аккаунта.
     Status {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     /// Подключить Почту, Диск или Календарь.
     Login {
+        #[arg(value_name = "СЕРВИС")]
         service: Option<AuthServiceArg>,
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
         #[arg(long, hide = true)]
         client_id: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ПЕРЕМЕННАЯ")]
         env_var: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ПАРОЛЬ")]
         app_password: Option<String>,
         #[arg(long, hide = true)]
         code: Option<String>,
@@ -99,8 +114,9 @@ pub enum Command {
     },
     /// Отключить один сервис или все сервисы у аккаунта.
     Logout {
+        #[arg(value_name = "СЕРВИС")]
         service: Option<AuthServiceArg>,
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     #[command(hide = true)]
@@ -152,11 +168,11 @@ pub enum AccountCommand {
     },
     List,
     Show {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     Validate {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     Use {
@@ -168,19 +184,19 @@ pub enum AccountCommand {
 #[derive(Debug, Subcommand)]
 pub enum AuthCommand {
     Status {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     Login {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, value_name = "СЕРВИС")]
         service: Option<AuthServiceArg>,
         #[arg(long, hide = true)]
         client_id: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ПЕРЕМЕННАЯ")]
         env_var: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ПАРОЛЬ")]
         app_password: Option<String>,
         #[arg(long, hide = true)]
         code: Option<String>,
@@ -188,9 +204,9 @@ pub enum AuthCommand {
         login_hint: Option<String>,
     },
     Logout {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, value_name = "СЕРВИС")]
         service: Option<AuthServiceArg>,
     },
 }
@@ -204,36 +220,36 @@ pub enum DiskCommand {
     },
     /// Создать папку в приватном Диске.
     Mkdir {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(value_name = "PATH")]
+        #[arg(value_name = "ПУТЬ")]
         path: String,
     },
     /// Загрузить локальный файл в приватный Диск.
     Upload {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(value_name = "SOURCE")]
+        #[arg(value_name = "ФАЙЛ")]
         source: PathBuf,
-        #[arg(value_name = "PATH")]
+        #[arg(value_name = "ПУТЬ")]
         path: String,
         #[arg(long, default_value_t = false)]
         overwrite: bool,
     },
     /// Показать содержимое папки в приватном Диске.
     List {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(value_name = "PATH")]
+        #[arg(value_name = "ПУТЬ")]
         path: Option<String>,
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = 100, value_name = "ЧИСЛО")]
         limit: usize,
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 0, value_name = "СМЕЩЕНИЕ")]
         offset: u64,
     },
     /// Показать квоту и общую информацию о приватном Диске.
     Info {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
 }
@@ -242,22 +258,22 @@ pub enum DiskCommand {
 pub enum DiskPublicCommand {
     /// Показать информацию о публичном файле или папке.
     Show {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ССЫЛКА")]
         public_key: String,
-        #[arg(long)]
+        #[arg(long, value_name = "ПУТЬ")]
         path: Option<String>,
     },
     /// Скачать публичный файл Яндекс Диска.
     Download {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ССЫЛКА")]
         public_key: String,
-        #[arg(long)]
+        #[arg(long, value_name = "ПУТЬ")]
         path: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "ФАЙЛ")]
         output: PathBuf,
         #[arg(long, default_value_t = false)]
         force: bool,
@@ -268,91 +284,91 @@ pub enum DiskPublicCommand {
 pub enum MailCommand {
     /// Показать папки в почтовом ящике.
     Folders {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     /// Показать список писем. По умолчанию используется папка INBOX.
     List {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "INBOX")]
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
         folder: String,
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, value_name = "ЧИСЛО")]
         limit: usize,
     },
     /// Найти письма по тексту. По умолчанию поиск идет в INBOX.
     Search {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "INBOX")]
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
         folder: String,
-        #[arg(value_name = "TEXT")]
+        #[arg(value_name = "ТЕКСТ")]
         query: String,
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, value_name = "ЧИСЛО")]
         limit: usize,
     },
     /// Ответить на письмо по ID из `mail list` или `mail search`.
     Reply {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "INBOX")]
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
         folder: String,
         #[arg(value_name = "ID")]
         uid: u64,
-        #[arg(value_name = "TEXT")]
+        #[arg(value_name = "ТЕКСТ")]
         body: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "EMAIL")]
         cc: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "HTML")]
         html: Option<String>,
     },
     /// Переслать письмо по ID из `mail list` или `mail search`.
     Forward {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "INBOX")]
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
         folder: String,
         #[arg(value_name = "ID")]
         uid: u64,
-        #[arg(value_name = "TO")]
+        #[arg(value_name = "EMAIL")]
         to: String,
-        #[arg(value_name = "TEXT")]
+        #[arg(value_name = "ТЕКСТ")]
         body: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "EMAIL")]
         cc: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "EMAIL")]
         bcc: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "HTML")]
         html: Option<String>,
-        #[arg(long, default_value_t = 15 * 1024 * 1024)]
+        #[arg(long, default_value_t = 15 * 1024 * 1024, value_name = "БАЙТЫ")]
         max_source_bytes: u64,
     },
     /// Открыть письмо по ID из `mail list` или `mail search`.
     Read {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "INBOX")]
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
         folder: String,
         #[arg(value_name = "ID")]
         uid: u64,
-        #[arg(long, default_value_t = 15 * 1024 * 1024)]
+        #[arg(long, default_value_t = 15 * 1024 * 1024, value_name = "БАЙТЫ")]
         max_bytes: u64,
     },
     /// Отправить новое письмо.
     Send {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(value_name = "TO")]
+        #[arg(value_name = "EMAIL")]
         to: String,
-        #[arg(value_name = "SUBJECT")]
+        #[arg(value_name = "ТЕМА")]
         subject: String,
-        #[arg(value_name = "TEXT")]
+        #[arg(value_name = "ТЕКСТ")]
         body: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "EMAIL")]
         cc: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "EMAIL")]
         bcc: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "HTML")]
         html: Option<String>,
     },
 }
@@ -361,46 +377,100 @@ pub enum MailCommand {
 pub enum CalendarCommand {
     /// Показать доступные календари.
     Calendars {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
     },
     /// Показать события в окне дат.
     Events {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "default")]
+        #[arg(long, default_value = "default", value_name = "КАЛЕНДАРЬ")]
         calendar: String,
-        #[arg(value_name = "FROM")]
+        #[arg(value_name = "ОТ")]
         from: Option<String>,
-        #[arg(value_name = "TO")]
+        #[arg(value_name = "ДО")]
         to: Option<String>,
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, value_name = "ЧИСЛО")]
         limit: usize,
     },
     /// Создать событие в календаре.
     Create {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "default")]
+        #[arg(long, default_value = "default", value_name = "КАЛЕНДАРЬ")]
         calendar: String,
-        #[arg(value_name = "SUMMARY")]
+        #[arg(value_name = "НАЗВАНИЕ")]
         summary: String,
-        #[arg(value_name = "START")]
+        #[arg(value_name = "НАЧАЛО")]
         start: String,
-        #[arg(value_name = "END")]
+        #[arg(value_name = "КОНЕЦ")]
         end: String,
-        #[arg(long)]
+        #[arg(long, value_name = "ОПИСАНИЕ")]
         description: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_name = "МЕСТО")]
         location: Option<String>,
     },
     /// Удалить событие по ID.
     Delete {
-        #[arg(long)]
+        #[arg(long, value_name = "АККАУНТ")]
         account: Option<String>,
-        #[arg(long, default_value = "default")]
+        #[arg(long, default_value = "default", value_name = "КАЛЕНДАРЬ")]
         calendar: String,
         #[arg(value_name = "ID")]
         uid: String,
     },
+}
+
+pub fn parse_cli() -> Cli {
+    let command = build_cli_command();
+    let matches = command.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
+}
+
+pub fn build_cli_command() -> clap::Command {
+    localize_help(Cli::command(), true)
+}
+
+fn localize_help(mut command: clap::Command, is_root: bool) -> clap::Command {
+    command = command
+        .help_template(HELP_TEMPLATE)
+        .disable_help_flag(true)
+        .disable_help_subcommand(true)
+        .subcommand_help_heading("Команды")
+        .subcommand_value_name("КОМАНДА")
+        .next_help_heading("Параметры")
+        .mut_args(|arg| {
+            if arg.get_help_heading().is_none() {
+                let heading = if arg.is_positional() {
+                    "Аргументы"
+                } else {
+                    "Параметры"
+                };
+                arg.help_heading(heading)
+            } else {
+                arg
+            }
+        });
+
+    command = command.arg(
+        Arg::new("help")
+            .short('h')
+            .long("help")
+            .action(ArgAction::Help)
+            .help("Показать справку")
+            .help_heading("Параметры"),
+    );
+
+    if is_root {
+        command = command.disable_version_flag(true).arg(
+            Arg::new("version")
+                .short('V')
+                .long("version")
+                .action(ArgAction::Version)
+                .help("Показать версию")
+                .help_heading("Параметры"),
+        );
+    }
+
+    command.mut_subcommands(|subcommand| localize_help(subcommand, false))
 }

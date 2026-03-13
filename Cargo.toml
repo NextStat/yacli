@@ -1,6 +1,6 @@
 [package]
 name = "yacli"
-version = "0.1.31"
+version = "0.1.32"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/NextStat/yacli"

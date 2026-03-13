@@ -220,6 +220,10 @@ fn top_level_help_hides_agent_guide_command() {
         .args(["--help"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Использование:"))
+        .stdout(predicate::str::contains("Команды:"))
+        .stdout(predicate::str::contains("Параметры:"))
+        .stdout(predicate::str::contains("[OPTIONS] <КОМАНДА>"))
         .stdout(predicate::str::contains("add"))
         .stdout(predicate::str::contains("login"))
         .stdout(predicate::str::contains("mail"))
@@ -228,7 +232,14 @@ fn top_level_help_hides_agent_guide_command() {
         .stdout(predicate::str::contains("Письма и папки Яндекс Почты"))
         .stdout(predicate::str::contains("Календари и события Яндекс Календаря"))
         .stdout(predicate::str::contains("Файлы и папки Яндекс Диска"))
-        .stdout(predicate::str::contains("guide").not());
+        .stdout(predicate::str::contains("guide").not())
+        .stdout(predicate::str::contains("Usage:").not())
+        .stdout(predicate::str::contains("Commands:").not())
+        .stdout(predicate::str::contains("Options:").not())
+        .stdout(predicate::str::contains("Arguments:").not())
+        .stdout(predicate::str::contains("Print help").not())
+        .stdout(predicate::str::contains("Print version").not())
+        .stdout(predicate::str::contains("Print this message or the help of the given subcommand(s)").not());
 }
 
 #[test]
@@ -237,13 +248,12 @@ fn mail_read_help_uses_positional_id() {
         .args(["mail", "read", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Usage: yacli mail read [OPTIONS] <ID>",
-        ))
+        .stdout(predicate::str::contains("Использование:"))
+        .stdout(predicate::str::contains("yacli mail read [OPTIONS] <ID>"))
         .stdout(predicate::str::contains("--uid").not())
-        .stdout(predicate::str::contains(
-            "--folder <FOLDER>        [default: INBOX]",
-        ));
+        .stdout(predicate::str::contains("--folder <ПАПКА>"))
+        .stdout(predicate::str::contains("Команды:").not())
+        .stdout(predicate::str::contains("Print this message or the help of the given subcommand(s)").not());
 }
 
 #[test]
@@ -252,9 +262,7 @@ fn mail_search_help_uses_positional_text() {
         .args(["mail", "search", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Usage: yacli mail search [OPTIONS] <TEXT>",
-        ))
+        .stdout(predicate::str::contains("yacli mail search [OPTIONS] <ТЕКСТ>"))
         .stdout(predicate::str::contains("--query").not());
 }
 
@@ -264,9 +272,7 @@ fn mail_reply_help_uses_positional_text() {
         .args(["mail", "reply", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Usage: yacli mail reply [OPTIONS] <ID> [TEXT]",
-        ))
+        .stdout(predicate::str::contains("yacli mail reply [OPTIONS] <ID> [ТЕКСТ]"))
         .stdout(predicate::str::contains("--text").not());
 }
 
@@ -277,7 +283,7 @@ fn mail_forward_help_uses_positional_recipient_and_text() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli mail forward [OPTIONS] <ID> <TO> [TEXT]",
+            "yacli mail forward [OPTIONS] <ID> <EMAIL> [ТЕКСТ]",
         ))
         .stdout(predicate::str::contains("--to").not())
         .stdout(predicate::str::contains("--text").not());
@@ -290,7 +296,7 @@ fn mail_send_help_uses_positional_recipient_subject_and_text() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli mail send [OPTIONS] <TO> <SUBJECT> [TEXT]",
+            "yacli mail send [OPTIONS] <EMAIL> <ТЕМА> [ТЕКСТ]",
         ))
         .stdout(predicate::str::contains("--to").not())
         .stdout(predicate::str::contains("--subject").not())
@@ -304,11 +310,11 @@ fn calendar_events_help_uses_positional_dates() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli calendar events [OPTIONS] [FROM] [TO]",
+            "yacli calendar events [OPTIONS] [ОТ] [ДО]",
         ))
         .stdout(predicate::str::contains("--from").not())
         .stdout(predicate::str::contains("--to").not())
-        .stdout(predicate::str::contains("--calendar <CALENDAR>  [default: default]"));
+        .stdout(predicate::str::contains("--calendar <КАЛЕНДАРЬ>"));
 }
 
 #[test]
@@ -318,7 +324,7 @@ fn calendar_create_help_uses_positional_summary_and_dates() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli calendar create [OPTIONS] <SUMMARY> <START> <END>",
+            "yacli calendar create [OPTIONS] <НАЗВАНИЕ> <НАЧАЛО> <КОНЕЦ>",
         ))
         .stdout(predicate::str::contains("--summary").not())
         .stdout(predicate::str::contains("--start").not())
@@ -332,7 +338,7 @@ fn calendar_delete_help_uses_positional_id() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli calendar delete [OPTIONS] <ID>",
+            "yacli calendar delete [OPTIONS] <ID>",
         ))
         .stdout(predicate::str::contains("--id").not())
         .stdout(predicate::str::contains("--uid").not());
@@ -345,7 +351,7 @@ fn disk_list_help_uses_optional_positional_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli disk list [OPTIONS] [PATH]",
+            "yacli disk list [OPTIONS] [ПУТЬ]",
         ))
         .stdout(predicate::str::contains("--path").not());
 }
@@ -357,7 +363,7 @@ fn disk_mkdir_help_uses_positional_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli disk mkdir [OPTIONS] <PATH>",
+            "yacli disk mkdir [OPTIONS] <ПУТЬ>",
         ))
         .stdout(predicate::str::contains("--path").not());
 }
@@ -369,7 +375,7 @@ fn disk_upload_help_uses_positional_source_and_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Usage: yacli disk upload [OPTIONS] <SOURCE> <PATH>",
+            "yacli disk upload [OPTIONS] <ФАЙЛ> <ПУТЬ>",
         ))
         .stdout(predicate::str::contains("--source").not())
         .stdout(predicate::str::contains("--path").not());
@@ -388,7 +394,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.31");
+    assert_eq!(value["version"], "0.1.32");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
