@@ -295,13 +295,81 @@ fn mail_send_help_uses_positional_recipient_subject_and_text() {
 }
 
 #[test]
-fn calendar_delete_help_uses_id_flag() {
+fn calendar_events_help_uses_positional_dates() {
+    yacli()
+        .args(["calendar", "events", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli calendar events [OPTIONS] [FROM] [TO]",
+        ))
+        .stdout(predicate::str::contains("--from").not())
+        .stdout(predicate::str::contains("--to").not())
+        .stdout(predicate::str::contains("--calendar <CALENDAR>  [default: default]"));
+}
+
+#[test]
+fn calendar_create_help_uses_positional_summary_and_dates() {
+    yacli()
+        .args(["calendar", "create", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli calendar create [OPTIONS] <SUMMARY> <START> <END>",
+        ))
+        .stdout(predicate::str::contains("--summary").not())
+        .stdout(predicate::str::contains("--start").not())
+        .stdout(predicate::str::contains("--end").not());
+}
+
+#[test]
+fn calendar_delete_help_uses_positional_id() {
     yacli()
         .args(["calendar", "delete", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--id <ID>"))
+        .stdout(predicate::str::contains(
+            "Usage: yacli calendar delete [OPTIONS] <ID>",
+        ))
+        .stdout(predicate::str::contains("--id").not())
         .stdout(predicate::str::contains("--uid").not());
+}
+
+#[test]
+fn disk_list_help_uses_optional_positional_path() {
+    yacli()
+        .args(["disk", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli disk list [OPTIONS] [PATH]",
+        ))
+        .stdout(predicate::str::contains("--path").not());
+}
+
+#[test]
+fn disk_mkdir_help_uses_positional_path() {
+    yacli()
+        .args(["disk", "mkdir", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli disk mkdir [OPTIONS] <PATH>",
+        ))
+        .stdout(predicate::str::contains("--path").not());
+}
+
+#[test]
+fn disk_upload_help_uses_positional_source_and_path() {
+    yacli()
+        .args(["disk", "upload", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli disk upload [OPTIONS] <SOURCE> <PATH>",
+        ))
+        .stdout(predicate::str::contains("--source").not())
+        .stdout(predicate::str::contains("--path").not());
 }
 
 #[test]
@@ -317,7 +385,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.29");
+    assert_eq!(value["version"], "0.1.30");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
@@ -2509,20 +2577,7 @@ END:VCALENDAR]]></c:calendar-data>
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "calendar",
-            "events",
-            "--account",
-            "mock",
-            "--calendar",
-            "default",
-            "--from",
-            "2026-03-12",
-            "--to",
-            "2026-03-19",
-            "--limit",
-            "10",
-        ])
+        .args(["calendar", "events", "--account", "mock", "2026-03-12", "2026-03-19", "--limit", "10"])
         .assert()
         .success()
         .get_output()
@@ -2701,13 +2756,8 @@ END:VCALENDAR]]></c:calendar-data>
             "create",
             "--account",
             "mock",
-            "--calendar",
-            "default",
-            "--summary",
             "Синк команды",
-            "--start",
             "2026-03-12T09:00:00Z",
-            "--end",
             "2026-03-12T10:00:00Z",
             "--description",
             "Первая строка\nвторая",
@@ -2868,16 +2918,7 @@ END:VCALENDAR]]></c:calendar-data>
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "calendar",
-            "delete",
-            "--account",
-            "mock",
-            "--calendar",
-            "default",
-            "--id",
-            "event-1",
-        ])
+        .args(["calendar", "delete", "--account", "mock", "event-1"])
         .assert()
         .success()
         .get_output()
@@ -2907,22 +2948,11 @@ fn calendar_events_rejects_zero_limit() {
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "calendar",
-            "events",
-            "--account",
-            "mock",
-            "--calendar",
-            "default",
-            "--limit",
-            "0",
-        ])
+        .args(["calendar", "events", "--account", "mock", "--limit", "0"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains(
-            "calendar events --limit must be greater than zero",
-        ));
+        .stderr(predicate::str::contains("calendar events --limit должен быть больше нуля"));
 }
 
 #[test]
@@ -3012,9 +3042,7 @@ client_id = "client-123"
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains(
-            "disk list --limit must be greater than zero",
-        ));
+        .stderr(predicate::str::contains("disk list --limit должен быть больше нуля"));
 }
 
 #[test]
@@ -3085,18 +3113,7 @@ client_id = "client-123"
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "disk",
-            "list",
-            "--account",
-            "mock",
-            "--path",
-            "disk:/docs",
-            "--limit",
-            "2",
-            "--offset",
-            "1",
-        ])
+        .args(["disk", "list", "--account", "mock", "disk:/docs", "--limit", "2", "--offset", "1"])
         .assert()
         .success()
         .get_output()
@@ -3144,7 +3161,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["disk", "mkdir", "--account", "mock", "--path", "disk:/docs"])
+        .args(["disk", "mkdir", "--account", "mock", "disk:/docs"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"AUTH_ERROR\""))
@@ -3174,13 +3191,11 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["disk", "mkdir", "--account", "mock", "--path", ""])
+        .args(["disk", "mkdir", "--account", "mock", ""])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains(
-            "disk mkdir --path must not be empty",
-        ));
+        .stderr(predicate::str::contains("disk mkdir <PATH> не должен быть пустым"));
 }
 
 #[test]
@@ -3244,14 +3259,7 @@ client_id = "client-123"
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "disk",
-            "mkdir",
-            "--account",
-            "mock",
-            "--path",
-            "disk:/docs/new-folder",
-        ])
+        .args(["disk", "mkdir", "--account", "mock", "disk:/docs/new-folder"])
         .assert()
         .success()
         .get_output()
@@ -3290,22 +3298,11 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "disk",
-            "upload",
-            "--account",
-            "mock",
-            "--source",
-            source_path.to_str().expect("utf8 path"),
-            "--path",
-            "disk:/docs/empty.txt",
-        ])
+        .args(["disk", "upload", "--account", "mock", source_path.to_str().expect("utf8 path"), "disk:/docs/empty.txt"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
-        .stderr(predicate::str::contains(
-            "disk upload --source file must not be empty",
-        ));
+        .stderr(predicate::str::contains("disk upload: файл не должен быть пустым"));
 }
 
 #[test]
@@ -3383,16 +3380,7 @@ client_id = "client-123"
 
     let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "disk",
-            "upload",
-            "--account",
-            "mock",
-            "--source",
-            source_path.to_str().expect("utf8 path"),
-            "--path",
-            "disk:/docs/note.txt",
-        ])
+        .args(["disk", "upload", "--account", "mock", source_path.to_str().expect("utf8 path"), "disk:/docs/note.txt"])
         .assert()
         .success()
         .get_output()

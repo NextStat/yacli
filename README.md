@@ -126,31 +126,35 @@ yacli mail send person@example.com "Счет" "Отправляю счет" --cc
 ```bash
 yacli calendar calendars
 
-yacli calendar events \
-  --calendar default \
-  --from 2026-03-13 \
-  --to 2026-03-20 \
-  --limit 20
+yacli calendar events
+yacli calendar events 2026-03-13 2026-03-20 --limit 20
 
-yacli calendar create \
-  --calendar default \
-  --summary "Синк команды" \
-  --start 2026-03-13T09:00:00Z \
-  --end 2026-03-13T10:00:00Z
+yacli calendar create "Синк команды" 2026-03-13T09:00:00Z 2026-03-13T10:00:00Z
 
-yacli calendar delete \
-  --calendar default \
-  --id <id>
+yacli calendar delete <id>
 ```
+
+Что важно:
+
+- `calendar events` без дат показывает ближайшие 30 дней;
+- `calendar create` и `calendar delete` по умолчанию работают с календарем `default`;
+- если нужен другой календарь, добавьте `--calendar <id>`.
 
 ### Диск
 
 ```bash
 yacli disk info
-yacli disk list --path disk:/ --limit 50
-yacli disk mkdir --path disk:/docs/archive
-yacli disk upload --source ./report.pdf --path disk:/docs/archive/report.pdf
+yacli disk list
+yacli disk list disk:/docs --limit 50
+yacli disk mkdir disk:/docs/archive
+yacli disk upload ./report.pdf disk:/docs/archive/report.pdf
 ```
+
+Что важно:
+
+- `disk list` без пути показывает корень `disk:/`;
+- `disk mkdir` принимает только путь папки;
+- `disk upload` принимает два позиционных аргумента: локальный файл и путь на Диске.
 
 ### Публичный Диск
 

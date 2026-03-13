@@ -260,12 +260,12 @@ pub fn fetch_private_resource(
 ) -> Result<DiskResource> {
     if request.limit == 0 {
         return Err(YacliError::Validation(
-            "disk list --limit must be greater than zero".to_string(),
+            "disk list --limit должен быть больше нуля".to_string(),
         ));
     }
     if request.path.trim().is_empty() {
         return Err(YacliError::Validation(
-            "disk list --path must not be empty".to_string(),
+            "disk list [PATH] не должен быть пустым".to_string(),
         ));
     }
 
@@ -300,7 +300,7 @@ pub fn create_private_directory(
     let path = request.path.trim();
     if path.is_empty() {
         return Err(YacliError::Validation(
-            "disk mkdir --path must not be empty".to_string(),
+            "disk mkdir <PATH> не должен быть пустым".to_string(),
         ));
     }
 
@@ -337,7 +337,7 @@ pub fn upload_private_resource(
     let remote_path = request.path.trim();
     if remote_path.is_empty() {
         return Err(YacliError::Validation(
-            "disk upload --path must not be empty".to_string(),
+            "disk upload <PATH> не должен быть пустым".to_string(),
         ));
     }
 
@@ -592,7 +592,7 @@ fn analyze_upload_source(path: &Path) -> Result<UploadSourceMeta> {
     let metadata = fs::metadata(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             YacliError::Validation(format!(
-                "disk upload --source file not found: {}",
+                "disk upload: файл не найден: {}",
                 path.display()
             ))
         } else {
@@ -602,14 +602,14 @@ fn analyze_upload_source(path: &Path) -> Result<UploadSourceMeta> {
 
     if !metadata.is_file() {
         return Err(YacliError::Validation(format!(
-            "disk upload --source must point to a file: {}",
+            "disk upload: путь должен указывать на файл: {}",
             path.display()
         )));
     }
 
     if metadata.len() == 0 {
         return Err(YacliError::Validation(
-            "disk upload --source file must not be empty".to_string(),
+            "disk upload: файл не должен быть пустым".to_string(),
         ));
     }
 

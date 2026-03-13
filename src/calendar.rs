@@ -80,12 +80,12 @@ pub fn parse_event_window(
 ) -> Result<CalendarEventWindow> {
     if limit == 0 {
         return Err(YacliError::Validation(
-            "calendar events --limit must be greater than zero".to_string(),
+            "calendar events --limit должен быть больше нуля".to_string(),
         ));
     }
     if limit > 100 {
         return Err(YacliError::Validation(
-            "calendar events --limit must be 100 or less".to_string(),
+            "calendar events --limit не должен быть больше 100".to_string(),
         ));
     }
 
@@ -98,17 +98,17 @@ pub fn parse_event_window(
         })?;
 
     let from = match from {
-        Some(value) => parse_time_boundary(value, "calendar events --from")?,
+        Some(value) => parse_time_boundary(value, "calendar events <FROM>")?,
         None => default_from,
     };
     let to = match to {
-        Some(value) => parse_time_boundary(value, "calendar events --to")?,
+        Some(value) => parse_time_boundary(value, "calendar events <TO>")?,
         None => default_to,
     };
 
     if to <= from {
         return Err(YacliError::Validation(
-            "calendar events --to must be greater than --from".to_string(),
+            "calendar events <TO> должен быть позже <FROM>".to_string(),
         ));
     }
 
@@ -318,9 +318,9 @@ impl CaldavClient {
 
         let summary = request.summary.trim();
         if summary.is_empty() {
-            return Err(YacliError::Validation(
-                "calendar create --summary must not be empty".to_string(),
-            ));
+                return Err(YacliError::Validation(
+                    "calendar create <SUMMARY> не должен быть пустым".to_string(),
+                ));
         }
 
         let uid = generate_calendar_uid();
@@ -812,14 +812,14 @@ fn build_calendar_uid_query_xml(uid: &str) -> String {
 }
 
 fn parse_create_event_window(start: &str, end: &str) -> Result<ParsedCalendarWriteWindow> {
-    let start = parse_calendar_boundary(start, "calendar create --start")?;
-    let end = parse_calendar_boundary(end, "calendar create --end")?;
+    let start = parse_calendar_boundary(start, "calendar create <START>")?;
+    let end = parse_calendar_boundary(end, "calendar create <END>")?;
 
     match (start, end) {
         (ParsedCalendarBoundary::Date(start), ParsedCalendarBoundary::Date(end)) => {
             if end <= start {
                 return Err(YacliError::Validation(
-                    "calendar create --end must be greater than --start".to_string(),
+                    "calendar create <END> должен быть позже <START>".to_string(),
                 ));
             }
             Ok(ParsedCalendarWriteWindow {
@@ -833,7 +833,7 @@ fn parse_create_event_window(start: &str, end: &str) -> Result<ParsedCalendarWri
         (ParsedCalendarBoundary::DateTime(start), ParsedCalendarBoundary::DateTime(end)) => {
             if end <= start {
                 return Err(YacliError::Validation(
-                    "calendar create --end must be greater than --start".to_string(),
+                    "calendar create <END> должен быть позже <START>".to_string(),
                 ));
             }
             Ok(ParsedCalendarWriteWindow {

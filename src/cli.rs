@@ -203,16 +203,16 @@ pub enum DiskCommand {
     Mkdir {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(value_name = "PATH")]
         path: String,
     },
     /// Загрузить локальный файл в приватный Диск.
     Upload {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(value_name = "SOURCE")]
         source: PathBuf,
-        #[arg(long)]
+        #[arg(value_name = "PATH")]
         path: String,
         #[arg(long, default_value_t = false)]
         overwrite: bool,
@@ -221,8 +221,8 @@ pub enum DiskCommand {
     List {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long, default_value = "disk:/")]
-        path: String,
+        #[arg(value_name = "PATH")]
+        path: Option<String>,
         #[arg(long, default_value_t = 100)]
         limit: usize,
         #[arg(long, default_value_t = 0)]
@@ -365,11 +365,11 @@ pub enum CalendarCommand {
     Events {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(long, default_value = "default")]
         calendar: String,
-        #[arg(long)]
+        #[arg(value_name = "FROM")]
         from: Option<String>,
-        #[arg(long)]
+        #[arg(value_name = "TO")]
         to: Option<String>,
         #[arg(long, default_value_t = 20)]
         limit: usize,
@@ -378,13 +378,13 @@ pub enum CalendarCommand {
     Create {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(long, default_value = "default")]
         calendar: String,
-        #[arg(long)]
+        #[arg(value_name = "SUMMARY")]
         summary: String,
-        #[arg(long)]
+        #[arg(value_name = "START")]
         start: String,
-        #[arg(long)]
+        #[arg(value_name = "END")]
         end: String,
         #[arg(long)]
         description: Option<String>,
@@ -395,9 +395,9 @@ pub enum CalendarCommand {
     Delete {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long)]
+        #[arg(long, default_value = "default")]
         calendar: String,
-        #[arg(long = "id", value_name = "ID")]
+        #[arg(value_name = "ID")]
         uid: String,
     },
 }

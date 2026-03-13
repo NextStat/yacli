@@ -757,6 +757,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
             limit,
             offset,
         } => {
+            let path = path.unwrap_or_else(|| "disk:/".to_string());
             let (resolved_account, base_url, access_token) =
                 resolve_disk_private_context(account.as_deref())?;
             let resource = fetch_private_resource(
@@ -1533,10 +1534,11 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
         GuideCommandEntry {
             path: "calendar events",
             topic: "calendar",
-            summary: "Показать события выбранного календаря в окне дат.",
+            summary: "Показать события в окне дат. По умолчанию используется календарь default и ближайшие 30 дней.",
             requires_account: true,
             examples: vec![
-                "yacli calendar events --calendar default --from 2026-03-12 --to 2026-03-19 --limit 20",
+                "yacli calendar events",
+                "yacli calendar events 2026-03-12 2026-03-19 --limit 20",
             ],
         },
         GuideCommandEntry {
@@ -1545,7 +1547,7 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             summary: "Создать событие в выбранном календаре через CalDAV PUT.",
             requires_account: true,
             examples: vec![
-                "yacli calendar create --calendar default --summary \"Синк\" --start 2026-03-12T09:00:00Z --end 2026-03-12T10:00:00Z",
+                "yacli calendar create \"Синк\" 2026-03-12T09:00:00Z 2026-03-12T10:00:00Z",
             ],
         },
         GuideCommandEntry {
@@ -1553,28 +1555,28 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             topic: "calendar",
             summary: "Удалить событие по ID из выбранного календаря.",
             requires_account: true,
-            examples: vec!["yacli calendar delete --calendar default --id <id>"],
+            examples: vec!["yacli calendar delete <id>"],
         },
         GuideCommandEntry {
             path: "disk list",
             topic: "disk",
-            summary: "Показать содержимое папки или метаданные ресурса в приватном Яндекс Диске.",
+            summary: "Показать содержимое папки или метаданные ресурса в приватном Яндекс Диске. По умолчанию это root `disk:/`.",
             requires_account: true,
-            examples: vec!["yacli disk list --path disk:/ --limit 50"],
+            examples: vec!["yacli disk list", "yacli disk list disk:/docs --limit 50"],
         },
         GuideCommandEntry {
             path: "disk mkdir",
             topic: "disk",
             summary: "Создать папку в приватном Яндекс Диске через REST API.",
             requires_account: true,
-            examples: vec!["yacli disk mkdir --path disk:/docs/archive"],
+            examples: vec!["yacli disk mkdir disk:/docs/archive"],
         },
         GuideCommandEntry {
             path: "disk upload",
             topic: "disk",
             summary: "Загрузить локальный файл в приватный Яндекс Диск.",
             requires_account: true,
-            examples: vec!["yacli disk upload --source ./report.pdf --path disk:/docs/report.pdf"],
+            examples: vec!["yacli disk upload ./report.pdf disk:/docs/report.pdf"],
         },
         GuideCommandEntry {
             path: "disk info",
@@ -1672,7 +1674,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli disk list --path disk:/ --limit 50",
+                "yacli disk list",
             ],
         },
         GuideWorkflowEntry {
@@ -1683,9 +1685,9 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli disk mkdir --path disk:/docs/archive",
-                "yacli disk upload --source ./report.pdf --path disk:/docs/archive/report.pdf",
-                "yacli disk list --path disk:/docs/archive --limit 50",
+                "yacli disk mkdir disk:/docs/archive",
+                "yacli disk upload ./report.pdf disk:/docs/archive/report.pdf",
+                "yacli disk list disk:/docs/archive --limit 50",
             ],
         },
         GuideWorkflowEntry {
@@ -1697,9 +1699,9 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
                 "yacli add me@yandex.ru",
                 "yacli login",
                 "yacli disk info",
-                "yacli disk list --path disk:/ --limit 50",
-                "yacli disk mkdir --path disk:/docs/archive",
-                "yacli disk upload --source ./report.pdf --path disk:/docs/archive/report.pdf",
+                "yacli disk list",
+                "yacli disk mkdir disk:/docs/archive",
+                "yacli disk upload ./report.pdf disk:/docs/archive/report.pdf",
             ],
         },
         GuideWorkflowEntry {
@@ -1739,7 +1741,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
                 "yacli add me@yandex.ru",
                 "yacli login calendar --app-password <app-password>",
                 "yacli calendar calendars",
-                "yacli calendar events --calendar default --from 2026-03-12 --to 2026-03-19 --limit 20",
+                "yacli calendar events",
             ],
         },
         GuideWorkflowEntry {
@@ -1750,8 +1752,8 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login calendar --app-password <app-password>",
-                "yacli calendar create --calendar default --summary \"Синк\" --start 2026-03-12T09:00:00Z --end 2026-03-12T10:00:00Z",
-                "yacli calendar delete --calendar default --id <id>",
+                "yacli calendar create \"Синк\" 2026-03-12T09:00:00Z 2026-03-12T10:00:00Z",
+                "yacli calendar delete <id>",
             ],
         },
     ]
