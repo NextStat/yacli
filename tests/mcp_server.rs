@@ -36,6 +36,17 @@ fn mcp_request(id: u64, method: &str, params: Value) -> String {
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
 }
 
+fn json_line_request(id: u64, method: &str, params: Value) -> String {
+    serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    }))
+    .expect("request json")
+        + "\n"
+}
+
 fn mcp_notification(method: &str, params: Value) -> String {
     let body = serde_json::to_string(&json!({
         "jsonrpc": "2.0",
@@ -44,6 +55,16 @@ fn mcp_notification(method: &str, params: Value) -> String {
     }))
     .expect("notification json");
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
+}
+
+fn json_line_notification(method: &str, params: Value) -> String {
+    serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    }))
+    .expect("notification json")
+        + "\n"
 }
 
 fn initialize_request(ui_enabled: bool) -> String {
@@ -70,6 +91,30 @@ fn initialize_request(ui_enabled: bool) -> String {
     )
 }
 
+fn json_line_initialize_request(ui_enabled: bool) -> String {
+    let capabilities = if ui_enabled {
+        json!({
+            "extensions": {
+                "io.modelcontextprotocol/ui": {
+                    "mimeTypes": [APP_RESOURCE_MIME_TYPE]
+                }
+            }
+        })
+    } else {
+        json!({})
+    };
+
+    json_line_request(
+        1,
+        "initialize",
+        json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": capabilities,
+            "clientInfo": { "name": "claude-code", "version": "2.1.75" }
+        }),
+    )
+}
+
 fn parse_responses(stdout: &[u8]) -> Vec<Value> {
     let raw = String::from_utf8(stdout.to_vec()).expect("utf8 output");
     let mut remaining = raw.as_str();
@@ -89,6 +134,15 @@ fn parse_responses(stdout: &[u8]) -> Vec<Value> {
     }
 
     responses
+}
+
+fn parse_json_line_responses(stdout: &[u8]) -> Vec<Value> {
+    String::from_utf8(stdout.to_vec())
+        .expect("utf8 output")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("valid json-rpc response"))
+        .collect()
 }
 
 fn read_response(reader: &mut dyn BufRead) -> Value {
@@ -144,6 +198,44 @@ fn mcp_stdio_initialize_returns_capabilities() {
     assert_eq!(
         response["result"]["capabilities"]["resources"]["subscribe"],
         true
+    );
+}
+
+#[test]
+fn mcp_stdio_accepts_claude_code_json_line_messages() {
+    let input = [
+        json_line_initialize_request(true),
+        json_line_notification("notifications/initialized", json!({})),
+        json_line_request(2, "tools/list", json!({})),
+    ]
+    .concat();
+
+    let output = yacli()
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let raw_output = String::from_utf8(output.clone()).expect("utf8 output");
+    assert!(!raw_output.contains("Content-Length:"));
+
+    let responses = parse_json_line_responses(&output);
+    assert_eq!(responses[0]["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "yacli");
+
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    let snapshot_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.app.snapshot")
+        .expect("snapshot tool");
+    assert_eq!(
+        snapshot_tool["_meta"]["ui"]["resourceUri"],
+        APP_RESOURCE_URI
     );
 }
 

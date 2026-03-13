@@ -59,7 +59,7 @@ yacli update --check
 Если нужен private release mirror или локальный test feed, можно переопределить base URL:
 
 ```bash
-export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.2.0'
+export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.2.1'
 yacli update --check
 ```
 
@@ -256,6 +256,8 @@ yacli guide --topic mail
 yacli mcp
 ```
 
+`stdio` transport автоматически совместим и с legacy `Content-Length` framing, и с line-delimited JSON, который используют актуальные версии Claude Code. Сервер отвечает в том же формате, в котором пришёл входящий MCP request, поэтому один и тот же `yacli mcp` можно безопасно регистрировать и в старых, и в новых stdio-клиентах.
+
 Если нужен локальный HTTP transport для Apps-capable клиентов:
 
 ```bash
@@ -350,6 +352,7 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 - для `Cursor`, `Zed`, `Windsurf`, `Warp` и `Antigravity` current stable install path в `yacli` остаётся `stdio`-ориентированным;
 - skills автоматически устанавливаются для `Claude Code`, `Codex`, `Gemini CLI`, `Cursor`, `Windsurf`, `Warp` и `Antigravity`; для `Zed` MCP registration поддерживается, но отдельного skills surface сейчас нет;
 - сервер может работать и как `stdio`, и как локальный HTTP transport на `/mcp`;
+- `stdio` transport автоматически согласует framing между `Content-Length` и JSONL, поэтому Claude Code подключается без отдельного compatibility mode;
 - HTTP transport поддерживает session-scoped SSE stream для server-push notifications;
 - если задан `YACLI_MCP_HTTP_BEARER_TOKEN`, защищённые HTTP tool calls требуют `Authorization: Bearer <token>`;
 - `YACLI_MCP_HTTP_AUTH_ISSUER` опционален и нужен только если вы хотите включить Protected Resource Metadata и `resource_metadata` в `WWW-Authenticate` challenge;

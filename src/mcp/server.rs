@@ -77,6 +77,7 @@ struct SessionState {
     ui_enabled: bool,
     supports_resource_subscriptions: bool,
     resource_subscriptions: BTreeSet<String>,
+    stdio_message_format: StdioMessageFormat,
 }
 
 impl SessionState {
@@ -86,6 +87,7 @@ impl SessionState {
             ui_enabled: false,
             supports_resource_subscriptions: true,
             resource_subscriptions: BTreeSet::new(),
+            stdio_message_format: StdioMessageFormat::ContentLength,
         }
     }
 
@@ -95,6 +97,7 @@ impl SessionState {
             ui_enabled: false,
             supports_resource_subscriptions: true,
             resource_subscriptions: BTreeSet::new(),
+            stdio_message_format: StdioMessageFormat::ContentLength,
         }
     }
 }
@@ -152,9 +155,15 @@ impl HttpSession {
 }
 
 enum InputEvent {
-    Message(Value),
+    Message(Value, StdioMessageFormat),
     Eof,
     Error(YacliError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StdioMessageFormat {
+    ContentLength,
+    JsonLine,
 }
 
 #[derive(Clone)]
@@ -232,8 +241,8 @@ pub fn serve_stdio() -> Result<()> {
 
         loop {
             match read_message(&mut reader) {
-                Ok(Some(message)) => {
-                    if tx.send(InputEvent::Message(message)).is_err() {
+                Ok(Some((message, format))) => {
+                    if tx.send(InputEvent::Message(message, format)).is_err() {
                         break;
                     }
                 }
@@ -251,7 +260,8 @@ pub fn serve_stdio() -> Result<()> {
 
     loop {
         match rx.recv_timeout(RESOURCE_POLL_INTERVAL) {
-            Ok(InputEvent::Message(message)) => {
+            Ok(InputEvent::Message(message, format)) => {
+                session.stdio_message_format = format;
                 if message.get("method").is_none() {
                     continue;
                 }
@@ -290,7 +300,7 @@ pub fn serve_stdio() -> Result<()> {
                         }
                     }),
                 };
-                write_message(&mut writer, &response)?;
+                write_message(&mut writer, &response, session.stdio_message_format)?;
             }
             Ok(InputEvent::Eof) => break,
             Ok(InputEvent::Error(err)) => return Err(err),
@@ -299,7 +309,7 @@ pub fn serve_stdio() -> Result<()> {
         }
 
         for notification in poller.collect_notifications(&session.resource_subscriptions)? {
-            write_message(&mut writer, &notification)?;
+            write_message(&mut writer, &notification, session.stdio_message_format)?;
         }
     }
 
@@ -1672,7 +1682,7 @@ fn tool_requires_http_auth(tool_name: &str) -> bool {
         || tool_name.starts_with("yacli.disk.")
 }
 
-fn read_message(reader: &mut dyn BufRead) -> Result<Option<Value>> {
+fn read_message(reader: &mut dyn BufRead) -> Result<Option<(Value, StdioMessageFormat)>> {
     let mut content_length = None::<usize>;
     let mut line = String::new();
 
@@ -1682,12 +1692,23 @@ fn read_message(reader: &mut dyn BufRead) -> Result<Option<Value>> {
         if bytes == 0 {
             return Ok(None);
         }
-        if line == "\r\n" || line == "\n" {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             break;
         }
 
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("Content-Length:") {
+        if content_length.is_none() && matches!(trimmed.as_bytes().first(), Some(b'{' | b'[')) {
+            let payload = serde_json::from_str::<Value>(trimmed).map_err(|err| {
+                YacliError::Serialization(format!("invalid JSON-RPC payload: {err}"))
+            })?;
+            return Ok(Some((payload, StdioMessageFormat::JsonLine)));
+        }
+
+        if let Some(value) = trimmed
+            .split_once(':')
+            .filter(|(name, _)| name.eq_ignore_ascii_case("Content-Length"))
+            .map(|(_, value)| value)
+        {
             let parsed = value.trim().parse::<usize>().map_err(|err| {
                 YacliError::Serialization(format!("invalid Content-Length header: {err}"))
             })?;
@@ -1700,15 +1721,27 @@ fn read_message(reader: &mut dyn BufRead) -> Result<Option<Value>> {
     let mut payload = vec![0_u8; length];
     reader.read_exact(&mut payload)?;
     serde_json::from_slice::<Value>(&payload)
-        .map(Some)
+        .map(|value| Some((value, StdioMessageFormat::ContentLength)))
         .map_err(|err| YacliError::Serialization(format!("invalid JSON-RPC payload: {err}")))
 }
 
-fn write_message(writer: &mut dyn Write, payload: &Value) -> Result<()> {
+fn write_message(
+    writer: &mut dyn Write,
+    payload: &Value,
+    format: StdioMessageFormat,
+) -> Result<()> {
     let encoded =
         serde_json::to_vec(payload).map_err(|err| YacliError::Serialization(err.to_string()))?;
-    write!(writer, "Content-Length: {}\r\n\r\n", encoded.len())?;
-    writer.write_all(&encoded)?;
+    match format {
+        StdioMessageFormat::ContentLength => {
+            write!(writer, "Content-Length: {}\r\n\r\n", encoded.len())?;
+            writer.write_all(&encoded)?;
+        }
+        StdioMessageFormat::JsonLine => {
+            writer.write_all(&encoded)?;
+            writer.write_all(b"\n")?;
+        }
+    }
     writer.flush()?;
     Ok(())
 }
