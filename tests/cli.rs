@@ -225,6 +225,9 @@ fn top_level_help_hides_agent_guide_command() {
         .stdout(predicate::str::contains("mail"))
         .stdout(predicate::str::contains("calendar"))
         .stdout(predicate::str::contains("disk"))
+        .stdout(predicate::str::contains("Письма и папки Яндекс Почты"))
+        .stdout(predicate::str::contains("Календари и события Яндекс Календаря"))
+        .stdout(predicate::str::contains("Файлы и папки Яндекс Диска"))
         .stdout(predicate::str::contains("guide").not());
 }
 
@@ -385,7 +388,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.30");
+    assert_eq!(value["version"], "0.1.31");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
@@ -789,6 +792,41 @@ fn auth_status_reports_missing_and_present_env_refs() {
         value["services"]["disk"]["credential_state"],
         "not_configured"
     );
+}
+
+#[test]
+fn status_table_uses_russian_labels_for_people() {
+    let temp = tempdir().expect("tempdir");
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "account",
+            "add",
+            "personal",
+            "me@yandex.ru",
+            "--use",
+            "--mail-credential-ref",
+            "env:YACLI_MAIL_SECRET",
+        ])
+        .assert()
+        .success();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_MAIL_SECRET", "ready")
+        .args(["--format", "table", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let table = String::from_utf8(output).expect("utf8");
+    assert!(table.contains("СЛУЖБА\tСТАТУС\tПОДРОБНОСТИ"));
+    assert!(table.contains("Почта\tПодключено\tиспользуется переменная окружения YACLI_MAIL_SECRET"));
+    assert!(table.contains("Календарь\tНе подключено\tслужба еще не подключена"));
+    assert!(table.contains("Диск\tНе подключено\tслужба еще не подключена"));
 }
 
 #[test]

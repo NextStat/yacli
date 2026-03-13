@@ -368,12 +368,14 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                 let mut lines = vec![
                     format!("ACCOUNT\t{}", name),
                     format!("EMAIL\t{}", account.email),
-                    "SERVICE\tSTATE\tDETAIL".to_string(),
+                    "СЛУЖБА\tСТАТУС\tПОДРОБНОСТИ".to_string(),
                 ];
                 for (service, state) in &services {
                     lines.push(format!(
                         "{}\t{}\t{}",
-                        service, state.credential_state, state.detail
+                        service_label(service),
+                        credential_state_label(state.credential_state),
+                        state.detail
                     ));
                 }
                 lines.join("\n")
@@ -1317,19 +1319,19 @@ fn auth_state(
         None => CredentialState {
             credential_ref: None,
             credential_state: "not_configured",
-            detail: format!("{service} has no credential_ref configured"),
+            detail: "служба еще не подключена".to_string(),
         },
         Some(raw) => match parse_credential_ref(raw) {
             Some(CredentialReference::Env(var_name)) => match std::env::var_os(var_name) {
                 Some(_) => CredentialState {
                     credential_ref: Some(raw.to_string()),
                     credential_state: "env_present",
-                    detail: format!("{var_name} is set"),
+                    detail: format!("используется переменная окружения {var_name}"),
                 },
                 None => CredentialState {
                     credential_ref: Some(raw.to_string()),
                     credential_state: "env_missing",
-                    detail: format!("{var_name} is not set"),
+                    detail: format!("переменная окружения {var_name} не задана"),
                 },
             },
             Some(CredentialReference::Store(store_service)) => {
@@ -1337,7 +1339,7 @@ fn auth_state(
                     return CredentialState {
                         credential_ref: Some(raw.to_string()),
                         credential_state: "store_mismatch",
-                        detail: format!("credential_ref points to store:{store_service}"),
+                        detail: format!("ссылка указывает на store:{store_service}"),
                     };
                 }
 
@@ -1349,7 +1351,7 @@ fn auth_state(
                                 credential_ref: Some(raw.to_string()),
                                 credential_state: "store_present",
                                 detail: format!(
-                                    "stored OAuth token expires at {}",
+                                    "сохраненный OAuth-токен действует до {}",
                                     credential.expires_at_epoch_secs
                                 ),
                             }
@@ -1357,26 +1359,26 @@ fn auth_state(
                             CredentialState {
                                 credential_ref: Some(raw.to_string()),
                                 credential_state: "store_expired",
-                                detail: "stored OAuth token expired or is near expiry; run `yacli login` again".to_string(),
+                                detail: "сохраненный OAuth-токен истек или скоро истечет; выполните `yacli login` еще раз".to_string(),
                             }
                         }
                     }
                     Some(StoredCredential::AppPassword(_)) => CredentialState {
                         credential_ref: Some(raw.to_string()),
                         credential_state: "store_present",
-                        detail: "stored app password is present".to_string(),
+                        detail: "пароль приложения сохранен локально".to_string(),
                     },
                     None => CredentialState {
                         credential_ref: Some(raw.to_string()),
                         credential_state: "store_missing",
-                        detail: format!("no stored credential for {service}"),
+                        detail: format!("локальный секрет для {service} не найден"),
                     },
                 }
             }
             None => CredentialState {
                 credential_ref: Some(raw.to_string()),
                 credential_state: "unsupported_reference",
-                detail: "supported refs are env:NAME and store:SERVICE".to_string(),
+                detail: "поддерживаются только env:NAME и store:SERVICE".to_string(),
             },
         },
     }
@@ -1390,6 +1392,26 @@ fn parse_credential_ref(raw: &str) -> Option<CredentialReference<'_>> {
         return Some(CredentialReference::Store(value));
     }
     None
+}
+
+fn service_label(service: &str) -> String {
+    match service {
+        "mail" => "Почта".to_string(),
+        "calendar" => "Календарь".to_string(),
+        "disk" => "Диск".to_string(),
+        _ => service.to_string(),
+    }
+}
+
+fn credential_state_label(state: &str) -> String {
+    match state {
+        "not_configured" => "Не подключено".to_string(),
+        "env_present" | "store_present" => "Подключено".to_string(),
+        "env_missing" | "store_missing" => "Не найдено".to_string(),
+        "store_expired" => "Нужен вход".to_string(),
+        "store_mismatch" | "unsupported_reference" => "Ошибка настройки".to_string(),
+        _ => state.to_string(),
+    }
 }
 
 fn guide_topic_name(topic: GuideTopicArg) -> &'static str {
@@ -2044,10 +2066,10 @@ fn resolve_app_password_secret(
 
 fn read_confirmation_code(authorization_url: &str) -> Result<String> {
     eprintln!(
-        "Open this URL in a browser, authorize access, then paste the confirmation code:\n{}",
+        "Откройте ссылку в браузере, разрешите доступ и вставьте код подтверждения:\n{}",
         authorization_url
     );
-    eprint!("Confirmation code: ");
+    eprint!("Код подтверждения: ");
     io::stderr().flush()?;
 
     let mut code = String::new();
@@ -2055,7 +2077,7 @@ fn read_confirmation_code(authorization_url: &str) -> Result<String> {
     let code = code.trim().to_string();
     if code.is_empty() {
         return Err(YacliError::Auth(
-            "confirmation code is required to complete OAuth login".to_string(),
+            "для завершения входа нужен код подтверждения".to_string(),
         ));
     }
 

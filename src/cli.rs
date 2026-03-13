@@ -113,14 +113,17 @@ pub enum Command {
         #[command(subcommand)]
         action: AuthCommand,
     },
+    /// Файлы и папки Яндекс Диска.
     Disk {
         #[command(subcommand)]
         action: DiskCommand,
     },
+    /// Календари и события Яндекс Календаря.
     Calendar {
         #[command(subcommand)]
         action: CalendarCommand,
     },
+    /// Письма и папки Яндекс Почты.
     Mail {
         #[command(subcommand)]
         action: MailCommand,
