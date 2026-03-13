@@ -50,6 +50,36 @@ pub struct MailAttachmentSummary {
     pub inline: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MailAttachmentPart {
+    filename: Option<String>,
+    mime_type: String,
+    content_id: Option<String>,
+    inline: bool,
+    content: Vec<u8>,
+}
+
+impl MailAttachmentPart {
+    fn summary(&self) -> MailAttachmentSummary {
+        MailAttachmentSummary {
+            filename: self.filename.clone(),
+            mime_type: self.mime_type.clone(),
+            content_id: self.content_id.clone(),
+            inline: self.inline,
+        }
+    }
+
+    fn payload(&self) -> MailAttachmentPayload {
+        MailAttachmentPayload {
+            filename: self.filename.clone(),
+            mime_type: self.mime_type.clone(),
+            content_id: self.content_id.clone(),
+            inline: self.inline,
+            content: self.content.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct MailMessage {
     pub uid: u64,
@@ -75,6 +105,8 @@ pub struct MailMessage {
     pub html_body: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<MailAttachmentSummary>,
+    #[serde(skip_serializing)]
+    raw_attachments: Vec<MailAttachmentPart>,
 }
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
@@ -103,7 +135,17 @@ pub struct MailSendRequest {
     pub subject: String,
     pub text: Option<String>,
     pub html: Option<String>,
+    pub attachments: Vec<MailAttachmentPayload>,
     pub thread_headers: Option<MailThreadHeaders>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MailAttachmentPayload {
+    pub filename: Option<String>,
+    pub mime_type: String,
+    pub content_id: Option<String>,
+    pub inline: bool,
+    pub content: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -143,7 +185,7 @@ pub struct ForwardedMail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_message_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub omitted_attachments: Vec<MailAttachmentSummary>,
+    pub attachments: Vec<MailAttachmentSummary>,
     pub sent: SentMail,
 }
 
@@ -177,6 +219,18 @@ struct NormalizedForwardRequest {
 struct ForwardBody {
     text: String,
     html: Option<String>,
+}
+
+struct OutgoingMessage<'a> {
+    from: &'a str,
+    to: &'a [String],
+    cc: &'a [String],
+    subject: &'a str,
+    text: Option<&'a str>,
+    html: Option<&'a str>,
+    attachments: &'a [MailAttachmentPayload],
+    message_id: &'a str,
+    thread_headers: Option<&'a MailThreadHeaders>,
 }
 
 pub fn list_mail_folders(
@@ -347,6 +401,7 @@ pub fn reply_to_mail_message(
             subject: normalize_reply_subject(&target.subject),
             text: normalized_body.text,
             html: normalized_body.html,
+            attachments: Vec::new(),
             thread_headers: Some(MailThreadHeaders {
                 in_reply_to: target.message_id.clone(),
                 references: target.references.clone(),
@@ -403,6 +458,11 @@ pub fn forward_mail_message(
             subject: normalize_forward_subject(source.subject.as_deref()),
             text: Some(body.text),
             html: body.html,
+            attachments: source
+                .raw_attachments
+                .iter()
+                .map(MailAttachmentPart::payload)
+                .collect(),
             thread_headers: None,
         },
     )?;
@@ -411,7 +471,7 @@ pub fn forward_mail_message(
         original_uid: source.uid,
         original_subject: source.subject,
         original_message_id: source.message_id,
-        omitted_attachments: source.attachments,
+        attachments: source.attachments,
         sent,
     })
 }
@@ -1002,12 +1062,12 @@ fn normalize_search_query(query: &str) -> Result<String> {
     let query = query.trim();
     if query.is_empty() {
         return Err(YacliError::Validation(
-            "mail search --query must not be empty".to_string(),
+            "mail search text must not be empty".to_string(),
         ));
     }
     if query.contains('\r') || query.contains('\n') {
         return Err(YacliError::Validation(
-            "mail search --query must not contain CR or LF characters".to_string(),
+            "mail search text must not contain CR or LF characters".to_string(),
         ));
     }
 
@@ -1035,7 +1095,7 @@ fn normalize_reply_subject(subject: &str) -> String {
     if trimmed.is_empty() {
         return "Re:".to_string();
     }
-    if trimmed.len() >= 3 && trimmed[..3].eq_ignore_ascii_case("re:") {
+    if starts_with_ascii_case(trimmed, "re:") {
         return trimmed.to_string();
     }
 
@@ -1047,13 +1107,18 @@ fn normalize_forward_subject(subject: Option<&str>) -> String {
     if trimmed.is_empty() {
         return "Fwd:".to_string();
     }
-    if (trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("fwd:"))
-        || (trimmed.len() >= 3 && trimmed[..3].eq_ignore_ascii_case("fw:"))
-    {
+    if starts_with_ascii_case(trimmed, "fwd:") || starts_with_ascii_case(trimmed, "fw:") {
         return trimmed.to_string();
     }
 
     format!("Fwd: {trimmed}")
+}
+
+fn starts_with_ascii_case(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .map(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        .unwrap_or(false)
 }
 
 fn build_reply_target(headers: &[u8]) -> Result<MailReplyTarget> {
@@ -1146,16 +1211,17 @@ fn prepare_mail_submission(
         ),
     };
 
-    let to = normalize_recipient_list(request.to, "mail send --to")?;
+    let to = normalize_recipient_list(request.to, "mail send")?;
     let cc = normalize_recipient_list(request.cc, "mail send --cc")?;
     let bcc = normalize_recipient_list(request.bcc, "mail send --bcc")?;
     if to.is_empty() && cc.is_empty() && bcc.is_empty() {
         return Err(YacliError::Validation(
-            "mail send requires at least one recipient across --to/--cc/--bcc".to_string(),
+            "mail send requires at least one recipient".to_string(),
         ));
     }
 
     let subject = normalize_subject(request.subject)?;
+    let attachments = request.attachments;
     let body = normalize_outgoing_body(request.text, request.html, "mail send")?;
     let message_id = generate_message_id();
     let message = build_outgoing_message(OutgoingMessage {
@@ -1165,6 +1231,7 @@ fn prepare_mail_submission(
         subject: &subject,
         text: body.text.as_deref(),
         html: body.html.as_deref(),
+        attachments: &attachments,
         message_id: &message_id,
         thread_headers: request.thread_headers.as_ref(),
     })?;
@@ -1187,7 +1254,11 @@ fn prepare_mail_submission(
             bcc_count: bcc.len(),
             subject,
             message_id,
-            body_kind: body.body_kind,
+            body_kind: if attachments.is_empty() {
+                body.body_kind
+            } else {
+                "multipart_mixed".to_string()
+            },
         },
     })
 }
@@ -1199,12 +1270,12 @@ fn normalize_forward_request(request: MailForwardRequest) -> Result<NormalizedFo
         ));
     }
 
-    let to = normalize_recipient_list(request.to, "mail forward --to")?;
+    let to = normalize_recipient_list(request.to, "mail forward")?;
     let cc = normalize_recipient_list(request.cc, "mail forward --cc")?;
     let bcc = normalize_recipient_list(request.bcc, "mail forward --bcc")?;
     if to.is_empty() && cc.is_empty() && bcc.is_empty() {
         return Err(YacliError::Validation(
-            "mail forward requires at least one recipient across --to/--cc/--bcc".to_string(),
+            "mail forward requires at least one recipient".to_string(),
         ));
     }
 
@@ -1213,7 +1284,7 @@ fn normalize_forward_request(request: MailForwardRequest) -> Result<NormalizedFo
         to,
         cc,
         bcc,
-        intro_text: normalize_optional_body(request.text, "mail forward --text")?,
+        intro_text: normalize_optional_body(request.text, "mail forward text")?,
         intro_html: normalize_optional_body(request.html, "mail forward --html")?,
         max_source_bytes: request.max_source_bytes,
     })
@@ -1261,17 +1332,6 @@ fn build_forward_text_body(source: &MailMessage, intro_text: Option<&str>) -> St
     }
     lines.push(String::new());
     lines.push(resolve_forward_text_source(source));
-
-    if !source.attachments.is_empty() {
-        lines.push(String::new());
-        lines.push("Attachments omitted by yacli mail forward core:".to_string());
-        lines.extend(
-            source
-                .attachments
-                .iter()
-                .map(format_attachment_text_summary),
-        );
-    }
 
     lines.join("\n")
 }
@@ -1335,18 +1395,6 @@ fn build_forward_html_body(
         original_html
     ));
 
-    if !source.attachments.is_empty() {
-        let items = source
-            .attachments
-            .iter()
-            .map(format_attachment_html_summary)
-            .collect::<Vec<_>>()
-            .join("");
-        parts.push(format!(
-            "<p><strong>Attachments omitted by yacli mail forward core:</strong></p><ul>{items}</ul>"
-        ));
-    }
-
     Some(parts.join("\n"))
 }
 
@@ -1362,24 +1410,6 @@ fn resolve_forward_text_source(source: &MailMessage) -> String {
     }
 
     "(Исходное письмо не содержит текстового тела.)".to_string()
-}
-
-fn format_attachment_text_summary(attachment: &MailAttachmentSummary) -> String {
-    format!(
-        "- {} [{}{}]",
-        attachment.filename.as_deref().unwrap_or("(без имени)"),
-        attachment.mime_type,
-        if attachment.inline { ", inline" } else { "" }
-    )
-}
-
-fn format_attachment_html_summary(attachment: &MailAttachmentSummary) -> String {
-    format!(
-        "<li>{} [{}{}]</li>",
-        escape_html(attachment.filename.as_deref().unwrap_or("(без имени)")),
-        escape_html(&attachment.mime_type),
-        if attachment.inline { ", inline" } else { "" }
-    )
 }
 
 fn html_to_text_lossy(value: &str) -> String {
@@ -1599,14 +1629,19 @@ fn build_read_message(
         size: metadata.size,
         text_body: extracted.text_body,
         html_body: extracted.html_body,
-        attachments: extracted.attachments,
+        attachments: extracted
+            .attachment_parts
+            .iter()
+            .map(MailAttachmentPart::summary)
+            .collect(),
+        raw_attachments: extracted.attachment_parts,
     })
 }
 
 struct ExtractedMessageContent {
     text_body: Option<String>,
     html_body: Option<String>,
-    attachments: Vec<MailAttachmentSummary>,
+    attachment_parts: Vec<MailAttachmentPart>,
 }
 
 fn extract_message_content(
@@ -1615,7 +1650,7 @@ fn extract_message_content(
     let mut content = ExtractedMessageContent {
         text_body: None,
         html_body: None,
-        attachments: Vec::new(),
+        attachment_parts: Vec::new(),
     };
 
     for part in parsed_mail.parts() {
@@ -1636,11 +1671,15 @@ fn extract_message_content(
         let mime_type = part.ctype.mimetype.to_lowercase();
 
         if is_attachment {
-            content.attachments.push(MailAttachmentSummary {
+            let payload = part.get_body_raw().map_err(|err| {
+                YacliError::Serialization(format!("failed to decode attachment payload: {err}"))
+            })?;
+            content.attachment_parts.push(MailAttachmentPart {
                 filename,
                 mime_type,
                 content_id,
                 inline,
+                content: payload,
             });
             continue;
         }
@@ -1961,12 +2000,12 @@ fn normalize_subject(subject: String) -> Result<String> {
     let trimmed = subject.trim();
     if trimmed.is_empty() {
         return Err(YacliError::Validation(
-            "mail send --subject must not be empty".to_string(),
+            "mail send subject must not be empty".to_string(),
         ));
     }
     if trimmed.contains(['\r', '\n']) {
         return Err(YacliError::Validation(
-            "mail send --subject must not contain CR or LF characters".to_string(),
+            "mail send subject must not contain CR or LF characters".to_string(),
         ));
     }
     Ok(trimmed.to_string())
@@ -1994,7 +2033,7 @@ fn normalize_outgoing_body(
     html: Option<String>,
     command_name: &str,
 ) -> Result<NormalizedOutgoingBody> {
-    let text = normalize_optional_body(text, &format!("{command_name} --text"))?;
+    let text = normalize_optional_body(text, &format!("{command_name} text"))?;
     let html = normalize_optional_body(html, &format!("{command_name} --html"))?;
     let body_kind = match (text.is_some(), html.is_some()) {
         (true, true) => "multipart_alternative",
@@ -2002,7 +2041,7 @@ fn normalize_outgoing_body(
         (false, true) => "html",
         (false, false) => {
             return Err(YacliError::Validation(format!(
-                "{command_name} requires --text, --html, or both"
+                "{command_name} requires text or --html"
             )));
         }
     }
@@ -2013,17 +2052,6 @@ fn normalize_outgoing_body(
         html,
         body_kind,
     })
-}
-
-struct OutgoingMessage<'a> {
-    from: &'a str,
-    to: &'a [String],
-    cc: &'a [String],
-    subject: &'a str,
-    text: Option<&'a str>,
-    html: Option<&'a str>,
-    message_id: &'a str,
-    thread_headers: Option<&'a MailThreadHeaders>,
 }
 
 fn build_outgoing_message(outgoing: OutgoingMessage<'_>) -> Result<String> {
@@ -2058,29 +2086,19 @@ fn build_outgoing_message(outgoing: OutgoingMessage<'_>) -> Result<String> {
         }
     }
 
-    let body = match (outgoing.text, outgoing.html) {
-        (Some(text), Some(html)) => {
-            let boundary = format!("yacli-alt-{:016x}", random::<u64>());
-            headers.push(format!(
-                "Content-Type: multipart/alternative; boundary=\"{boundary}\""
-            ));
-            build_multipart_alternative_body(&boundary, text, html)
-        }
-        (Some(text), None) => {
-            headers.push("Content-Type: text/plain; charset=UTF-8".to_string());
-            headers.push("Content-Transfer-Encoding: base64".to_string());
-            encode_body_base64(text)
-        }
-        (None, Some(html)) => {
-            headers.push("Content-Type: text/html; charset=UTF-8".to_string());
-            headers.push("Content-Transfer-Encoding: base64".to_string());
-            encode_body_base64(html)
-        }
-        (None, None) => {
-            return Err(YacliError::Validation(
-                "mail send requires --text, --html, or both".to_string(),
-            ));
-        }
+    let body = if outgoing.attachments.is_empty() {
+        build_root_body(&mut headers, outgoing.text, outgoing.html)?
+    } else {
+        let boundary = format!("yacli-mix-{:016x}", random::<u64>());
+        headers.push(format!(
+            "Content-Type: multipart/mixed; boundary=\"{boundary}\""
+        ));
+        build_multipart_mixed_body(
+            &boundary,
+            outgoing.text,
+            outgoing.html,
+            outgoing.attachments,
+        )?
     };
 
     let mut message = headers.join("\r\n");
@@ -2089,25 +2107,202 @@ fn build_outgoing_message(outgoing: OutgoingMessage<'_>) -> Result<String> {
     Ok(message)
 }
 
+fn build_root_body(
+    headers: &mut Vec<String>,
+    text: Option<&str>,
+    html: Option<&str>,
+) -> Result<String> {
+    match (text, html) {
+        (Some(text), Some(html)) => {
+            let boundary = format!("yacli-alt-{:016x}", random::<u64>());
+            headers.push(format!(
+                "Content-Type: multipart/alternative; boundary=\"{boundary}\""
+            ));
+            Ok(build_multipart_alternative_body(&boundary, text, html))
+        }
+        (Some(text), None) => {
+            headers.push("Content-Type: text/plain; charset=UTF-8".to_string());
+            headers.push("Content-Transfer-Encoding: base64".to_string());
+            Ok(encode_bytes_base64(text.as_bytes()))
+        }
+        (None, Some(html)) => {
+            headers.push("Content-Type: text/html; charset=UTF-8".to_string());
+            headers.push("Content-Transfer-Encoding: base64".to_string());
+            Ok(encode_bytes_base64(html.as_bytes()))
+        }
+        (None, None) => Err(YacliError::Validation(
+            "mail send requires text or --html".to_string(),
+        )),
+    }
+}
+
 fn build_multipart_alternative_body(boundary: &str, text: &str, html: &str) -> String {
     let lines = vec![
         format!("--{boundary}"),
         "Content-Type: text/plain; charset=UTF-8".to_string(),
         "Content-Transfer-Encoding: base64".to_string(),
         String::new(),
-        encode_body_base64(text),
+        encode_bytes_base64(text.as_bytes()),
         format!("--{boundary}"),
         "Content-Type: text/html; charset=UTF-8".to_string(),
         "Content-Transfer-Encoding: base64".to_string(),
         String::new(),
-        encode_body_base64(html),
+        encode_bytes_base64(html.as_bytes()),
         format!("--{boundary}--"),
     ];
     lines.join("\r\n")
 }
 
-fn encode_body_base64(value: &str) -> String {
-    wrap_base64(&STANDARD.encode(value.as_bytes()), 76)
+fn build_multipart_mixed_body(
+    boundary: &str,
+    text: Option<&str>,
+    html: Option<&str>,
+    attachments: &[MailAttachmentPayload],
+) -> Result<String> {
+    let mut lines = vec![format!("--{boundary}")];
+    lines.extend(build_primary_body_part(text, html)?);
+
+    for attachment in attachments {
+        lines.push(format!("--{boundary}"));
+        lines.extend(build_attachment_part(attachment)?);
+    }
+    lines.push(format!("--{boundary}--"));
+
+    Ok(lines.join("\r\n"))
+}
+
+fn build_primary_body_part(text: Option<&str>, html: Option<&str>) -> Result<Vec<String>> {
+    match (text, html) {
+        (Some(text), Some(html)) => {
+            let boundary = format!("yacli-alt-{:016x}", random::<u64>());
+            Ok(vec![
+                format!("Content-Type: multipart/alternative; boundary=\"{boundary}\""),
+                String::new(),
+                build_multipart_alternative_body(&boundary, text, html),
+            ])
+        }
+        (Some(text), None) => Ok(vec![
+            "Content-Type: text/plain; charset=UTF-8".to_string(),
+            "Content-Transfer-Encoding: base64".to_string(),
+            String::new(),
+            encode_bytes_base64(text.as_bytes()),
+        ]),
+        (None, Some(html)) => Ok(vec![
+            "Content-Type: text/html; charset=UTF-8".to_string(),
+            "Content-Transfer-Encoding: base64".to_string(),
+            String::new(),
+            encode_bytes_base64(html.as_bytes()),
+        ]),
+        (None, None) => Err(YacliError::Validation(
+            "mail send requires text or --html".to_string(),
+        )),
+    }
+}
+
+fn build_attachment_part(attachment: &MailAttachmentPayload) -> Result<Vec<String>> {
+    let mime_type = sanitize_mime_type(&attachment.mime_type)?;
+    let mut content_type = mime_type.clone();
+    let mut disposition = if attachment.inline {
+        "inline".to_string()
+    } else {
+        "attachment".to_string()
+    };
+
+    if let Some(filename) = &attachment.filename {
+        let name_param = build_mime_parameter("name", filename)?;
+        let filename_param = build_mime_parameter("filename", filename)?;
+        content_type.push_str("; ");
+        content_type.push_str(&name_param);
+        disposition.push_str("; ");
+        disposition.push_str(&filename_param);
+    }
+
+    let mut lines = vec![
+        format!("Content-Type: {content_type}"),
+        "Content-Transfer-Encoding: base64".to_string(),
+        format!("Content-Disposition: {disposition}"),
+    ];
+
+    if let Some(content_id) = &attachment.content_id {
+        lines.push(format!(
+            "Content-ID: {}",
+            normalize_content_id_header(content_id)?
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push(encode_bytes_base64(&attachment.content));
+    Ok(lines)
+}
+
+fn encode_bytes_base64(value: &[u8]) -> String {
+    wrap_base64(&STANDARD.encode(value), 76)
+}
+
+fn sanitize_mime_type(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok("application/octet-stream".to_string());
+    }
+    if trimmed.contains(['\r', '\n']) {
+        return Err(YacliError::Validation(
+            "mail attachment MIME type must not contain CR or LF characters".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_content_id_header(value: &str) -> Result<String> {
+    let trimmed = sanitize_header_ascii(value.trim(), "Content-ID")?;
+    if trimmed.starts_with('<') && trimmed.ends_with('>') {
+        return Ok(trimmed);
+    }
+    Ok(format!("<{trimmed}>"))
+}
+
+fn build_mime_parameter(name: &str, value: &str) -> Result<String> {
+    if value.contains(['\r', '\n']) {
+        return Err(YacliError::Validation(format!(
+            "{name} MIME parameter must not contain CR or LF characters"
+        )));
+    }
+
+    if value.is_ascii() {
+        return Ok(format!(
+            r#"{name}="{}""#,
+            value.replace('\\', "\\\\").replace('"', "\\\"")
+        ));
+    }
+
+    Ok(format!(
+        "{name}*=UTF-8''{}",
+        percent_encode_mime_value(value)
+    ))
+}
+
+fn percent_encode_mime_value(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| match byte {
+            b'0'..=b'9'
+            | b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'&'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~' => (*byte as char).to_string(),
+            _ => format!("%{:02X}", byte),
+        })
+        .collect()
 }
 
 fn wrap_base64(value: &str, width: usize) -> String {
@@ -2178,13 +2373,13 @@ fn quote_imap_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        FetchMetadata, MailAttachmentSummary, MailMessage, MailSendRequest, MailSessionAuth,
-        MailThreadHeaders, OutgoingMessage, SmtpSession, build_forward_body, build_message_summary,
-        build_outgoing_message, build_read_message, build_reply_target, build_xoauth2_payload,
-        decode_modified_utf7, encode_modified_utf7, extract_message_content,
-        normalize_forward_subject, normalize_reply_subject, normalize_search_query,
-        parse_fetch_metadata, parse_imap_token, parse_list_line, parse_search_uids,
-        prepare_mail_submission, quote_imap_string,
+        FetchMetadata, MailAttachmentPart, MailAttachmentPayload, MailAttachmentSummary,
+        MailMessage, MailSendRequest, MailSessionAuth, MailThreadHeaders, OutgoingMessage,
+        SmtpSession, build_forward_body, build_message_summary, build_outgoing_message,
+        build_read_message, build_reply_target, build_xoauth2_payload, decode_modified_utf7,
+        encode_modified_utf7, extract_message_content, normalize_forward_subject,
+        normalize_reply_subject, normalize_search_query, parse_fetch_metadata, parse_imap_token,
+        parse_list_line, parse_search_uids, prepare_mail_submission, quote_imap_string,
     };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -2291,14 +2486,14 @@ mod tests {
         let empty = normalize_search_query("   ").expect_err("empty query rejected");
         assert_eq!(
             empty.to_string(),
-            "Validation error: mail search --query must not be empty"
+            "Validation error: mail search text must not be empty"
         );
 
         let multiline =
             normalize_search_query("hello\nworld").expect_err("multiline query rejected");
         assert_eq!(
             multiline.to_string(),
-            "Validation error: mail search --query must not contain CR or LF characters"
+            "Validation error: mail search text must not contain CR or LF characters"
         );
     }
 
@@ -2323,6 +2518,10 @@ mod tests {
         assert_eq!(normalize_reply_subject("Budget"), "Re: Budget");
         assert_eq!(normalize_reply_subject("Re: Budget"), "Re: Budget");
         assert_eq!(normalize_reply_subject("re: Budget"), "re: Budget");
+        assert_eq!(
+            normalize_reply_subject("Счёт на оплату"),
+            "Re: Счёт на оплату"
+        );
         assert_eq!(normalize_reply_subject("   "), "Re:");
     }
 
@@ -2334,6 +2533,10 @@ mod tests {
             "Fwd: Budget"
         );
         assert_eq!(normalize_forward_subject(Some("fw: Budget")), "fw: Budget");
+        assert_eq!(
+            normalize_forward_subject(Some("Счёт на оплату")),
+            "Fwd: Счёт на оплату"
+        );
         assert_eq!(normalize_forward_subject(Some("   ")), "Fwd:");
         assert_eq!(normalize_forward_subject(None), "Fwd:");
     }
@@ -2355,7 +2558,7 @@ mod tests {
     }
 
     #[test]
-    fn build_forward_body_includes_intro_headers_and_omitted_attachments() {
+    fn build_forward_body_includes_intro_headers_and_original_content() {
         let forward = build_forward_body(
             &MailMessage {
                 uid: 42,
@@ -2375,6 +2578,13 @@ mod tests {
                     content_id: None,
                     inline: false,
                 }],
+                raw_attachments: vec![MailAttachmentPart {
+                    filename: Some("report.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: None,
+                    inline: false,
+                    content: b"%PDF-1.4".to_vec(),
+                }],
             },
             Some("FYI"),
             None,
@@ -2387,17 +2597,12 @@ mod tests {
                 .contains("---------- Forwarded message ----------")
         );
         assert!(forward.text.contains("Subject: Budget"));
-        assert!(
-            forward
-                .text
-                .contains("Attachments omitted by yacli mail forward core:")
-        );
-        assert!(forward.text.contains("- report.pdf [application/pdf]"));
+        assert!(forward.text.contains("Original body"));
 
         let html = forward.html.expect("html body");
         assert!(html.contains("<strong>Forwarded message</strong>"));
         assert!(html.contains("Original <strong>body</strong>"));
-        assert!(html.contains("Attachments omitted by yacli mail forward core"));
+        assert!(!html.contains("Attachments omitted"));
     }
 
     #[test]
@@ -2423,6 +2628,7 @@ mod tests {
                 subject: "Привет".to_string(),
                 text: Some("Первая строка".to_string()),
                 html: Some("<p>Привет</p>".to_string()),
+                attachments: Vec::new(),
                 thread_headers: None,
             },
         )
@@ -2453,6 +2659,7 @@ mod tests {
             subject: "Re: Hello",
             text: Some("Body"),
             html: None,
+            attachments: &[],
             message_id: "msg-2@nextstat.dev",
             thread_headers: Some(&MailThreadHeaders {
                 in_reply_to: "<parent@example>".to_string(),
@@ -2474,6 +2681,7 @@ mod tests {
             subject: "Hello",
             text: Some("Привет"),
             html: None,
+            attachments: &[],
             message_id: "msg-1@nextstat.dev",
             thread_headers: None,
         })
@@ -2530,6 +2738,7 @@ mod tests {
                 subject: "Hello".to_string(),
                 text: None,
                 html: None,
+                attachments: Vec::new(),
                 thread_headers: None,
             },
         )
@@ -2537,7 +2746,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "Validation error: mail send requires --text, --html, or both"
+            "Validation error: mail send requires text or --html"
         );
     }
 
@@ -2609,10 +2818,14 @@ mod tests {
 
         assert_eq!(content.text_body.as_deref(), Some("plain body"));
         assert_eq!(content.html_body.as_deref(), Some("<p>html body</p>"));
-        assert_eq!(content.attachments.len(), 1);
-        assert_eq!(content.attachments[0].filename.as_deref(), Some("bill.pdf"));
-        assert_eq!(content.attachments[0].mime_type, "application/pdf");
-        assert!(!content.attachments[0].inline);
+        assert_eq!(content.attachment_parts.len(), 1);
+        assert_eq!(
+            content.attachment_parts[0].filename.as_deref(),
+            Some("bill.pdf")
+        );
+        assert_eq!(content.attachment_parts[0].mime_type, "application/pdf");
+        assert!(!content.attachment_parts[0].inline);
+        assert_eq!(content.attachment_parts[0].content, b"%PDF-1.4");
     }
 
     #[test]
@@ -2667,5 +2880,59 @@ mod tests {
             message.attachments[0].filename.as_deref(),
             Some("invoice.pdf")
         );
+        assert_eq!(message.raw_attachments.len(), 1);
+        assert_eq!(message.raw_attachments[0].content, b"%PDF-1.4");
+    }
+
+    #[test]
+    fn prepare_mail_submission_builds_multipart_mixed_message_with_attachments() {
+        let prepared = prepare_mail_submission(
+            MailSessionAuth::OauthXoauth2 {
+                account: "me@yandex.ru".to_string(),
+                access_token: "token-123".to_string(),
+            },
+            MailSendRequest {
+                to: vec!["person@example.com".to_string()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Forward".to_string(),
+                text: Some("Body".to_string()),
+                html: Some("<p>Body</p>".to_string()),
+                attachments: vec![MailAttachmentPayload {
+                    filename: Some("файл.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: Some("cid-report".to_string()),
+                    inline: false,
+                    content: b"%PDF-1.4".to_vec(),
+                }],
+                thread_headers: None,
+            },
+        )
+        .expect("prepared");
+
+        assert_eq!(prepared.sent.body_kind, "multipart_mixed");
+        assert!(
+            prepared
+                .message
+                .contains("Content-Type: multipart/mixed; boundary=\"")
+        );
+        assert!(
+            prepared
+                .message
+                .contains("Content-Type: multipart/alternative; boundary=\"")
+        );
+        assert!(prepared.message.contains("Content-Type: application/pdf; "));
+        assert!(
+            prepared
+                .message
+                .contains("Content-Disposition: attachment; ")
+        );
+        assert!(
+            prepared
+                .message
+                .contains("filename*=UTF-8''%D1%84%D0%B0%D0%B9%D0%BB.pdf")
+        );
+        assert!(prepared.message.contains("Content-ID: <cid-report>"));
+        assert!(prepared.message.contains(&STANDARD.encode(b"%PDF-1.4")));
     }
 }

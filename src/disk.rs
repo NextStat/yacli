@@ -359,7 +359,12 @@ pub fn upload_private_resource(
     let body = response.text()?;
 
     if !status.is_success() {
-        return Err(provider_error(status, &body, "private file", "upload_ticket"));
+        return Err(provider_error(
+            status,
+            &body,
+            "private file",
+            "upload_ticket",
+        ));
     }
 
     let ticket = serde_json::from_str::<RawUploadTicket>(&body)
@@ -375,7 +380,9 @@ pub fn upload_private_resource(
     let upload_response = client
         .put(&ticket.href)
         .header("Content-Type", "application/octet-stream")
-        .body(reqwest::blocking::Body::new(fs::File::open(&request.source)?))
+        .body(reqwest::blocking::Body::new(fs::File::open(
+            &request.source,
+        )?))
         .send()?;
     let upload_status = upload_response.status();
     let upload_body = upload_response.text()?;

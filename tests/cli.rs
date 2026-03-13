@@ -234,9 +234,64 @@ fn mail_read_help_uses_positional_id() {
         .args(["mail", "read", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Usage: yacli mail read [OPTIONS] <ID>"))
+        .stdout(predicate::str::contains(
+            "Usage: yacli mail read [OPTIONS] <ID>",
+        ))
         .stdout(predicate::str::contains("--uid").not())
-        .stdout(predicate::str::contains("--folder <FOLDER>        [default: INBOX]"));
+        .stdout(predicate::str::contains(
+            "--folder <FOLDER>        [default: INBOX]",
+        ));
+}
+
+#[test]
+fn mail_search_help_uses_positional_text() {
+    yacli()
+        .args(["mail", "search", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli mail search [OPTIONS] <TEXT>",
+        ))
+        .stdout(predicate::str::contains("--query").not());
+}
+
+#[test]
+fn mail_reply_help_uses_positional_text() {
+    yacli()
+        .args(["mail", "reply", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli mail reply [OPTIONS] <ID> [TEXT]",
+        ))
+        .stdout(predicate::str::contains("--text").not());
+}
+
+#[test]
+fn mail_forward_help_uses_positional_recipient_and_text() {
+    yacli()
+        .args(["mail", "forward", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli mail forward [OPTIONS] <ID> <TO> [TEXT]",
+        ))
+        .stdout(predicate::str::contains("--to").not())
+        .stdout(predicate::str::contains("--text").not());
+}
+
+#[test]
+fn mail_send_help_uses_positional_recipient_subject_and_text() {
+    yacli()
+        .args(["mail", "send", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Usage: yacli mail send [OPTIONS] <TO> <SUBJECT> [TEXT]",
+        ))
+        .stdout(predicate::str::contains("--to").not())
+        .stdout(predicate::str::contains("--subject").not())
+        .stdout(predicate::str::contains("--text").not());
 }
 
 #[test]
@@ -262,7 +317,7 @@ fn guide_lists_stable_commands_and_workflows() {
     let value: Value = serde_json::from_slice(&output).expect("valid json");
     assert_eq!(value["operation"], "guide.show");
     assert_eq!(value["topic"], "all");
-    assert_eq!(value["version"], "0.1.26");
+    assert_eq!(value["version"], "0.1.28");
 
     let commands = value["commands"].as_array().expect("commands array");
     assert!(commands.iter().any(|entry| entry["path"] == "add"));
@@ -271,7 +326,11 @@ fn guide_lists_stable_commands_and_workflows() {
     assert!(commands.iter().any(|entry| entry["path"] == "whoami"));
     assert!(commands.iter().any(|entry| entry["path"] == "status"));
     assert!(commands.iter().any(|entry| entry["path"] == "login"));
-    assert!(commands.iter().any(|entry| entry["path"] == "login calendar"));
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "login calendar")
+    );
     assert!(commands.iter().any(|entry| entry["path"] == "logout"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail read"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail search"));
@@ -410,7 +469,11 @@ fn guide_topic_auth_filters_to_simple_login_commands() {
     assert!(commands.iter().all(|entry| entry["topic"] == "auth"));
     assert!(commands.iter().any(|entry| entry["path"] == "status"));
     assert!(commands.iter().any(|entry| entry["path"] == "login"));
-    assert!(commands.iter().any(|entry| entry["path"] == "login calendar"));
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "login calendar")
+    );
     assert!(commands.iter().any(|entry| entry["path"] == "logout"));
 }
 
@@ -1651,7 +1714,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["mail", "search", "--account", "mock", "--query", "Budget"])
+        .args(["mail", "search", "--account", "mock", "Budget"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"AUTH_ERROR\""))
@@ -1691,7 +1754,6 @@ client_id = "client-123"
             "search",
             "--account",
             "mock",
-            "--query",
             "Budget",
             "--limit",
             "0",
@@ -1732,12 +1794,12 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args(["mail", "search", "--account", "mock", "--query", "   "])
+        .args(["mail", "search", "--account", "mock", "   "])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail search --query must not be empty",
+            "mail search text must not be empty",
         ));
 }
 
@@ -1769,15 +1831,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "mail",
-            "reply",
-            "--account",
-            "mock",
-            "42",
-            "--text",
-            "Принято",
-        ])
+        .args(["mail", "reply", "--account", "mock", "42", "Принято"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"AUTH_ERROR\""))
@@ -1812,15 +1866,7 @@ client_id = "client-123"
 
     yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
-        .args([
-            "mail",
-            "reply",
-            "--account",
-            "mock",
-            "0",
-            "--text",
-            "Принято",
-        ])
+        .args(["mail", "reply", "--account", "mock", "0", "Принято"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
@@ -1862,7 +1908,7 @@ client_id = "client-123"
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail reply requires --text, --html, or both",
+            "mail reply requires text or --html",
         ));
 }
 
@@ -1900,8 +1946,8 @@ client_id = "client-123"
             "--account",
             "mock",
             "42",
-            "--to",
             "person@example.com",
+            "FYI",
         ])
         .assert()
         .failure()
@@ -1943,7 +1989,6 @@ client_id = "client-123"
             "--account",
             "mock",
             "0",
-            "--to",
             "person@example.com",
         ])
         .assert()
@@ -1988,7 +2033,6 @@ client_id = "client-123"
             "--account",
             "mock",
             "42",
-            "--to",
             "person@example.com",
             "--max-source-bytes",
             "0",
@@ -2035,14 +2079,13 @@ client_id = "client-123"
             "--account",
             "mock",
             "42",
-            "--to",
             "broken-recipient",
         ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail forward --to recipient must contain `@`",
+            "mail forward recipient must contain `@`",
         ));
 }
 
@@ -2162,16 +2205,14 @@ client_id = "client-123"
             "send",
             "--account",
             "mock",
-            "--to",
             "person@example.com",
-            "--subject",
             "Hello",
         ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail send requires --text, --html, or both",
+            "mail send requires text or --html",
         ));
 }
 
@@ -2209,18 +2250,15 @@ client_id = "client-123"
             "send",
             "--account",
             "mock",
-            "--to",
             "broken-recipient",
-            "--subject",
             "Hello",
-            "--text",
             "Body",
         ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
-            "mail send --to recipient must contain `@`",
+            "mail send recipient must contain `@`",
         ));
 }
 
@@ -3169,7 +3207,10 @@ client_id = "client-123"
     let _mkdir = server
         .mock("PUT", "/v1/disk/resources")
         .match_header("authorization", "OAuth disk-token")
-        .match_query(Matcher::UrlEncoded("path".into(), "disk:/docs/new-folder".into()))
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/new-folder".into(),
+        ))
         .with_status(201)
         .create();
 

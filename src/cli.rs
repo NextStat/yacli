@@ -41,7 +41,11 @@ pub enum GuideTopicArg {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "yacli", version, about = "Yandex Mail, Calendar, and Disk CLI")]
+#[command(
+    name = "yacli",
+    version,
+    about = "Командная строка для Яндекс Почты, Календаря и Диска"
+)]
 pub struct Cli {
     #[arg(long, value_enum, global = true, default_value_t = OutputFormat::Json)]
     pub format: OutputFormat,
@@ -279,7 +283,7 @@ pub enum MailCommand {
         account: Option<String>,
         #[arg(long, default_value = "INBOX")]
         folder: String,
-        #[arg(long)]
+        #[arg(value_name = "TEXT")]
         query: String,
         #[arg(long, default_value_t = 20)]
         limit: usize,
@@ -292,10 +296,10 @@ pub enum MailCommand {
         folder: String,
         #[arg(value_name = "ID")]
         uid: u64,
+        #[arg(value_name = "TEXT")]
+        body: Option<String>,
         #[arg(long)]
         cc: Vec<String>,
-        #[arg(long)]
-        text: Option<String>,
         #[arg(long)]
         html: Option<String>,
     },
@@ -307,14 +311,14 @@ pub enum MailCommand {
         folder: String,
         #[arg(value_name = "ID")]
         uid: u64,
-        #[arg(long, required = true)]
-        to: Vec<String>,
+        #[arg(value_name = "TO")]
+        to: String,
+        #[arg(value_name = "TEXT")]
+        body: Option<String>,
         #[arg(long)]
         cc: Vec<String>,
         #[arg(long)]
         bcc: Vec<String>,
-        #[arg(long)]
-        text: Option<String>,
         #[arg(long)]
         html: Option<String>,
         #[arg(long, default_value_t = 15 * 1024 * 1024)]
@@ -335,16 +339,16 @@ pub enum MailCommand {
     Send {
         #[arg(long)]
         account: Option<String>,
-        #[arg(long, required = true)]
-        to: Vec<String>,
+        #[arg(value_name = "TO")]
+        to: String,
+        #[arg(value_name = "SUBJECT")]
+        subject: String,
+        #[arg(value_name = "TEXT")]
+        body: Option<String>,
         #[arg(long)]
         cc: Vec<String>,
         #[arg(long)]
         bcc: Vec<String>,
-        #[arg(long)]
-        subject: String,
-        #[arg(long)]
-        text: Option<String>,
         #[arg(long)]
         html: Option<String>,
     },

@@ -1,20 +1,19 @@
 # yacli
 
-`yacli` — CLI для Яндекс Почты, Календаря и Диска.
+`yacli` — утилита командной строки для Яндекс Почты, Календаря и Диска.
 
-С ним можно:
+С ее помощью можно:
 
-- читать, искать, отправлять, отвечать и пересылать письма
-- смотреть календари и события, создавать и удалять встречи
-- просматривать приватный Диск, создавать папки и загружать файлы
-- скачивать публичные файлы и папки Яндекс Диска
-- держать несколько аккаунтов и быстро переключаться между ними
+- читать, искать, отправлять, пересылать и отвечать на письма;
+- смотреть календари и события, создавать и удалять встречи;
+- просматривать приватный Диск, создавать папки и загружать файлы;
+- работать с несколькими учетными записями и быстро переключаться между ними.
 
 Важно:
 
-- `yacli` не является продуктом Яндекса
-- проект не поддерживается Яндексом
-- это независимый open-source проект
+- `yacli` не является продуктом Яндекса;
+- Яндекс этот проект не поддерживает;
+- это самостоятельный open-source проект.
 
 ## Установка
 
@@ -30,94 +29,96 @@ curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install
 irm https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.ps1 | iex
 ```
 
-### Другие варианты
+### Готовые архивы
 
-- скачать готовый архив из GitHub Releases
-- установить из исходников
-- для Windows при желании использовать `winget` через manifest bundle из релиза
+Готовые сборки лежат в [GitHub Releases](https://github.com/NextStat/yacli/releases).
 
 ### Из исходников
+
+Этот путь нужен только тем, кто хочет собирать `yacli` самостоятельно:
 
 ```bash
 cargo install --path .
 ```
 
-## Быстрый старт
+## Начало работы
 
-### 1. Добавь аккаунт
+### 1. Добавьте учетную запись
 
 ```bash
 yacli add me@yandex.ru
 yacli whoami
 ```
 
-Если имя не указать, `yacli` сам сделает короткий псевдоним из email.  
-Если хочешь задать имя сам:
+Если псевдоним не указать, `yacli` создаст его сам.
+Если нужен свой псевдоним:
 
 ```bash
 yacli add me@yandex.ru personal
 ```
 
-### 2. Подключи Почту и Диск
+### 2. Подключите Почту и Диск
 
 ```bash
 yacli login
 ```
 
-Эта команда использует встроенное OAuth-приложение `yacli` и подключает сразу:
+Эта команда подключает сразу две службы:
 
-- Яндекс Почту
-- приватный Яндекс Диск
+- Почту;
+- приватный Диск.
 
-Если нужен только один сервис:
+Если нужно подключить только одну:
 
 ```bash
 yacli login mail
 yacli login disk
 ```
 
-### 3. Подключи Календарь
+### 3. Подключите Календарь
+
+Для Календаря нужен пароль приложения Яндекс ID:
 
 ```bash
-yacli login calendar --app-password <app-password>
+yacli login calendar --app-password <пароль>
 ```
 
-### 4. Проверь, что все работает
+### 4. Проверьте, что все работает
 
 ```bash
 yacli status
-
-yacli mail folders
-yacli mail list --limit 10
+yacli mail list
 yacli calendar calendars
 yacli disk info
 ```
 
-## Ежедневные команды
+## Повседневные команды
 
 ### Почта
 
 ```bash
 yacli mail folders
-yacli mail list --limit 10
-yacli mail search --query "invoice" --limit 10
+yacli mail list
+yacli mail search "смета"
 yacli mail read 1353
-yacli mail reply 1353 --text "Принято, спасибо"
-yacli mail forward 1353 --to person@example.com --text "FYI"
-yacli mail send --to person@example.com --subject "Синк" --text "Привет"
+yacli mail reply 1353 "Принято, спасибо"
+yacli mail forward 1353 person@example.com "Посмотрите, пожалуйста"
+yacli mail send person@example.com "Синк" "Привет"
 ```
 
 Что важно:
 
-- по умолчанию `list`, `search`, `read`, `reply` и `forward` работают с `INBOX`
-- число вроде `1353` это ID письма из первой колонки, которую показывают `mail list` и `mail search`
-- если нужна другая папка, просто добавь `--folder "Имя папки"`
+- `list`, `search`, `read`, `reply` и `forward` по умолчанию работают с папкой `INBOX`;
+- число вроде `1353` — это идентификатор письма из вывода `mail list` или `mail search`;
+- если нужна другая папка, добавьте `--folder "Имя папки"`;
+- если нужен HTML, копии или скрытые копии, используйте `--html`, `--cc` и `--bcc`.
 
 Примеры:
 
 ```bash
 yacli mail list --folder "Отправленные" --limit 20
-yacli mail read 1353 --folder "Архив 2026"
+yacli mail search "договор" --folder "Архив 2026"
+yacli mail send person@example.com "Счет" "Отправляю счет" --cc boss@example.com
 ```
 
 ### Календарь
@@ -162,7 +163,7 @@ yacli disk public download \
   --output ./sample.pdf
 ```
 
-## Несколько аккаунтов
+## Несколько учетных записей
 
 ```bash
 yacli add personal@yandex.ru
@@ -173,65 +174,53 @@ yacli use work
 yacli login
 
 yacli use personal
-yacli mail list --limit 5
+yacli mail list
 
 yacli use work
-yacli mail search --query "invoice" --limit 5
+yacli mail search "счет"
 ```
 
 Что важно:
 
-- у каждого аккаунта свои токены и свои настройки
-- `use` переключает текущий аккаунт
-- если нужно, можно явно указать `--account <alias>`
+- у каждой учетной записи свои токены и свои настройки;
+- команда `use` переключает текущую учетную запись;
+- при необходимости можно явно указать `--account <псевдоним>`.
 
-## Календарь: как получить пароль приложения
+## Как получить пароль приложения для Календаря
 
-Для Календаря нужен не OAuth-токен, а пароль приложения Яндекс ID.
-
-Как его создать:
-
-1. Открой [Пароли приложений в Яндекс ID](https://yandex.ru/support/id/ru/authorization/app-passwords)
-2. Перейди в `Безопасность` → `Доступ к вашим данным` → `Пароли приложений`
-3. Выбери тип `Календарь`
-4. Задай имя, например `yacli calendar`
-5. Скопируй пароль сразу после создания
+1. Откройте [страницу паролей приложений Яндекс ID](https://yandex.ru/support/id/ru/authorization/app-passwords).
+2. Перейдите в раздел `Безопасность` → `Доступ к вашим данным` → `Пароли приложений`.
+3. Выберите тип `Календарь`.
+4. Задайте имя, например `yacli calendar`.
+5. Скопируйте пароль сразу после создания.
 
 Подключение:
 
 ```bash
-yacli login calendar --app-password <app-password>
+yacli login calendar --app-password <пароль>
 ```
 
-Если не хочешь хранить пароль локально:
+Если не хотите хранить пароль локально:
 
 ```bash
-export YACLI_CALENDAR_APP_PASSWORD='<app-password>'
+export YACLI_CALENDAR_APP_PASSWORD='<пароль>'
 yacli login calendar --env-var YACLI_CALENDAR_APP_PASSWORD
 ```
 
-## Для скриптов и агентов
+## Для автоматизации
 
-По умолчанию `yacli` печатает JSON.  
-Если нужен табличный вывод:
+По умолчанию `yacli` печатает JSON. Если нужен табличный вывод:
 
 ```bash
-yacli --format table mail list --limit 10
+yacli --format table mail list
 ```
 
-Есть два формата:
-
-- `--format json`
-- `--format table`
-
-Для машинного discovery есть скрытая команда:
+Скрытая команда `guide` предназначена для автоматизации и агентских обвязок:
 
 ```bash
 yacli guide
 yacli guide --topic mail
 ```
-
-Она нужна в первую очередь для агентов и автоматизации, а не для обычного ручного сценария.
 
 ## Где лежат настройки
 
@@ -239,18 +228,18 @@ yacli guide --topic mail
 - Linux: `~/.config/yacli`
 - Windows: `%APPDATA%\\yacli`
 
-Если нужен другой каталог:
+Чтобы использовать другой каталог:
 
 ```bash
 export YACLI_CONFIG_DIR=/path/to/config-dir
 ```
 
-## Что полезно знать
+## Что еще полезно знать
 
-- `status` показывает, что подключено у текущего аккаунта
-- если OAuth-токен для Почты или Диска истек, просто снова выполни `yacli login`
-- `mail forward` пока не пересылает бинарные вложения как настоящие attachments; он перечисляет их в `omitted_attachments`
-- `disk public download` не перезаписывает существующий файл без `--force`
+- `status` показывает, какие службы подключены у текущей учетной записи;
+- если OAuth-токен Почты или Диска истек, достаточно снова выполнить `yacli login`;
+- `mail forward` пересылает письмо вместе с обычными вложениями и inline-файлами;
+- `disk public download` не перезаписывает существующий файл без `--force`.
 
 ## Проверка качества
 
@@ -259,7 +248,3 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
-
-## Лицензия
-
-MIT

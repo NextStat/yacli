@@ -30,8 +30,8 @@ use crate::mail::{
 };
 use crate::model::{AccountConfig, CalendarAuthMode, MailAuthMode, NewAccountInput};
 use crate::oauth::{
-    OauthService, default_yacli_client_id, exchange_authorization_code,
-    start_pkce_authorization, unix_timestamp_now,
+    OauthService, default_yacli_client_id, exchange_authorization_code, start_pkce_authorization,
+    unix_timestamp_now,
 };
 use crate::output::RenderedOutput;
 
@@ -401,11 +401,12 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
         } => {
             let mut account_store = AccountStore::load()?;
             let account_name = account_store.resolved_account_name(account.as_deref())?;
-            let requested_service = if service.is_none() && (env_var.is_some() || app_password.is_some()) {
-                Some(AuthServiceArg::Calendar)
-            } else {
-                service
-            };
+            let requested_service =
+                if service.is_none() && (env_var.is_some() || app_password.is_some()) {
+                    Some(AuthServiceArg::Calendar)
+                } else {
+                    service
+                };
             match requested_service {
                 Some(AuthServiceArg::Calendar) => {
                     let account = account_store.get_account(&account_name)?;
@@ -494,9 +495,8 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                     };
                     let client_id =
                         client_id.unwrap_or_else(|| default_yacli_client_id().to_string());
-                    let resolved_login_hint = login_hint
-                        .as_deref()
-                        .or(Some(account.email.as_str()));
+                    let resolved_login_hint =
+                        login_hint.as_deref().or(Some(account.email.as_str()));
                     let session =
                         start_pkce_authorization(&services, &client_id, resolved_login_hint)?;
                     let code = match code {
@@ -519,7 +519,10 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                                 service.as_str(),
                                 Some(service.store_ref().to_string()),
                             )?;
-                            Ok((service.as_str().to_string(), service.store_ref().to_string()))
+                            Ok((
+                                service.as_str().to_string(),
+                                service.store_ref().to_string(),
+                            ))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     credential_store.save()?;
@@ -575,8 +578,24 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                         render_key_value_table(&[
                             ("operation", "auth.login".to_string()),
                             ("account", account_name),
-                            ("services", services.iter().map(|service| service.as_str()).collect::<Vec<_>>().join(",")),
-                            ("credential_refs", credential_refs.iter().map(|(service, credential_ref)| format!("{service}={credential_ref}")).collect::<Vec<_>>().join(",")),
+                            (
+                                "services",
+                                services
+                                    .iter()
+                                    .map(|service| service.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                            ),
+                            (
+                                "credential_refs",
+                                credential_refs
+                                    .iter()
+                                    .map(|(service, credential_ref)| {
+                                        format!("{service}={credential_ref}")
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                            ),
                             ("client_id_source", client_id_source.to_string()),
                             (
                                 "expires_at_epoch_secs",
@@ -1030,7 +1049,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
             cc,
             bcc,
             subject,
-            text,
+            body,
             html,
         } => {
             let (resolved_account, auth, context) =
@@ -1040,12 +1059,13 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                 context.smtp_port,
                 auth,
                 MailSendRequest {
-                    to,
+                    to: vec![to],
                     cc,
                     bcc,
                     subject,
-                    text,
+                    text: body,
                     html,
+                    attachments: Vec::new(),
                     thread_headers: None,
                 },
             )?;
@@ -1069,8 +1089,8 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
             account,
             folder,
             uid,
+            body,
             cc,
-            text,
             html,
         } => {
             let (resolved_account, auth, context) =
@@ -1085,7 +1105,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                 MailReplyRequest {
                     uid,
                     cc,
-                    text,
+                    text: body,
                     html,
                 },
             )?;
@@ -1107,9 +1127,9 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
             folder,
             uid,
             to,
+            body,
             cc,
             bcc,
-            text,
             html,
             max_source_bytes,
         } => {
@@ -1124,10 +1144,10 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                 &folder,
                 MailForwardRequest {
                     uid,
-                    to,
+                    to: vec![to],
                     cc,
                     bcc,
-                    text,
+                    text: body,
                     html,
                     max_source_bytes,
                 },
@@ -1473,23 +1493,21 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             topic: "mail",
             summary: "Найти письма по тексту. По умолчанию поиск идет в INBOX.",
             requires_account: true,
-            examples: vec!["yacli mail search --query \"Budget\" --limit 10"],
+            examples: vec!["yacli mail search \"смета\""],
         },
         GuideCommandEntry {
             path: "mail reply",
             topic: "mail",
             summary: "Ответить на письмо по ID из `mail list` или `mail search`.",
             requires_account: true,
-            examples: vec!["yacli mail reply 1353 --text \"Принято\""],
+            examples: vec!["yacli mail reply 1353 \"Принято\""],
         },
         GuideCommandEntry {
             path: "mail forward",
             topic: "mail",
             summary: "Переслать письмо по ID из `mail list` или `mail search`.",
             requires_account: true,
-            examples: vec![
-                "yacli mail forward 1353 --to person@example.com --text \"FYI\"",
-            ],
+            examples: vec!["yacli mail forward 1353 person@example.com \"FYI\""],
         },
         GuideCommandEntry {
             path: "mail read",
@@ -1503,9 +1521,7 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             topic: "mail",
             summary: "Отправить письмо через SMTP с OAuth XOAUTH2 или app password.",
             requires_account: true,
-            examples: vec![
-                "yacli mail send --to person@example.com --subject \"Синк\" --text \"Привет\"",
-            ],
+            examples: vec!["yacli mail send person@example.com \"Синк\" \"Привет\""],
         },
         GuideCommandEntry {
             path: "calendar calendars",
@@ -1558,9 +1574,7 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             topic: "disk",
             summary: "Загрузить локальный файл в приватный Яндекс Диск.",
             requires_account: true,
-            examples: vec![
-                "yacli disk upload --source ./report.pdf --path disk:/docs/report.pdf",
-            ],
+            examples: vec!["yacli disk upload --source ./report.pdf --path disk:/docs/report.pdf"],
         },
         GuideCommandEntry {
             path: "disk info",
@@ -1612,7 +1626,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli mail search --query \"Budget\" --limit 5",
+                "yacli mail search \"смета\"",
                 "yacli mail read <id>",
             ],
         },
@@ -1624,20 +1638,20 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli mail search --query \"Budget\" --limit 5",
-                "yacli mail reply <id> --text \"Принято\"",
+                "yacli mail search \"смета\"",
+                "yacli mail reply <id> \"Принято\"",
             ],
         },
         GuideWorkflowEntry {
             id: "mail_forward_flow",
             topic: "mail",
             title: "Переслать письмо",
-            summary: "Поток от поиска письма до inline-forward новому получателю.",
+            summary: "Поток от поиска письма до пересылки новому получателю вместе с вложениями.",
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli mail search --query \"Budget\" --limit 5",
-                "yacli mail forward <id> --to person@example.com --text \"FYI\"",
+                "yacli mail search \"смета\"",
+                "yacli mail forward <id> person@example.com \"FYI\"",
             ],
         },
         GuideWorkflowEntry {
@@ -1700,9 +1714,9 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
                 "yacli use work",
                 "yacli login",
                 "yacli use personal",
-                "yacli mail list --folder INBOX --limit 5",
+                "yacli mail list --limit 5",
                 "yacli use work",
-                "yacli mail list --folder INBOX --limit 5",
+                "yacli mail list --limit 5",
             ],
         },
         GuideWorkflowEntry {
@@ -1713,7 +1727,7 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli mail send --to person@example.com --subject \"Синк\" --text \"Привет\"",
+                "yacli mail send person@example.com \"Синк\" \"Привет\"",
             ],
         },
         GuideWorkflowEntry {
@@ -2247,7 +2261,11 @@ fn render_disk_mkdir_table(account: &str, resource: &DiskResource) -> String {
     ])
 }
 
-fn render_disk_upload_table(account: &str, resource: &DiskResource, uploaded: &UploadedFile) -> String {
+fn render_disk_upload_table(
+    account: &str,
+    resource: &DiskResource,
+    uploaded: &UploadedFile,
+) -> String {
     render_key_value_table(&[
         ("account", account.to_string()),
         ("source.path", uploaded.source_path.clone()),
@@ -2276,14 +2294,18 @@ fn render_mail_folders_table(account: &str, folders: &[MailFolder]) -> String {
     lines.extend(folders.iter().map(|folder| {
         format!(
             "{}\t{}\t{}\t{}",
-            folder.name,
-            folder.delimiter.as_deref().unwrap_or("-"),
+            sanitize_table_cell(&folder.name),
+            folder
+                .delimiter
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
             if folder.attributes.is_empty() {
                 "-".to_string()
             } else {
-                folder.attributes.join(",")
+                sanitize_table_cell(&folder.attributes.join(","))
             },
-            folder.raw_name
+            sanitize_table_cell(&folder.raw_name)
         )
     }));
     lines.join("\n")
@@ -2300,13 +2322,25 @@ fn render_mail_list_table(account: &str, folder: &str, messages: &[MailMessageSu
         format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
             message.uid,
-            message.date.as_deref().unwrap_or("-"),
-            message.from.as_deref().unwrap_or("-"),
-            message.subject.as_deref().unwrap_or("-"),
+            message
+                .date
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
+            message
+                .from
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
+            message
+                .subject
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
             if message.flags.is_empty() {
                 "-".to_string()
             } else {
-                message.flags.join(",")
+                sanitize_table_cell(&message.flags.join(","))
             },
             message
                 .size
@@ -2334,13 +2368,25 @@ fn render_mail_search_table(
         format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
             message.uid,
-            message.date.as_deref().unwrap_or("-"),
-            message.from.as_deref().unwrap_or("-"),
-            message.subject.as_deref().unwrap_or("-"),
+            message
+                .date
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
+            message
+                .from
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
+            message
+                .subject
+                .as_deref()
+                .map(sanitize_table_cell)
+                .unwrap_or_else(|| "-".to_string()),
             if message.flags.is_empty() {
                 "-".to_string()
             } else {
-                message.flags.join(",")
+                sanitize_table_cell(&message.flags.join(","))
             },
             message
                 .size
@@ -2349,6 +2395,16 @@ fn render_mail_search_table(
         )
     }));
     lines.join("\n")
+}
+
+fn sanitize_table_cell(value: &str) -> String {
+    let normalized = value.replace(['\r', '\n', '\t'], " ");
+    let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        "-".to_string()
+    } else {
+        collapsed
+    }
 }
 
 fn render_mail_read_table(account: &str, folder: &str, message: &MailMessage) -> String {
@@ -2470,10 +2526,7 @@ fn render_mail_forward_table(account: &str, folder: &str, forwarded: &ForwardedM
                 .unwrap_or("-")
                 .to_string(),
         ),
-        (
-            "omitted_attachment_count",
-            forwarded.omitted_attachments.len().to_string(),
-        ),
+        ("attachment_count", forwarded.attachments.len().to_string()),
         ("forward_subject", forwarded.sent.subject.clone()),
         ("to", forwarded.sent.to.join(", ")),
         (
@@ -2554,7 +2607,7 @@ fn forwarded_mail_json(forwarded: &ForwardedMail) -> serde_json::Value {
         "original_id": forwarded.original_uid,
         "original_subject": forwarded.original_subject,
         "original_message_id": forwarded.original_message_id,
-        "omitted_attachments": forwarded.omitted_attachments.iter().map(mail_attachment_json).collect::<Vec<_>>(),
+        "attachments": forwarded.attachments.iter().map(mail_attachment_json).collect::<Vec<_>>(),
         "sent": sent_mail_json(&forwarded.sent),
     })
 }
@@ -2763,4 +2816,40 @@ fn render_disk_resource_table(account: &str, resource: &DiskResource) -> String 
     }
 
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_mail_search_table, sanitize_table_cell};
+    use crate::mail::MailMessageSummary;
+
+    #[test]
+    fn sanitize_table_cell_collapses_newlines_tabs_and_empty_values() {
+        assert_eq!(sanitize_table_cell("one\ttwo\nthree"), "one two three");
+        assert_eq!(sanitize_table_cell("   \r\n\t  "), "-");
+    }
+
+    #[test]
+    fn render_mail_search_table_keeps_one_row_per_message() {
+        let table = render_mail_search_table(
+            "mock",
+            "INBOX",
+            "смета",
+            &[MailMessageSummary {
+                uid: 42,
+                date: Some("Fri,\n13 Mar 2026".to_string()),
+                from: Some("Sender\tName <sender@example.com>".to_string()),
+                subject: Some("Тема\r\nписьма".to_string()),
+                flags: vec!["\\Seen".to_string(), "custom".to_string()],
+                size: Some(128),
+            }],
+        );
+
+        let lines = table.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 6);
+        assert_eq!(
+            lines[5],
+            "42\tFri, 13 Mar 2026\tSender Name <sender@example.com>\tТема письма\t\\Seen,custom\t128"
+        );
+    }
 }
