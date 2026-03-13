@@ -1,11 +1,11 @@
 [package]
 name = "yacli"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/NextStat/yacli"
 rust-version = "1.85"
-description = "Yandex Mail, Calendar, and Disk CLI for humans and AI agents"
+description = "CLI и MCP Apps-сервер для Яндекс Почты, Календаря и Диска для людей и AI-агентов"
 
 [workspace]
 members = []
@@ -34,6 +34,7 @@ flate2 = "1.1"
 self-replace = "1.5.0"
 tar = "0.4"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+mime_guess = "2.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }

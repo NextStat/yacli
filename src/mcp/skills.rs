@@ -37,9 +37,13 @@ const SKILLS: &[Skill] = &[
         name: "yacli-reply-with-context",
         content: include_str!("../../skills/yacli-reply-with-context/SKILL.md"),
     },
+    Skill {
+        name: "yacli-invite-to-calendar",
+        content: include_str!("../../skills/yacli-invite-to-calendar/SKILL.md"),
+    },
 ];
 
-pub const SKILL_COUNT: usize = 7;
+pub const SKILL_COUNT: usize = 8;
 
 pub fn skill_names() -> Vec<&'static str> {
     SKILLS.iter().map(|s| s.name).collect()
@@ -66,6 +70,7 @@ pub fn skill_prompt_name(name: &str) -> Option<&'static str> {
         "yacli-daily-briefing" => Some("daily-briefing"),
         "yacli-find-and-read" => Some("find-and-read"),
         "yacli-reply-with-context" => Some("reply-with-context"),
+        "yacli-invite-to-calendar" => Some("invite-to-calendar"),
         _ => None,
     }
 }
@@ -131,6 +136,7 @@ mod tests {
         assert!(names.contains(&"yacli-daily-briefing"));
         assert!(names.contains(&"yacli-find-and-read"));
         assert!(names.contains(&"yacli-reply-with-context"));
+        assert!(names.contains(&"yacli-invite-to-calendar"));
     }
 
     #[test]
@@ -272,6 +278,14 @@ mod tests {
         assert_eq!(
             skill_prompt_name("yacli-reply-with-context"),
             Some("reply-with-context")
+        );
+        assert_eq!(
+            prompt_skill_name("invite-to-calendar"),
+            Some("yacli-invite-to-calendar")
+        );
+        assert_eq!(
+            skill_prompt_name("yacli-invite-to-calendar"),
+            Some("invite-to-calendar")
         );
     }
 }

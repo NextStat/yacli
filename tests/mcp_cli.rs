@@ -700,6 +700,11 @@ fn mcp_install_writes_skills_to_cursor_directory() {
             .join("yacli-reply-with-context/SKILL.md")
             .exists()
     );
+    assert!(
+        skills_dir
+            .join("yacli-invite-to-calendar/SKILL.md")
+            .exists()
+    );
 
     let shared = fs::read_to_string(skills_dir.join("yacli-shared/SKILL.md")).expect("read");
     assert!(shared.starts_with("---\n"));
@@ -736,6 +741,11 @@ fn mcp_install_writes_skills_to_claude_directory() {
     let skills_dir = home.join(".claude/skills");
     assert!(skills_dir.join("yacli-shared/SKILL.md").exists());
     assert!(skills_dir.join("yacli-mail/SKILL.md").exists());
+    assert!(
+        skills_dir
+            .join("yacli-invite-to-calendar/SKILL.md")
+            .exists()
+    );
 }
 
 #[test]

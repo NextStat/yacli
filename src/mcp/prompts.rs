@@ -169,48 +169,77 @@ const REPLY_WITH_CONTEXT_ARGUMENTS: &[PromptArgument] = &[
     },
 ];
 
+const INVITE_TO_CALENDAR_ARGUMENTS: &[PromptArgument] = &[
+    PromptArgument {
+        name: "query",
+        description: "Поисковая фраза, чтобы найти письмо с приглашением.",
+        required: true,
+    },
+    PromptArgument {
+        name: "account",
+        description: "Optional yacli account alias.",
+        required: false,
+    },
+    PromptArgument {
+        name: "folder",
+        description: "Mailbox folder, defaults to INBOX when omitted.",
+        required: false,
+    },
+    PromptArgument {
+        name: "calendar",
+        description: "Календарь назначения, по умолчанию default.",
+        required: false,
+    },
+];
+
 const PROMPTS: &[PromptDefinition] = &[
     PromptDefinition {
         name: "shared",
-        title: "yacli Shared Guide",
-        description: "Resolve account, auth, and core yacli MCP context before working with a Yandex service.",
+        title: "Общая основа yacli",
+        description: "Разобраться с аккаунтом, авторизацией и базовым MCP-контекстом yacli перед работой с Почтой, Календарём или Диском.",
         arguments: SHARED_ARGUMENTS,
     },
     PromptDefinition {
         name: "mail",
-        title: "yacli Mail Workflow",
-        description: "Use yacli MCP mail tools to inspect folders, search mail, and read messages.",
+        title: "Почтовый workflow yacli",
+        description: "Работа с Яндекс Почтой через MCP: папки, поиск, чтение, отправка, ответ и пересылка писем.",
         arguments: MAIL_ARGUMENTS,
     },
     PromptDefinition {
         name: "calendar",
-        title: "yacli Calendar Workflow",
-        description: "Use yacli MCP calendar tools to inspect calendars and upcoming events.",
+        title: "Календарный workflow yacli",
+        description: "Работа с Яндекс Календарём через MCP: календари, ближайшие события, создание и удаление встреч.",
         arguments: CALENDAR_ARGUMENTS,
     },
     PromptDefinition {
         name: "disk",
-        title: "yacli Disk Workflow",
-        description: "Use yacli MCP disk tools to inspect quota and list disk resources.",
+        title: "Дисковый workflow yacli",
+        description: "Работа с Яндекс Диском через MCP: квота, список файлов, создание папок и загрузка файлов.",
         arguments: DISK_ARGUMENTS,
     },
     PromptDefinition {
         name: "daily-briefing",
-        title: "yacli Daily Briefing",
-        description: "Combine inbox and calendar context into one morning briefing.",
+        title: "Сводка по почте и календарю",
+        description: "Собрать краткую сводку: важные письма, ближайшие встречи, дедлайны и действия, которые требуют внимания.",
         arguments: DAILY_BRIEFING_ARGUMENTS,
     },
     PromptDefinition {
         name: "find-and-read",
-        title: "yacli Find And Read",
-        description: "Search for an email and read the most relevant result.",
+        title: "Найти и прочитать письмо",
+        description: "Найти письмо по запросу, выбрать лучший результат и прочитать содержимое.",
         arguments: FIND_AND_READ_ARGUMENTS,
     },
     PromptDefinition {
         name: "reply-with-context",
-        title: "yacli Reply With Context",
-        description: "Read an email, inspect the schedule, and draft a context-aware reply.",
+        title: "Ответить с учётом контекста",
+        description: "Прочитать письмо, сверить расписание и подготовить или отправить ответ с учётом календарного контекста.",
         arguments: REPLY_WITH_CONTEXT_ARGUMENTS,
+    },
+    PromptDefinition {
+        name: "invite-to-calendar",
+        title: "Создать событие из приглашения в письме",
+        description: "Найти письмо с приглашением, разобрать .ics или text/calendar вложение и импортировать нужный VEVENT в календарь.",
+        arguments: INVITE_TO_CALENDAR_ARGUMENTS,
     },
 ];
 
@@ -340,6 +369,7 @@ fn prompt_messages(name: &str, arguments: &Value) -> Result<Vec<Value>> {
         "daily-briefing" => render_daily_briefing_prompt(arguments),
         "find-and-read" => render_find_and_read_prompt(arguments)?,
         "reply-with-context" => render_reply_with_context_prompt(arguments)?,
+        "invite-to-calendar" => render_invite_to_calendar_prompt(arguments)?,
         _ => {
             return Err(YacliError::Validation(format!(
                 "unknown MCP prompt: {name}"
@@ -364,13 +394,18 @@ fn complete_prompt_reference(
 ) -> Result<Vec<String>> {
     let suggestions = match (name, argument_name) {
         (_, "account") => configured_accounts()?,
-        ("mail", "folder") | ("find-and-read", "folder") | ("reply-with-context", "folder") => {
+        ("mail", "folder")
+        | ("find-and-read", "folder")
+        | ("reply-with-context", "folder")
+        | ("invite-to-calendar", "folder") => {
             ["INBOX", "Sent", "Drafts", "Archive", "Trash", "Spam"]
                 .into_iter()
                 .map(str::to_string)
                 .collect()
         }
-        ("calendar", "calendar") => vec!["default".to_string()],
+        ("calendar", "calendar") | ("invite-to-calendar", "calendar") => {
+            vec!["default".to_string()]
+        }
         ("calendar", "from")
         | ("calendar", "to")
         | ("daily-briefing", "from")
@@ -514,23 +549,23 @@ fn enrich_with_canonical_skill(prompt_name: &str, body: &str) -> String {
 
 fn render_shared_prompt(arguments: &Value) -> String {
     let goal = optional_string(arguments, "goal").unwrap_or(
-        "Resolve the right yacli account, inspect auth posture, and choose the right service tools before acting.",
+        "Определи нужный аккаунт yacli, проверь авторизацию и выбери правильный сервисный surface перед действием.",
     );
     let account = optional_string(arguments, "account");
 
     format!(
-        "You are working with the yacli MCP server.\n\
-Goal: {goal}\n\
-Preferred account: {}\n\
+        "Ты работаешь с MCP-сервером yacli.\n\
+Цель: {goal}\n\
+Предпочтительный аккаунт: {}\n\
 \n\
-Use this workflow:\n\
-1. Resolve the account with `yacli.account.current` or `yacli.account.list`.\n\
-2. Check auth posture with `yacli.auth.status`.\n\
-3. If you need structured account context, read `resource://yacli/account/{{account}}` and `resource://yacli/auth/{{account}}`.\n\
-4. Only then move into mail, calendar, or disk tools.\n\
+Используй такой порядок работы:\n\
+1. Определи аккаунт через `yacli.account.current` или `yacli.account.list`.\n\
+2. Проверь состояние авторизации через `yacli.auth.status`.\n\
+3. Если нужен структурированный контекст по аккаунту, прочитай `resource://yacli/account/{{account}}` и `resource://yacli/auth/{{account}}`.\n\
+4. И только потом переходи к mail, calendar или disk tools.\n\
 \n\
-If the requested account is missing or not authenticated, explain the gap clearly before continuing.",
-        account.unwrap_or("current")
+Если нужного аккаунта нет или сервис не авторизован, явно проговори этот gap до продолжения.",
+        account.unwrap_or("текущий")
     )
 }
 
@@ -540,18 +575,19 @@ fn render_mail_prompt(arguments: &Value) -> Result<String> {
     let folder = optional_string(arguments, "folder").unwrap_or("INBOX");
 
     Ok(format!(
-        "Help with Yandex Mail through the yacli MCP server.\n\
-Request: {request}\n\
-Account: {account}\n\
-Folder: {folder}\n\
+        "Помоги с Яндекс Почтой через MCP-сервер yacli.\n\
+Задача: {request}\n\
+Аккаунт: {account}\n\
+Папка: {folder}\n\
 \n\
-Use this workflow:\n\
-1. Confirm account and auth with `yacli.account.current` / `yacli.auth.status` if needed.\n\
-2. Use `yacli.mail.folders` if the correct folder is unclear.\n\
-3. Use `yacli.mail.list` for recent context or `yacli.mail.search` when the user gives keywords.\n\
-4. Use `yacli.mail.read` for the exact UID that matters.\n\
-5. If the task is a write action, use `yacli.mail.send`, `yacli.mail.reply`, or `yacli.mail.forward` with the smallest valid payload.\n\
-6. Summarize findings or the send outcome clearly, including sender, date, subject, and the relevant body details."
+Используй такой workflow:\n\
+1. При необходимости подтверди аккаунт и авторизацию через `yacli.account.current` / `yacli.auth.status`.\n\
+2. Если непонятно, в какой папке искать письмо, вызови `yacli.mail.folders`.\n\
+3. Для быстрого контекста используй `yacli.mail.list`, а если у пользователя есть ключевые слова — `yacli.mail.search`.\n\
+4. Для точного письма используй `yacli.mail.read` по нужному UID.\n\
+5. Если задача write-oriented, используй `yacli.mail.send`, `yacli.mail.reply` или `yacli.mail.forward` с минимально достаточным payload.\n\
+6. Если нужно сохранить вложение или превратить `.ics` в событие, используй `yacli.mail.attachment.export` и `yacli.mail.invite.create_event`.\n\
+7. В финальном ответе кратко и чётко зафиксируй отправителя, дату, тему, ключевые детали письма и результат write-действия."
     ))
 }
 
@@ -563,20 +599,20 @@ fn render_calendar_prompt(arguments: &Value) -> Result<String> {
     let to = optional_string(arguments, "to").unwrap_or("auto");
 
     Ok(format!(
-        "Help with Yandex Calendar through the yacli MCP server.\n\
-Request: {request}\n\
-Account: {account}\n\
-Calendar: {calendar}\n\
-Window: from={from}, to={to}\n\
+        "Помоги с Яндекс Календарём через MCP-сервер yacli.\n\
+Задача: {request}\n\
+Аккаунт: {account}\n\
+Календарь: {calendar}\n\
+Окно: from={from}, to={to}\n\
 \n\
-Use this workflow:\n\
-1. Confirm account and auth posture if needed.\n\
-2. Use `yacli.calendar.calendars` when the target calendar is unclear.\n\
-3. Use `yacli.calendar.events` with the narrowest useful time window.\n\
-4. If the task is a write action, use `yacli.calendar.create` or `yacli.calendar.delete` with an explicit calendar and exact timestamps or UID.\n\
-5. Return a concise schedule summary or the write outcome with times, titles, locations, and conflicts if visible.\n\
+Используй такой workflow:\n\
+1. При необходимости подтверди аккаунт и авторизацию.\n\
+2. Если непонятно, в каком календаре работать, вызови `yacli.calendar.calendars`.\n\
+3. Используй `yacli.calendar.events` с как можно более узким временным окном.\n\
+4. Если задача write-oriented, используй `yacli.calendar.create` или `yacli.calendar.delete` с явным календарём и точными timestamps или UID.\n\
+5. Верни короткую сводку по расписанию или результат write-действия: время, название, место и конфликты, если они видны.\n\
 \n\
-Calendar updates beyond create/delete are still not exposed through MCP. If the user asks to modify an existing event in place, explain that gap clearly."
+Изменение существующего события beyond create/delete через MCP пока не поддержано. Если пользователь просит редактирование на месте, явно объясни этот gap."
     ))
 }
 
@@ -586,19 +622,19 @@ fn render_disk_prompt(arguments: &Value) -> Result<String> {
     let path = optional_string(arguments, "path").unwrap_or("disk:/");
 
     Ok(format!(
-        "Help with Yandex Disk through the yacli MCP server.\n\
-Request: {request}\n\
-Account: {account}\n\
-Path: {path}\n\
+        "Помоги с Яндекс Диском через MCP-сервер yacli.\n\
+Задача: {request}\n\
+Аккаунт: {account}\n\
+Путь: {path}\n\
 \n\
-Use this workflow:\n\
-1. Confirm account and auth posture if needed.\n\
-2. Use `yacli.disk.info` for quota context.\n\
-3. Use `yacli.disk.list` for the requested path.\n\
-4. If the task is a write action, use `yacli.disk.mkdir` or `yacli.disk.upload` with an explicit `disk:/...` path and a real local source path for uploads.\n\
-5. Summarize the relevant files, directories, storage state, or upload outcome.\n\
+Используй такой workflow:\n\
+1. При необходимости подтверди аккаунт и авторизацию.\n\
+2. Для понимания квоты используй `yacli.disk.info`.\n\
+3. Для просмотра содержимого используй `yacli.disk.list` по нужному пути.\n\
+4. Если задача write-oriented, используй `yacli.disk.mkdir` или `yacli.disk.upload` с явным путём `disk:/...` и реальным локальным source path для upload.\n\
+5. Верни краткую сводку по файлам, папкам, квоте или результату загрузки.\n\
 \n\
-More advanced file mutations beyond mkdir/upload are still not exposed through MCP. If the user asks for move, delete, or rename, explain that gap clearly."
+Более сложные file mutations beyond mkdir/upload через MCP пока не поддержаны. Если пользователь просит move, delete или rename, явно объясни этот gap."
     ))
 }
 
@@ -609,18 +645,18 @@ fn render_daily_briefing_prompt(arguments: &Value) -> String {
     let mail_limit = optional_string(arguments, "mail_limit").unwrap_or("10");
 
     format!(
-        "Prepare a yacli daily briefing.\n\
-Account: {account}\n\
-Mail limit: {mail_limit}\n\
-Calendar window: from={from}, to={to}\n\
+        "Подготовь сводку по почте и календарю через yacli.\n\
+Аккаунт: {account}\n\
+Лимит писем: {mail_limit}\n\
+Окно календаря: from={from}, to={to}\n\
 \n\
-Use this workflow:\n\
-1. Resolve account context if needed.\n\
-2. Use `yacli.mail.list` on INBOX with the requested limit.\n\
-3. Use `yacli.calendar.events` for the requested window.\n\
-4. Produce a briefing with: unread or recent message highlights, urgent-looking subjects, upcoming meetings, and obvious conflicts or deadlines.\n\
+Используй такой workflow:\n\
+1. При необходимости уточни аккаунт.\n\
+2. Вызови `yacli.mail.list` по INBOX с заданным лимитом.\n\
+3. Вызови `yacli.calendar.events` для нужного окна.\n\
+4. Собери сводку: важные или свежие письма, срочные темы, ближайшие встречи, дедлайны и очевидные конфликты.\n\
 \n\
-Keep the final answer short and operational."
+Финальный ответ держи коротким, операционным и ориентированным на действия."
     )
 }
 
@@ -631,17 +667,17 @@ fn render_find_and_read_prompt(arguments: &Value) -> Result<String> {
     let limit = optional_string(arguments, "limit").unwrap_or("5");
 
     Ok(format!(
-        "Find and read a specific email through the yacli MCP server.\n\
-Query: {query}\n\
-Account: {account}\n\
-Folder: {folder}\n\
-Limit: {limit}\n\
+        "Найди и прочитай нужное письмо через MCP-сервер yacli.\n\
+Запрос: {query}\n\
+Аккаунт: {account}\n\
+Папка: {folder}\n\
+Лимит: {limit}\n\
 \n\
-Use this workflow:\n\
-1. Run `yacli.mail.search` with the given query and limit.\n\
-2. Pick the most relevant UID based on sender, subject, and date.\n\
-3. Run `yacli.mail.read` for that UID.\n\
-4. Return the important contents of the message and explicitly mention which UID you selected."
+Используй такой workflow:\n\
+1. Вызови `yacli.mail.search` с заданным запросом и лимитом.\n\
+2. Выбери самый релевантный UID по отправителю, теме и дате.\n\
+3. Вызови `yacli.mail.read` для этого UID.\n\
+4. Верни ключевое содержимое письма и явно укажи, какой UID ты выбрал."
     ))
 }
 
@@ -653,19 +689,44 @@ fn render_reply_with_context_prompt(arguments: &Value) -> Result<String> {
     let to = optional_string(arguments, "to").unwrap_or("auto");
 
     Ok(format!(
-        "Draft a schedule-aware reply through the yacli MCP server.\n\
-Mail UID: {uid}\n\
-Account: {account}\n\
-Folder: {folder}\n\
-Calendar window: from={from}, to={to}\n\
+        "Подготовь или отправь ответ на письмо с учётом расписания через MCP-сервер yacli.\n\
+UID письма: {uid}\n\
+Аккаунт: {account}\n\
+Папка: {folder}\n\
+Окно календаря: from={from}, to={to}\n\
 \n\
-Use this workflow:\n\
-1. Read the original message with `yacli.mail.read`.\n\
-2. Infer the relevant scheduling window from the message or use the provided window.\n\
-3. Inspect availability with `yacli.calendar.events`.\n\
-4. Send the actual reply with `yacli.mail.reply`, or if the user only asked for a draft, provide the draft text explicitly.\n\
+Используй такой workflow:\n\
+1. Прочитай исходное письмо через `yacli.mail.read`.\n\
+2. Определи релевантное календарное окно из письма или используй явно переданное окно.\n\
+3. Проверь занятость через `yacli.calendar.events`.\n\
+4. Если нужен реальный ответ, используй `yacli.mail.reply`; если нужен только черновик, явно выдай текст черновика.\n\
 \n\
-Be explicit whether the final output is a sent reply or only a proposed draft."
+Явно укажи, отправлен ли ответ реально или это только предложенный draft."
+    ))
+}
+
+fn render_invite_to_calendar_prompt(arguments: &Value) -> Result<String> {
+    let query = required_string(arguments, "query")?;
+    let account = optional_string(arguments, "account").unwrap_or("current");
+    let folder = optional_string(arguments, "folder").unwrap_or("INBOX");
+    let calendar = optional_string(arguments, "calendar").unwrap_or("default");
+
+    Ok(format!(
+        "Помоги создать событие в Яндекс Календаре из приглашения в письме через MCP-сервер yacli.\n\
+Поисковый запрос: {query}\n\
+Аккаунт: {account}\n\
+Папка: {folder}\n\
+Календарь назначения: {calendar}\n\
+\n\
+Используй такой workflow:\n\
+1. Найди письмо через `yacli.mail.search` по запросу и выбери лучший UID.\n\
+2. Прочитай письмо через `yacli.mail.read`, если нужно уточнить вложения и контекст.\n\
+3. Разбери календарное вложение через `yacli.mail.invite.inspect`.\n\
+4. Если в одном вложении несколько VEVENT, выбери нужный `event_index` и явно объясни выбор.\n\
+5. Создай событие через `yacli.mail.invite.create_event` с явным календарём `{calendar}`.\n\
+6. В финальном ответе кратко зафиксируй UID письма, выбранное приглашение, календарь и созданное событие.\n\
+\n\
+Если у VEVENT нет `SUMMARY`, `DTSTART` или `DTEND`, не пытайся импортировать его молча: явно объясни, что данные приглашения неполные."
     ))
 }
 
@@ -691,7 +752,7 @@ mod tests {
     #[test]
     fn prompt_definitions_expose_all_embedded_prompts() {
         let prompts = prompt_definitions();
-        assert_eq!(prompts.len(), 7);
+        assert_eq!(prompts.len(), 8);
         assert!(prompts.iter().any(|prompt| prompt["name"] == "shared"));
         assert!(prompts.iter().any(|prompt| prompt["name"] == "mail"));
         assert!(prompts.iter().any(|prompt| prompt["name"] == "calendar"));
@@ -710,6 +771,11 @@ mod tests {
             prompts
                 .iter()
                 .any(|prompt| prompt["name"] == "reply-with-context")
+        );
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "invite-to-calendar")
         );
     }
 
@@ -733,8 +799,8 @@ mod tests {
         let text = prompt["messages"][0]["content"]["text"]
             .as_str()
             .expect("prompt text");
-        assert!(text.contains("Account: work"));
-        assert!(text.contains("Mail limit: 15"));
+        assert!(text.contains("Аккаунт: work"));
+        assert!(text.contains("Лимит писем: 15"));
         assert!(text.contains("yacli.mail.list"));
         assert!(text.contains("yacli.calendar.events"));
     }
@@ -765,8 +831,29 @@ mod tests {
         let text = prompt["messages"][0]["content"]["text"]
             .as_str()
             .expect("prompt text");
-        assert!(text.contains("Send the actual reply with `yacli.mail.reply`"));
-        assert!(text.contains("sent reply or only a proposed draft"));
+        assert!(text.contains("используй `yacli.mail.reply`"));
+        assert!(text.contains("это только предложенный draft"));
+    }
+
+    #[test]
+    fn invite_to_calendar_prompt_mentions_mail_and_calendar_bridge() {
+        let prompt = get_prompt(json!({
+            "name": "invite-to-calendar",
+            "arguments": {
+                "query": "приглашение demo",
+                "calendar": "team"
+            }
+        }))
+        .expect("prompt");
+
+        let text = prompt["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(text.contains("Поисковый запрос: приглашение demo"));
+        assert!(text.contains("Календарь назначения: team"));
+        assert!(text.contains("`yacli.mail.search`"));
+        assert!(text.contains("`yacli.mail.invite.create_event`"));
+        assert!(text.contains("resource://yacli/skill/yacli-invite-to-calendar"));
     }
 
     #[test]
@@ -785,6 +872,25 @@ mod tests {
 
         assert_eq!(result["completion"]["values"][0], "INBOX");
         assert_eq!(result["completion"]["hasMore"], false);
+    }
+
+    #[test]
+    fn completion_for_invite_to_calendar_calendar_filters_by_prefix() {
+        let result = complete(json!({
+            "ref": {
+                "type": "ref/prompt",
+                "name": "invite-to-calendar"
+            },
+            "argument": {
+                "name": "calendar",
+                "value": "de"
+            }
+        }))
+        .expect("completion");
+
+        let values = result["completion"]["values"].as_array().expect("values");
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], "default");
     }
 
     #[test]

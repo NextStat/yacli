@@ -7,12 +7,14 @@ use serde_json::json;
 use crate::account_store::{AccountStore, validate_account};
 use crate::calendar::{
     CalendarCollection, CalendarCreateRequest, CalendarEvent, CalendarEventWindow,
-    CalendarEventsRequest, create_calendar_event, delete_calendar_event, list_calendar_events,
-    list_calendars, parse_event_window,
+    CalendarEventsRequest, CalendarInvite, calendar_create_request_from_invites,
+    create_calendar_event, delete_calendar_event, list_calendar_events, list_calendars,
+    parse_event_window,
 };
 use crate::cli::{
     AccountCommand, AuthCommand, AuthServiceArg, CalendarCommand, Cli, Command, DiskCommand,
-    DiskPublicCommand, GuideTopicArg, MailCommand, McpCommand, OutputFormat,
+    DiskPublicCommand, GuideTopicArg, MailAttachmentCommand, MailCommand, MailInviteCommand,
+    McpCommand, OutputFormat,
 };
 use crate::credential_store::{CredentialStore, StoredAppPasswordCredential};
 use crate::disk::{
@@ -23,9 +25,11 @@ use crate::disk::{
 };
 use crate::error::{Result, YacliError};
 use crate::mail::{
-    ForwardedMail, MailAttachmentSummary, MailFolder, MailForwardRequest, MailMessage,
-    MailMessageSummary, MailReplyRequest, MailSendRequest, RepliedMail, SentMail,
-    forward_mail_message, list_mail_folders, list_mail_messages, read_mail_message,
+    ExportedMailAttachment, ForwardedMail, InspectedMailInvite, MailAttachmentExportRequest,
+    MailAttachmentSelector, MailAttachmentSummary, MailFolder, MailForwardRequest,
+    MailInviteInspectRequest, MailMessage, MailMessageSummary, MailReplyRequest, MailSendRequest,
+    RepliedMail, SentMail, export_mail_attachment, forward_mail_message, inspect_mail_invite,
+    list_mail_folders, list_mail_messages, load_mail_attachments, read_mail_message,
     reply_to_mail_message, search_mail_messages, send_mail_message,
 };
 use crate::mcp::install::execute_install;
@@ -1076,9 +1080,11 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
             subject,
             body,
             html,
+            attachments,
         } => {
             let (resolved_account, auth, context) =
                 resolve_mail_private_context(account.as_deref())?;
+            let attachments = load_mail_attachments(&attachments)?;
             let sent = send_mail_message(
                 &context.smtp_host,
                 context.smtp_port,
@@ -1090,7 +1096,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     subject,
                     text: body,
                     html,
-                    attachments: Vec::new(),
+                    attachments,
                     thread_headers: None,
                 },
             )?;
@@ -1190,7 +1196,190 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                 render_mail_forward_table(&resolved_account, &folder, &forwarded),
             )
         }
+        MailCommand::Attachment { action } => execute_mail_attachment(format, action),
+        MailCommand::Invite { action } => execute_mail_invite(format, action),
     }
+}
+
+fn execute_mail_attachment(
+    format: OutputFormat,
+    action: MailAttachmentCommand,
+) -> Result<RenderedOutput> {
+    match action {
+        MailAttachmentCommand::Export {
+            account,
+            folder,
+            uid,
+            index,
+            name,
+            output,
+            force,
+            max_bytes,
+        } => {
+            let selector =
+                mail_attachment_selector_for_command("mail attachment export", index, name)?;
+
+            let (resolved_account, auth, context) =
+                resolve_mail_private_context(account.as_deref())?;
+            let exported = export_mail_attachment(
+                &context.imap_host,
+                context.imap_port,
+                auth,
+                &folder,
+                MailAttachmentExportRequest {
+                    uid,
+                    selector,
+                    output,
+                    force,
+                    max_bytes,
+                },
+            )?;
+
+            ok_output(
+                format,
+                "mail.attachment.export",
+                json!({
+                    "account": resolved_account,
+                    "email": context.email,
+                    "folder": folder,
+                    "attachment": exported_mail_attachment_json(&exported),
+                }),
+                render_mail_attachment_export_table(&resolved_account, &folder, &exported),
+            )
+        }
+    }
+}
+
+fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Result<RenderedOutput> {
+    match action {
+        MailInviteCommand::Inspect {
+            account,
+            folder,
+            uid,
+            index,
+            name,
+            max_bytes,
+        } => {
+            let selector =
+                mail_attachment_selector_for_command("mail invite inspect", index, name)?;
+
+            let (resolved_account, auth, context) =
+                resolve_mail_private_context(account.as_deref())?;
+            let invite = inspect_mail_invite(
+                &context.imap_host,
+                context.imap_port,
+                auth,
+                &folder,
+                MailInviteInspectRequest {
+                    uid,
+                    selector,
+                    max_bytes,
+                },
+            )?;
+
+            ok_output(
+                format,
+                "mail.invite.inspect",
+                json!({
+                    "account": resolved_account,
+                    "email": context.email,
+                    "folder": folder,
+                    "invite": inspected_mail_invite_json(&invite),
+                }),
+                render_mail_invite_inspect_table(&resolved_account, &folder, &invite),
+            )
+        }
+        MailInviteCommand::CreateEvent {
+            account,
+            folder,
+            uid,
+            index,
+            name,
+            calendar,
+            event_index,
+            max_bytes,
+        } => {
+            let selector =
+                mail_attachment_selector_for_command("mail invite create-event", index, name)?;
+            validate_positive_event_index("mail invite create-event", event_index)?;
+            let (resolved_account, auth, mail_context) =
+                resolve_mail_private_context(account.as_deref())?;
+            let inspected = inspect_mail_invite(
+                &mail_context.imap_host,
+                mail_context.imap_port,
+                auth,
+                &folder,
+                MailInviteInspectRequest {
+                    uid,
+                    selector,
+                    max_bytes,
+                },
+            )?;
+            let (create_request, selected_invite) = calendar_create_request_from_invites(
+                &calendar,
+                &inspected.invites,
+                event_index,
+                "mail invite create-event",
+            )?;
+            let (_, app_password, calendar_context) =
+                resolve_calendar_private_context(Some(&resolved_account))?;
+            let (calendar, event) = create_calendar_event(
+                &calendar_context.caldav_base_url,
+                &calendar_context.email,
+                &app_password,
+                create_request,
+            )?;
+
+            ok_output(
+                format,
+                "mail.invite.create_event",
+                json!({
+                    "account": resolved_account,
+                    "email": mail_context.email,
+                    "folder": folder,
+                    "attachment": inspected_mail_invite_json(&inspected),
+                    "selected_invite": calendar_invite_json(&selected_invite),
+                    "calendar": calendar,
+                    "event": calendar_event_json(&event),
+                }),
+                render_mail_invite_create_event_table(
+                    &resolved_account,
+                    &folder,
+                    &inspected,
+                    event_index,
+                    &selected_invite,
+                    &calendar,
+                    &event,
+                ),
+            )
+        }
+    }
+}
+
+fn mail_attachment_selector_for_command(
+    command_name: &str,
+    index: Option<usize>,
+    name: Option<String>,
+) -> Result<MailAttachmentSelector> {
+    match (index, name) {
+        (Some(index), None) => Ok(MailAttachmentSelector::Index(index)),
+        (None, Some(name)) => Ok(MailAttachmentSelector::Filename(name)),
+        (Some(_), Some(_)) => Err(YacliError::Validation(format!(
+            "{command_name} accepts either --index or --name, not both"
+        ))),
+        (None, None) => Err(YacliError::Validation(format!(
+            "{command_name} requires --index or --name"
+        ))),
+    }
+}
+
+fn validate_positive_event_index(command_name: &str, event_index: usize) -> Result<()> {
+    if event_index == 0 {
+        return Err(YacliError::Validation(format!(
+            "{command_name} --event-index must be greater than zero"
+        )));
+    }
+    Ok(())
 }
 
 fn execute_disk_public(format: OutputFormat, action: DiskPublicCommand) -> Result<RenderedOutput> {
@@ -1459,11 +1648,44 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             examples: vec!["yacli mail read 1353"],
         },
         GuideCommandEntry {
+            path: "mail attachment export",
+            topic: "mail",
+            summary: "Сохранить выбранное вложение письма в локальный файл.",
+            requires_account: true,
+            examples: vec![
+                "yacli mail attachment export 1353 --index 1 --output ./invoice.pdf",
+                "yacli mail attachment export 1353 --name invoice.pdf --output ./invoice.pdf",
+            ],
+        },
+        GuideCommandEntry {
+            path: "mail invite inspect",
+            topic: "mail",
+            summary: "Разобрать calendar invite из вложения письма и показать VEVENT поля.",
+            requires_account: true,
+            examples: vec![
+                "yacli mail invite inspect 1353 --index 1",
+                "yacli mail invite inspect 1353 --name invite.ics",
+            ],
+        },
+        GuideCommandEntry {
+            path: "mail invite create-event",
+            topic: "mail",
+            summary: "Создать событие в календаре из `.ics` или `text/calendar` вложения письма.",
+            requires_account: true,
+            examples: vec![
+                "yacli mail invite create-event 1353 --index 1",
+                "yacli mail invite create-event 1353 --name invite.ics --calendar team --event-index 2",
+            ],
+        },
+        GuideCommandEntry {
             path: "mail send",
             topic: "mail",
-            summary: "Отправить письмо через SMTP с OAuth XOAUTH2 или app password.",
+            summary: "Отправить письмо через SMTP с OAuth XOAUTH2 или app password, при необходимости с локальными вложениями.",
             requires_account: true,
-            examples: vec!["yacli mail send person@example.com \"Синк\" \"Привет\""],
+            examples: vec![
+                "yacli mail send person@example.com \"Синк\" \"Привет\"",
+                "yacli mail send person@example.com \"Счёт\" \"Во вложении\" --attach ./invoice.pdf",
+            ],
         },
         GuideCommandEntry {
             path: "calendar calendars",
@@ -1598,6 +1820,45 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             ],
         },
         GuideWorkflowEntry {
+            id: "mail_attachment_export_flow",
+            topic: "mail",
+            title: "Скачать вложение из письма",
+            summary: "Поток от поиска письма до сохранения выбранного вложения в локальный файл.",
+            steps: vec![
+                "yacli add me@yandex.ru",
+                "yacli login",
+                "yacli mail search \"счёт\"",
+                "yacli mail read <id>",
+                "yacli mail attachment export <id> --index 1 --output ./invoice.pdf",
+            ],
+        },
+        GuideWorkflowEntry {
+            id: "mail_invite_inspect_flow",
+            topic: "mail",
+            title: "Разобрать приглашение из письма",
+            summary: "Поток от поиска письма до чтения calendar invite из `.ics` или `text/calendar` вложения.",
+            steps: vec![
+                "yacli add me@yandex.ru",
+                "yacli login",
+                "yacli mail search \"приглашение\"",
+                "yacli mail read <id>",
+                "yacli mail invite inspect <id> --index 1",
+            ],
+        },
+        GuideWorkflowEntry {
+            id: "mail_invite_create_event_flow",
+            topic: "mail",
+            title: "Создать событие из приглашения в письме",
+            summary: "Поток от поиска письма до импорта выбранного VEVENT в календарь через CalDAV.",
+            steps: vec![
+                "yacli add me@yandex.ru",
+                "yacli login",
+                "yacli login calendar --app-password <app-password>",
+                "yacli mail search \"приглашение\"",
+                "yacli mail invite create-event <id> --index 1",
+            ],
+        },
+        GuideWorkflowEntry {
             id: "disk_public_flow",
             topic: "disk",
             title: "Посмотреть и скачать публичный файл с Диска",
@@ -1661,12 +1922,12 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
         GuideWorkflowEntry {
             id: "mail_send_flow",
             topic: "mail",
-            title: "Отправить письмо",
-            summary: "Поток от OAuth логина до отправки письма через SMTP.",
+            title: "Отправить письмо с вложением",
+            summary: "Поток от OAuth логина до отправки письма через SMTP, включая локальный файл во вложении.",
             steps: vec![
                 "yacli add me@yandex.ru",
                 "yacli login",
-                "yacli mail send person@example.com \"Синк\" \"Привет\"",
+                "yacli mail send person@example.com \"Синк\" \"Привет\" --attach ./report.pdf",
             ],
         },
         GuideWorkflowEntry {
@@ -2291,6 +2552,119 @@ fn render_mail_forward_table(account: &str, folder: &str, forwarded: &ForwardedM
     ])
 }
 
+fn render_mail_attachment_export_table(
+    account: &str,
+    folder: &str,
+    attachment: &ExportedMailAttachment,
+) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("folder", folder.to_string()),
+        ("message_id", attachment.message_uid.to_string()),
+        ("attachment_index", attachment.attachment_index.to_string()),
+        (
+            "filename",
+            attachment.filename.as_deref().unwrap_or("-").to_string(),
+        ),
+        ("mime_type", attachment.mime_type.clone()),
+        (
+            "content_id",
+            attachment.content_id.as_deref().unwrap_or("-").to_string(),
+        ),
+        ("inline", attachment.inline.to_string()),
+        ("output_path", attachment.output_path.clone()),
+        ("bytes_written", attachment.bytes_written.to_string()),
+        ("sha256", attachment.sha256.clone()),
+    ])
+}
+
+fn render_mail_invite_inspect_table(
+    account: &str,
+    folder: &str,
+    invite: &InspectedMailInvite,
+) -> String {
+    let mut lines = vec![
+        format!("account\t{account}"),
+        format!("folder\t{folder}"),
+        format!("message_id\t{}", invite.message_uid),
+        format!("attachment_index\t{}", invite.attachment_index),
+        format!("filename\t{}", invite.filename.as_deref().unwrap_or("-")),
+        format!("mime_type\t{}", invite.mime_type),
+        format!(
+            "content_id\t{}",
+            invite.content_id.as_deref().unwrap_or("-")
+        ),
+        format!("inline\t{}", invite.inline),
+        format!("invite_count\t{}", invite.invites.len()),
+    ];
+    if invite.invites.is_empty() {
+        lines.push("invites\t-".to_string());
+    } else {
+        lines.push("invites".to_string());
+        lines.push("UID\tSUMMARY\tSTART\tEND\tLOCATION\tSTATUS\tALL_DAY".to_string());
+        lines.extend(invite.invites.iter().map(|entry| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                entry.uid.as_deref().unwrap_or("-"),
+                entry.summary.as_deref().unwrap_or("-"),
+                entry.start.as_deref().unwrap_or("-"),
+                entry.end.as_deref().unwrap_or("-"),
+                entry.location.as_deref().unwrap_or("-"),
+                entry.status.as_deref().unwrap_or("-"),
+                entry.all_day
+            )
+        }));
+    }
+    lines.join("\n")
+}
+
+fn render_mail_invite_create_event_table(
+    account: &str,
+    folder: &str,
+    attachment: &InspectedMailInvite,
+    event_index: usize,
+    invite: &CalendarInvite,
+    calendar: &CalendarCollection,
+    event: &CalendarEvent,
+) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("folder", folder.to_string()),
+        ("message_id", attachment.message_uid.to_string()),
+        ("attachment_index", attachment.attachment_index.to_string()),
+        ("invite_event_index", event_index.to_string()),
+        (
+            "invite_uid",
+            invite.uid.as_deref().unwrap_or("-").to_string(),
+        ),
+        (
+            "invite_summary",
+            invite.summary.as_deref().unwrap_or("-").to_string(),
+        ),
+        (
+            "invite_start",
+            invite.start.as_deref().unwrap_or("-").to_string(),
+        ),
+        (
+            "invite_end",
+            invite.end.as_deref().unwrap_or("-").to_string(),
+        ),
+        ("calendar_id", calendar.id.clone()),
+        ("calendar_name", calendar.name.clone()),
+        ("event_id", event.uid.as_deref().unwrap_or("-").to_string()),
+        ("event_href", event.href.clone()),
+        (
+            "event_summary",
+            event.summary.as_deref().unwrap_or("-").to_string(),
+        ),
+        (
+            "event_start",
+            event.start.as_deref().unwrap_or("-").to_string(),
+        ),
+        ("event_end", event.end.as_deref().unwrap_or("-").to_string()),
+    ])
+}
+
 fn mail_summary_json(message: &MailMessageSummary) -> serde_json::Value {
     json!({
         "id": message.uid,
@@ -2357,6 +2731,45 @@ fn forwarded_mail_json(forwarded: &ForwardedMail) -> serde_json::Value {
         "original_message_id": forwarded.original_message_id,
         "attachments": forwarded.attachments.iter().map(mail_attachment_json).collect::<Vec<_>>(),
         "sent": sent_mail_json(&forwarded.sent),
+    })
+}
+
+fn exported_mail_attachment_json(attachment: &ExportedMailAttachment) -> serde_json::Value {
+    json!({
+        "message_id": attachment.message_uid,
+        "attachment_index": attachment.attachment_index,
+        "filename": attachment.filename,
+        "mime_type": attachment.mime_type,
+        "content_id": attachment.content_id,
+        "inline": attachment.inline,
+        "output_path": attachment.output_path,
+        "bytes_written": attachment.bytes_written,
+        "sha256": attachment.sha256,
+    })
+}
+
+fn calendar_invite_json(invite: &CalendarInvite) -> serde_json::Value {
+    json!({
+        "uid": invite.uid,
+        "summary": invite.summary,
+        "start": invite.start,
+        "end": invite.end,
+        "description": invite.description,
+        "location": invite.location,
+        "status": invite.status,
+        "all_day": invite.all_day,
+    })
+}
+
+fn inspected_mail_invite_json(invite: &InspectedMailInvite) -> serde_json::Value {
+    json!({
+        "message_id": invite.message_uid,
+        "attachment_index": invite.attachment_index,
+        "filename": invite.filename,
+        "mime_type": invite.mime_type,
+        "content_id": invite.content_id,
+        "inline": invite.inline,
+        "invites": invite.invites.iter().map(calendar_invite_json).collect::<Vec<_>>(),
     })
 }
 

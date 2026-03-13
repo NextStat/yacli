@@ -1,13 +1,22 @@
 # yacli
 
-`yacli` — утилита командной строки для Яндекс Почты, Календаря и Диска, рассчитанная и на людей, и на AI-агентов.
+`yacli` — CLI и MCP Apps-сервер для Яндекс Почты, Календаря и Диска, рассчитанный и на людей, и на AI-агентов.
 
-С ее помощью можно:
+Это один продуктовый surface для двух режимов работы:
+
+- как повседневный CLI для почты, календаря и файлов;
+- как MCP server для Claude Code, Claude Desktop / Cowork, Codex, Gemini CLI, Cursor, Windsurf, Zed, Warp и других MCP-клиентов;
+- как MCP Apps runtime с dashboard, resources, prompts, completions, roots и embedded workflow skills.
+
+С его помощью можно:
 
 - читать, искать, отправлять, пересылать и отвечать на письма;
+- скачивать вложения, разбирать `.ics` / `text/calendar` и создавать события из email-приглашений;
 - смотреть календари и события, создавать и удалять встречи;
 - просматривать приватный Диск, создавать папки и загружать файлы;
 - работать с несколькими учетными записями и быстро переключаться между ними.
+
+Если коротко: `yacli` нужен, когда хочется управлять Яндекс Почтой, Календарём и Диском из терминала, AI-агента или MCP Apps-хоста без отдельных интеграционных костылей.
 
 Важно:
 
@@ -59,7 +68,7 @@ yacli update --check
 Если нужен private release mirror или локальный test feed, можно переопределить base URL:
 
 ```bash
-export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.2.1'
+export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.3.0'
 yacli update --check
 ```
 
@@ -125,13 +134,21 @@ yacli mail search "смета"
 yacli mail read 1353
 yacli mail reply 1353 "Принято, спасибо"
 yacli mail forward 1353 person@example.com "Посмотрите, пожалуйста"
+yacli mail attachment export 1353 --index 1 --output ./invoice.pdf
+yacli mail invite inspect 1353 --index 1
+yacli mail invite create-event 1353 --index 1
 yacli mail send person@example.com "Синк" "Привет"
+yacli mail send person@example.com "Счёт" "Во вложении файл" --attach ./invoice.pdf
 ```
 
 Что важно:
 
 - `list`, `search`, `read`, `reply` и `forward` по умолчанию работают с папкой `INBOX`;
 - число вроде `1353` — это идентификатор письма из вывода `mail list` или `mail search`;
+- `mail attachment export` сохраняет конкретное вложение по `--index` или точному `--name`;
+- `mail invite inspect` разбирает `.ics` или `text/calendar` вложение и показывает поля VEVENT;
+- `mail invite create-event` создаёт событие CalDAV из выбранного VEVENT внутри `.ics` или `text/calendar` вложения;
+- `mail send --attach` добавляет один или несколько локальных файлов во вложение письма;
 - если нужна другая папка, добавьте `--folder "Имя папки"`;
 - если нужен HTML, копии или скрытые копии, используйте `--html`, `--cc` и `--bcc`.
 
@@ -140,7 +157,11 @@ yacli mail send person@example.com "Синк" "Привет"
 ```bash
 yacli mail list --folder "Отправленные" --limit 20
 yacli mail search "договор" --folder "Архив 2026"
+yacli mail attachment export 1353 --name invoice.pdf --output ./invoice.pdf
+yacli mail invite inspect 1353 --name invite.ics
+yacli mail invite create-event 1353 --name invite.ics --calendar team --event-index 2
 yacli mail send person@example.com "Счет" "Отправляю счет" --cc boss@example.com
+yacli mail send person@example.com "Счет" "Отправляю счет" --attach ./invoice.pdf --attach ./spec.docx
 ```
 
 ### Календарь
@@ -312,6 +333,7 @@ yacli mcp install
 - `yacli-daily-briefing`
 - `yacli-find-and-read`
 - `yacli-reply-with-context`
+- `yacli-invite-to-calendar`
 
 Поддерживаемые клиенты:
 
@@ -364,8 +386,13 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 - `daily-briefing`
 - `find-and-read`
 - `reply-with-context`
+- `invite-to-calendar`
 
 Это MCP-native эквиваленты встроенных `SKILL.md` recipe flows. В клиентах вроде Claude Desktop / Cowork, где отдельный `SKILL.md` surface отсутствует, именно `prompts/list` и `prompts/get` дают переносимый workflow layer поверх тех же `yacli` tools/resources/apps.
+
+Важно: prompt titles, descriptions и сами prompt messages теперь русскоязычные, чтобы Claude Desktop / Cowork и другие MCP-клиенты могли лучше матчить естественные русские запросы вроде «сводка по письмам», «найди письмо» или «ответь с учётом расписания».
+
+Для новых кросс-сервисных сценариев сервер теперь также отдаёт first-class workflow `invite-to-calendar`: он связывает поиск письма, разбор `.ics`/`text/calendar` вложения и импорт нужного VEVENT в календарь через `yacli.mail.invite.create_event`.
 
 Кроме того, встроенные skills теперь доступны и как MCP resources:
 
@@ -390,6 +417,12 @@ ui://yacli/dashboard?account=personal&section=auth&resource=auth&tool=yacli.auth
 - `yacli.mail.send`
 - `yacli.mail.reply`
 - `yacli.mail.forward`
+- `yacli.mail.attachment.export`
+- `yacli.mail.invite.inspect`
+- `yacli.mail.invite.create_event`
+
+`yacli.mail.send` теперь также принимает `attachments` как список локальных путей на хосте MCP-сервера.
+`yacli.mail.invite.create_event` принимает тот же селектор вложения (`index` или `name`) и `event_index`, если в одном `.ics` лежит несколько VEVENT.
 
 И MCP calendar-tools теперь тоже поддерживают write actions:
 

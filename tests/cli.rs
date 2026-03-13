@@ -374,9 +374,52 @@ fn mail_send_help_uses_positional_recipient_subject_and_text() {
         .stdout(predicate::str::contains(
             "yacli mail send [OPTIONS] <EMAIL> <ТЕМА> [ТЕКСТ]",
         ))
+        .stdout(predicate::str::contains("--attach <ФАЙЛ>"))
         .stdout(predicate::str::contains("--to").not())
         .stdout(predicate::str::contains("--subject").not())
         .stdout(predicate::str::contains("--text").not());
+}
+
+#[test]
+fn mail_attachment_export_help_shows_selector_flags() {
+    yacli()
+        .args(["mail", "attachment", "export", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli mail attachment export [OPTIONS] --output <ФАЙЛ> <ID>",
+        ))
+        .stdout(predicate::str::contains("--index <ЧИСЛО>"))
+        .stdout(predicate::str::contains("--name <ИМЯ>"))
+        .stdout(predicate::str::contains("--output <ФАЙЛ>"));
+}
+
+#[test]
+fn mail_invite_inspect_help_shows_selector_flags() {
+    yacli()
+        .args(["mail", "invite", "inspect", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli mail invite inspect [OPTIONS] <ID>",
+        ))
+        .stdout(predicate::str::contains("--index <ЧИСЛО>"))
+        .stdout(predicate::str::contains("--name <ИМЯ>"));
+}
+
+#[test]
+fn mail_invite_create_event_help_shows_calendar_and_event_selector_flags() {
+    yacli()
+        .args(["mail", "invite", "create-event", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli mail invite create-event [OPTIONS] <ID>",
+        ))
+        .stdout(predicate::str::contains("--index <ЧИСЛО>"))
+        .stdout(predicate::str::contains("--name <ИМЯ>"))
+        .stdout(predicate::str::contains("--calendar <КАЛЕНДАРЬ>"))
+        .stdout(predicate::str::contains("--event-index <ЧИСЛО>"));
 }
 
 #[test]
@@ -488,6 +531,21 @@ fn guide_lists_stable_commands_and_workflows() {
     assert!(commands.iter().any(|entry| entry["path"] == "mail reply"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail forward"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail send"));
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "mail attachment export")
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "mail invite inspect")
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "mail invite create-event")
+    );
     assert!(commands.iter().any(|entry| entry["path"] == "disk list"));
     assert!(commands.iter().any(|entry| entry["path"] == "disk mkdir"));
     assert!(commands.iter().any(|entry| entry["path"] == "disk upload"));
@@ -522,6 +580,21 @@ fn guide_lists_stable_commands_and_workflows() {
         workflows
             .iter()
             .any(|entry| entry["id"] == "mail_forward_flow")
+    );
+    assert!(
+        workflows
+            .iter()
+            .any(|entry| entry["id"] == "mail_attachment_export_flow")
+    );
+    assert!(
+        workflows
+            .iter()
+            .any(|entry| entry["id"] == "mail_invite_inspect_flow")
+    );
+    assert!(
+        workflows
+            .iter()
+            .any(|entry| entry["id"] == "mail_invite_create_event_flow")
     );
     assert!(
         workflows
@@ -577,6 +650,21 @@ fn guide_topic_mail_filters_to_mail_commands() {
     assert!(commands.iter().any(|entry| entry["path"] == "mail forward"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail read"));
     assert!(commands.iter().any(|entry| entry["path"] == "mail send"));
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "mail attachment export")
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "mail invite inspect")
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "mail invite create-event")
+    );
 
     let workflows = value["workflows"].as_array().expect("workflows array");
     assert!(workflows.iter().all(|entry| entry["topic"] == "mail"));
@@ -594,6 +682,21 @@ fn guide_topic_mail_filters_to_mail_commands() {
         workflows
             .iter()
             .any(|entry| entry["id"] == "mail_forward_flow")
+    );
+    assert!(
+        workflows
+            .iter()
+            .any(|entry| entry["id"] == "mail_attachment_export_flow")
+    );
+    assert!(
+        workflows
+            .iter()
+            .any(|entry| entry["id"] == "mail_invite_inspect_flow")
+    );
+    assert!(
+        workflows
+            .iter()
+            .any(|entry| entry["id"] == "mail_invite_create_event_flow")
     );
     assert!(
         workflows
@@ -2360,6 +2463,272 @@ client_id = "client-123"
 }
 
 #[test]
+fn mail_attachment_export_requires_selector_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "attachment",
+            "export",
+            "--account",
+            "mock",
+            "42",
+            "--output",
+            "invoice.pdf",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
+        .stderr(predicate::str::contains(
+            "mail attachment export requires --index or --name",
+        ));
+}
+
+#[test]
+fn mail_attachment_export_rejects_zero_index_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "attachment",
+            "export",
+            "--account",
+            "mock",
+            "42",
+            "--index",
+            "0",
+            "--output",
+            "invoice.pdf",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
+        .stderr(predicate::str::contains(
+            "mail attachment export --index must be greater than zero",
+        ));
+}
+
+#[test]
+fn mail_attachment_export_rejects_zero_max_bytes_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "attachment",
+            "export",
+            "--account",
+            "mock",
+            "42",
+            "--index",
+            "1",
+            "--output",
+            "invoice.pdf",
+            "--max-bytes",
+            "0",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
+        .stderr(predicate::str::contains(
+            "mail attachment export --max-bytes must be greater than zero",
+        ));
+}
+
+#[test]
+fn mail_invite_inspect_requires_selector_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mail", "invite", "inspect", "--account", "mock", "42"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
+        .stderr(predicate::str::contains(
+            "mail invite inspect requires --index or --name",
+        ));
+}
+
+#[test]
+fn mail_invite_create_event_requires_selector_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mail", "invite", "create-event", "--account", "mock", "42"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
+        .stderr(predicate::str::contains(
+            "mail invite create-event requires --index or --name",
+        ));
+}
+
+#[test]
+fn mail_invite_create_event_rejects_zero_event_index_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "invite",
+            "create-event",
+            "--account",
+            "mock",
+            "42",
+            "--index",
+            "1",
+            "--event-index",
+            "0",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
+        .stderr(predicate::str::contains(
+            "mail invite create-event --event-index must be greater than zero",
+        ));
+}
+
+#[test]
 fn mail_send_rejects_missing_body_before_network() {
     let temp = tempdir().expect("tempdir");
     let disk = Server::new();
@@ -2447,6 +2816,55 @@ client_id = "client-123"
         .stderr(predicate::str::contains("\"code\":\"VALIDATION_ERROR\""))
         .stderr(predicate::str::contains(
             "mail send recipient must contain `@`",
+        ));
+}
+
+#[test]
+fn mail_send_rejects_directory_attachment_before_network() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send",
+            "--account",
+            "mock",
+            "person@example.com",
+            "Hello",
+            "Body",
+            "--attach",
+            temp.path().to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "\"code\":\"UNSUPPORTED_OPERATION\"",
+        ))
+        .stderr(predicate::str::contains(
+            "attachment path points to a directory",
         ));
 }
 

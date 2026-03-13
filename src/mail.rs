@@ -1,15 +1,21 @@
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use mailparse::{DispositionType, MailAddr, MailHeaderMap, addrparse};
+use mime_guess::MimeGuess;
 use native_tls::TlsConnector;
 use rand::random;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use tempfile::NamedTempFile;
 
+use crate::calendar::{CalendarInvite, parse_calendar_invites};
 use crate::error::{Result, YacliError};
 
 const IMAP_TIMEOUT_SECS: u64 = 20;
@@ -140,6 +146,28 @@ pub struct MailSendRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MailAttachmentSelector {
+    Index(usize),
+    Filename(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct MailAttachmentExportRequest {
+    pub uid: u64,
+    pub selector: MailAttachmentSelector,
+    pub output: PathBuf,
+    pub force: bool,
+    pub max_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MailInviteInspectRequest {
+    pub uid: u64,
+    pub selector: MailAttachmentSelector,
+    pub max_bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailAttachmentPayload {
     pub filename: Option<String>,
     pub mime_type: String,
@@ -187,6 +215,34 @@ pub struct ForwardedMail {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<MailAttachmentSummary>,
     pub sent: SentMail,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct ExportedMailAttachment {
+    pub message_uid: u64,
+    pub attachment_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
+    pub inline: bool,
+    pub output_path: String,
+    pub bytes_written: u64,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct InspectedMailInvite {
+    pub message_uid: u64,
+    pub attachment_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
+    pub inline: bool,
+    pub invites: Vec<CalendarInvite>,
 }
 
 #[derive(Clone, Debug)]
@@ -364,6 +420,55 @@ pub fn send_mail_message(
     )?;
     let _ = session.quit();
     Ok(prepared.sent)
+}
+
+pub fn load_mail_attachments(paths: &[PathBuf]) -> Result<Vec<MailAttachmentPayload>> {
+    paths
+        .iter()
+        .map(|path| load_mail_attachment(path))
+        .collect()
+}
+
+pub fn export_mail_attachment(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    mailbox_name: &str,
+    request: MailAttachmentExportRequest,
+) -> Result<ExportedMailAttachment> {
+    validate_mail_attachment_export_request(&request)?;
+    let uid = request.uid;
+    let selector = request.selector.clone();
+    let output = request.output.clone();
+    let force = request.force;
+    let max_bytes = request.max_bytes;
+
+    let message = read_mail_message(imap_host, imap_port, auth, mailbox_name, uid, max_bytes)?;
+    export_attachment_from_message(&message, &selector, &output, force)
+}
+
+pub fn inspect_mail_invite(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    mailbox_name: &str,
+    request: MailInviteInspectRequest,
+) -> Result<InspectedMailInvite> {
+    validate_mail_attachment_read_request(
+        request.uid,
+        &request.selector,
+        request.max_bytes,
+        "mail invite inspect",
+    )?;
+    let message = read_mail_message(
+        imap_host,
+        imap_port,
+        auth,
+        mailbox_name,
+        request.uid,
+        request.max_bytes,
+    )?;
+    inspect_invite_from_message(&message, &request.selector)
 }
 
 pub fn reply_to_mail_message(
@@ -1666,9 +1771,10 @@ fn extract_message_content(
             .or_else(|| part.ctype.params.get("name").cloned());
         let content_id = part.headers.get_first_value("Content-ID");
         let inline = disposition.disposition == DispositionType::Inline;
-        let is_attachment =
-            disposition.disposition == DispositionType::Attachment || filename.is_some();
         let mime_type = part.ctype.mimetype.to_lowercase();
+        let is_attachment = disposition.disposition == DispositionType::Attachment
+            || filename.is_some()
+            || mime_type == "text/calendar";
 
         if is_attachment {
             let payload = part.get_body_raw().map_err(|err| {
@@ -2370,21 +2476,278 @@ fn quote_imap_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+fn validate_mail_attachment_export_request(request: &MailAttachmentExportRequest) -> Result<()> {
+    validate_mail_attachment_read_request(
+        request.uid,
+        &request.selector,
+        request.max_bytes,
+        "mail attachment export",
+    )
+}
+
+fn validate_mail_attachment_read_request(
+    uid: u64,
+    selector: &MailAttachmentSelector,
+    max_bytes: u64,
+    command_name: &str,
+) -> Result<()> {
+    if uid == 0 {
+        return Err(YacliError::Validation(format!(
+            "{command_name} <id> must be greater than zero"
+        )));
+    }
+    if max_bytes == 0 {
+        return Err(YacliError::Validation(format!(
+            "{command_name} --max-bytes must be greater than zero"
+        )));
+    }
+    match selector {
+        MailAttachmentSelector::Index(index) => {
+            if *index == 0 {
+                return Err(YacliError::Validation(format!(
+                    "{command_name} --index must be greater than zero"
+                )));
+            }
+        }
+        MailAttachmentSelector::Filename(filename) => {
+            if filename.trim().is_empty() {
+                return Err(YacliError::Validation(format!(
+                    "{command_name} --name must not be empty"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn load_mail_attachment(path: &Path) -> Result<MailAttachmentPayload> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        YacliError::Io(format!(
+            "unable to read attachment metadata {}: {err}",
+            path.display()
+        ))
+    })?;
+    if metadata.is_dir() {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "attachment path points to a directory: {}",
+            path.display()
+        )));
+    }
+
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            YacliError::Validation(format!(
+                "attachment path must end with a valid UTF-8 filename: {}",
+                path.display()
+            ))
+        })?;
+
+    let content = fs::read(path).map_err(|err| {
+        YacliError::Io(format!(
+            "unable to read attachment file {}: {err}",
+            path.display()
+        ))
+    })?;
+    let mime_type = detect_attachment_mime_type(path);
+
+    Ok(MailAttachmentPayload {
+        filename: Some(filename.to_string()),
+        mime_type,
+        content_id: None,
+        inline: false,
+        content,
+    })
+}
+
+fn detect_attachment_mime_type(path: &Path) -> String {
+    MimeGuess::from_path(path)
+        .first_raw()
+        .unwrap_or("application/octet-stream")
+        .to_string()
+}
+
+fn export_attachment_from_message(
+    message: &MailMessage,
+    selector: &MailAttachmentSelector,
+    output: &Path,
+    force: bool,
+) -> Result<ExportedMailAttachment> {
+    let (attachment_index, attachment) = select_attachment_part(message, selector)?;
+    let artifact = write_attachment_to_path(&attachment.content, output, force)?;
+
+    Ok(ExportedMailAttachment {
+        message_uid: message.uid,
+        attachment_index,
+        filename: attachment.filename.clone(),
+        mime_type: attachment.mime_type.clone(),
+        content_id: attachment.content_id.clone(),
+        inline: attachment.inline,
+        output_path: artifact.output_path,
+        bytes_written: artifact.bytes_written,
+        sha256: artifact.sha256,
+    })
+}
+
+fn inspect_invite_from_message(
+    message: &MailMessage,
+    selector: &MailAttachmentSelector,
+) -> Result<InspectedMailInvite> {
+    let (attachment_index, attachment) = select_attachment_part(message, selector)?;
+    let is_calendar_payload = attachment.mime_type == "text/calendar"
+        || attachment
+            .filename
+            .as_deref()
+            .map(|name| name.to_ascii_lowercase().ends_with(".ics"))
+            .unwrap_or(false);
+    if !is_calendar_payload {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "selected attachment is not a calendar invite: mime_type={}",
+            attachment.mime_type
+        )));
+    }
+
+    let raw = std::str::from_utf8(&attachment.content).map_err(|err| {
+        YacliError::Serialization(format!("failed to decode calendar invite as UTF-8: {err}"))
+    })?;
+    let invites = parse_calendar_invites(raw)?;
+    if invites.is_empty() {
+        return Err(YacliError::UnsupportedOperation(
+            "calendar invite did not contain any VEVENT entries".to_string(),
+        ));
+    }
+
+    Ok(InspectedMailInvite {
+        message_uid: message.uid,
+        attachment_index,
+        filename: attachment.filename.clone(),
+        mime_type: attachment.mime_type.clone(),
+        content_id: attachment.content_id.clone(),
+        inline: attachment.inline,
+        invites,
+    })
+}
+
+fn select_attachment_part<'a>(
+    message: &'a MailMessage,
+    selector: &MailAttachmentSelector,
+) -> Result<(usize, &'a MailAttachmentPart)> {
+    if message.raw_attachments.is_empty() {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "message id {} has no attachments",
+            message.uid
+        )));
+    }
+
+    match selector {
+        MailAttachmentSelector::Index(index) => message
+            .raw_attachments
+            .get(index - 1)
+            .map(|attachment| (*index, attachment))
+            .ok_or_else(|| {
+                YacliError::Validation(format!(
+                    "mail attachment export attachment index {} out of range; message has {} attachment(s)",
+                    index,
+                    message.raw_attachments.len()
+                ))
+            }),
+        MailAttachmentSelector::Filename(filename) => {
+            let normalized = filename.trim();
+            let mut matches = message
+                .raw_attachments
+                .iter()
+                .enumerate()
+                .filter(|(_, attachment)| attachment.filename.as_deref() == Some(normalized));
+
+            let Some((first_index, first_attachment)) = matches.next() else {
+                return Err(YacliError::Validation(format!(
+                    "mail attachment export attachment not found: {}",
+                    normalized
+                )));
+            };
+
+            if matches.next().is_some() {
+                return Err(YacliError::UnsupportedOperation(format!(
+                    "mail attachment export attachment name `{}` is ambiguous; use --index",
+                    normalized
+                )));
+            }
+
+            Ok((first_index + 1, first_attachment))
+        }
+    }
+}
+
+fn write_attachment_to_path(contents: &[u8], output: &Path, force: bool) -> Result<ExportedBytes> {
+    if output.exists() && !force {
+        return Err(YacliError::OutputExists(output.display().to_string()));
+    }
+
+    if output.is_dir() {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "output path points to a directory: {}",
+            output.display()
+        )));
+    }
+
+    let temp_dir = match output.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            fs::create_dir_all(parent)?;
+            parent.to_path_buf()
+        }
+        _ => std::env::current_dir()?,
+    };
+
+    let mut temp_file = NamedTempFile::new_in(&temp_dir)?;
+    temp_file.write_all(contents)?;
+    temp_file.as_file_mut().sync_all()?;
+
+    if force && output.exists() {
+        fs::remove_file(output)?;
+    }
+
+    temp_file
+        .persist(output)
+        .map_err(|err| YacliError::Io(err.error.to_string()))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(contents);
+
+    Ok(ExportedBytes {
+        output_path: output.display().to_string(),
+        bytes_written: contents.len() as u64,
+        sha256: format!("{:x}", hasher.finalize()),
+    })
+}
+
+struct ExportedBytes {
+    output_path: String,
+    bytes_written: u64,
+    sha256: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FetchMetadata, MailAttachmentPart, MailAttachmentPayload, MailAttachmentSummary,
-        MailMessage, MailSendRequest, MailSessionAuth, MailThreadHeaders, OutgoingMessage,
-        SmtpSession, build_forward_body, build_message_summary, build_outgoing_message,
-        build_read_message, build_reply_target, build_xoauth2_payload, decode_modified_utf7,
-        encode_modified_utf7, extract_message_content, normalize_forward_subject,
-        normalize_reply_subject, normalize_search_query, parse_fetch_metadata, parse_imap_token,
-        parse_list_line, parse_search_uids, prepare_mail_submission, quote_imap_string,
+        FetchMetadata, MailAttachmentExportRequest, MailAttachmentPart, MailAttachmentPayload,
+        MailAttachmentSelector, MailAttachmentSummary, MailMessage, MailSendRequest,
+        MailSessionAuth, MailThreadHeaders, OutgoingMessage, SmtpSession, build_forward_body,
+        build_message_summary, build_outgoing_message, build_read_message, build_reply_target,
+        build_xoauth2_payload, decode_modified_utf7, encode_modified_utf7,
+        export_attachment_from_message, extract_message_content, inspect_invite_from_message,
+        load_mail_attachments, normalize_forward_subject, normalize_reply_subject,
+        normalize_search_query, parse_fetch_metadata, parse_imap_token, parse_list_line,
+        parse_search_uids, prepare_mail_submission, quote_imap_string,
+        validate_mail_attachment_export_request, validate_mail_attachment_read_request,
     };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     use std::io::{Cursor, Read, Result as IoResult, Write};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
 
     #[derive(Clone)]
     struct FakeStream {
@@ -2934,5 +3297,289 @@ mod tests {
         );
         assert!(prepared.message.contains("Content-ID: <cid-report>"));
         assert!(prepared.message.contains(&STANDARD.encode(b"%PDF-1.4")));
+    }
+
+    #[test]
+    fn validate_attachment_export_request_rejects_zero_index() {
+        let error = validate_mail_attachment_export_request(&MailAttachmentExportRequest {
+            uid: 42,
+            selector: MailAttachmentSelector::Index(0),
+            output: PathBuf::from("invoice.pdf"),
+            force: false,
+            max_bytes: 1024,
+        })
+        .expect_err("zero index rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "Validation error: mail attachment export --index must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn validate_invite_inspect_request_rejects_zero_index() {
+        let error = validate_mail_attachment_read_request(
+            42,
+            &MailAttachmentSelector::Index(0),
+            1024,
+            "mail invite inspect",
+        )
+        .expect_err("zero index rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "Validation error: mail invite inspect --index must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn export_attachment_from_message_writes_selected_attachment_by_index() {
+        let temp = tempdir().expect("tempdir");
+        let output = temp.path().join("invoice.pdf");
+        let message = MailMessage {
+            uid: 42,
+            subject: Some("Invoice".to_string()),
+            from: Some("sender@example.com".to_string()),
+            to: None,
+            cc: None,
+            date: None,
+            message_id: None,
+            flags: Vec::new(),
+            size: Some(512),
+            text_body: Some("Body".to_string()),
+            html_body: None,
+            attachments: vec![MailAttachmentSummary {
+                filename: Some("invoice.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                content_id: None,
+                inline: false,
+            }],
+            raw_attachments: vec![MailAttachmentPart {
+                filename: Some("invoice.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                content_id: None,
+                inline: false,
+                content: b"%PDF-1.4".to_vec(),
+            }],
+        };
+
+        let exported = export_attachment_from_message(
+            &message,
+            &MailAttachmentSelector::Index(1),
+            &output,
+            false,
+        )
+        .expect("attachment exported");
+
+        assert_eq!(exported.message_uid, 42);
+        assert_eq!(exported.attachment_index, 1);
+        assert_eq!(exported.filename.as_deref(), Some("invoice.pdf"));
+        assert_eq!(exported.bytes_written, 8);
+        assert_eq!(std::fs::read(&output).expect("exported file"), b"%PDF-1.4");
+        assert_eq!(exported.output_path, output.display().to_string());
+        assert_eq!(exported.sha256.len(), 64);
+    }
+
+    #[test]
+    fn export_attachment_from_message_rejects_ambiguous_filename() {
+        let temp = tempdir().expect("tempdir");
+        let output = temp.path().join("invoice.pdf");
+        let message = MailMessage {
+            uid: 42,
+            subject: Some("Invoice".to_string()),
+            from: Some("sender@example.com".to_string()),
+            to: None,
+            cc: None,
+            date: None,
+            message_id: None,
+            flags: Vec::new(),
+            size: Some(1024),
+            text_body: Some("Body".to_string()),
+            html_body: None,
+            attachments: vec![
+                MailAttachmentSummary {
+                    filename: Some("invoice.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: None,
+                    inline: false,
+                },
+                MailAttachmentSummary {
+                    filename: Some("invoice.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: None,
+                    inline: false,
+                },
+            ],
+            raw_attachments: vec![
+                MailAttachmentPart {
+                    filename: Some("invoice.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: None,
+                    inline: false,
+                    content: b"one".to_vec(),
+                },
+                MailAttachmentPart {
+                    filename: Some("invoice.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: None,
+                    inline: false,
+                    content: b"two".to_vec(),
+                },
+            ],
+        };
+
+        let error = export_attachment_from_message(
+            &message,
+            &MailAttachmentSelector::Filename("invoice.pdf".to_string()),
+            &output,
+            false,
+        )
+        .expect_err("ambiguous attachment name rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "Unsupported operation: mail attachment export attachment name `invoice.pdf` is ambiguous; use --index"
+        );
+    }
+
+    #[test]
+    fn export_attachment_from_message_refuses_to_overwrite_without_force() {
+        let temp = tempdir().expect("tempdir");
+        let output = temp.path().join("invoice.pdf");
+        std::fs::write(&output, b"existing").expect("existing file");
+        let message = MailMessage {
+            uid: 42,
+            subject: Some("Invoice".to_string()),
+            from: Some("sender@example.com".to_string()),
+            to: None,
+            cc: None,
+            date: None,
+            message_id: None,
+            flags: Vec::new(),
+            size: Some(512),
+            text_body: Some("Body".to_string()),
+            html_body: None,
+            attachments: vec![MailAttachmentSummary {
+                filename: Some("invoice.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                content_id: None,
+                inline: false,
+            }],
+            raw_attachments: vec![MailAttachmentPart {
+                filename: Some("invoice.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                content_id: None,
+                inline: false,
+                content: b"%PDF-1.4".to_vec(),
+            }],
+        };
+
+        let error = export_attachment_from_message(
+            &message,
+            &MailAttachmentSelector::Index(1),
+            &output,
+            false,
+        )
+        .expect_err("overwrite rejected");
+
+        assert_eq!(
+            error.to_string(),
+            format!("Output already exists: {}", output.display())
+        );
+        assert_eq!(std::fs::read(&output).expect("existing file"), b"existing");
+    }
+
+    #[test]
+    fn load_mail_attachments_reads_file_and_infers_mime_type() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("note.txt");
+        std::fs::write(&path, b"hello world").expect("attachment file");
+
+        let attachments =
+            load_mail_attachments(std::slice::from_ref(&path)).expect("attachments loaded");
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename.as_deref(), Some("note.txt"));
+        assert_eq!(attachments[0].mime_type, "text/plain");
+        assert_eq!(attachments[0].content, b"hello world");
+        assert!(!attachments[0].inline);
+    }
+
+    #[test]
+    fn load_mail_attachments_rejects_directory_path() {
+        let temp = tempdir().expect("tempdir");
+        let error = load_mail_attachments(&[temp.path().to_path_buf()])
+            .expect_err("directory attachment rejected");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Unsupported operation: attachment path points to a directory: {}",
+                temp.path().display()
+            )
+        );
+    }
+
+    #[test]
+    fn extract_message_content_collects_text_calendar_as_attachment() {
+        let raw = concat!(
+            "Content-Type: multipart/alternative; boundary=\"alt\"\r\n",
+            "\r\n",
+            "--alt\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "plain body\r\n",
+            "--alt\r\n",
+            "Content-Type: text/calendar; charset=utf-8\r\n",
+            "\r\n",
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt-1\r\nSUMMARY:Sync\r\nDTSTART:20260312T090000Z\r\nDTEND:20260312T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+            "--alt--\r\n",
+        );
+        let parsed = mailparse::parse_mail(raw.as_bytes()).expect("mail parsed");
+        let content = extract_message_content(&parsed).expect("content extracted");
+
+        assert_eq!(content.text_body.as_deref(), Some("plain body"));
+        assert_eq!(content.attachment_parts.len(), 1);
+        assert_eq!(content.attachment_parts[0].mime_type, "text/calendar");
+    }
+
+    #[test]
+    fn inspect_invite_from_message_reads_calendar_attachment() {
+        let message = MailMessage {
+            uid: 42,
+            subject: Some("Invite".to_string()),
+            from: Some("sender@example.com".to_string()),
+            to: None,
+            cc: None,
+            date: None,
+            message_id: None,
+            flags: Vec::new(),
+            size: Some(512),
+            text_body: Some("Body".to_string()),
+            html_body: None,
+            attachments: vec![MailAttachmentSummary {
+                filename: Some("invite.ics".to_string()),
+                mime_type: "text/calendar".to_string(),
+                content_id: None,
+                inline: false,
+            }],
+            raw_attachments: vec![MailAttachmentPart {
+                filename: Some("invite.ics".to_string()),
+                mime_type: "text/calendar".to_string(),
+                content_id: None,
+                inline: false,
+                content: b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt-1\r\nSUMMARY:Sync\r\nDTSTART:20260312T090000Z\r\nDTEND:20260312T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR".to_vec(),
+            }],
+        };
+
+        let inspected = inspect_invite_from_message(&message, &MailAttachmentSelector::Index(1))
+            .expect("invite inspected");
+
+        assert_eq!(inspected.message_uid, 42);
+        assert_eq!(inspected.attachment_index, 1);
+        assert_eq!(inspected.filename.as_deref(), Some("invite.ics"));
+        assert_eq!(inspected.invites.len(), 1);
+        assert_eq!(inspected.invites[0].uid.as_deref(), Some("evt-1"));
+        assert_eq!(inspected.invites[0].summary.as_deref(), Some("Sync"));
     }
 }

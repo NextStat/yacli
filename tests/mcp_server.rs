@@ -409,6 +409,11 @@ fn mcp_stdio_accepts_claude_code_json_line_messages() {
             .iter()
             .any(|prompt| prompt["name"] == "daily-briefing")
     );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "invite-to-calendar")
+    );
 }
 
 #[test]
@@ -465,20 +470,29 @@ fn mcp_stdio_lists_and_renders_embedded_prompts() {
     let prompts = responses[1]["result"]["prompts"]
         .as_array()
         .expect("prompts array");
-    assert_eq!(prompts.len(), 7);
+    assert_eq!(prompts.len(), 8);
     let mail_prompt = prompts
         .iter()
         .find(|prompt| prompt["name"] == "mail")
         .expect("mail prompt");
-    assert_eq!(mail_prompt["title"], "yacli Mail Workflow");
+    assert_eq!(mail_prompt["title"], "Почтовый workflow yacli");
 
     let rendered = responses[2]["result"]["messages"][0]["content"]["text"]
         .as_str()
         .expect("prompt text");
-    assert!(rendered.contains("Query: invoice"));
-    assert!(rendered.contains("Account: work"));
+    assert!(rendered.contains("Запрос: invoice"));
+    assert!(rendered.contains("Аккаунт: work"));
     assert!(rendered.contains("yacli.mail.search"));
     assert!(rendered.contains("yacli.mail.read"));
+
+    let invite_prompt = prompts
+        .iter()
+        .find(|prompt| prompt["name"] == "invite-to-calendar")
+        .expect("invite prompt");
+    assert_eq!(
+        invite_prompt["title"],
+        "Создать событие из приглашения в письме"
+    );
 }
 
 #[test]
@@ -788,6 +802,21 @@ client_id = "client-123"
             .iter()
             .any(|tool| tool["name"] == "yacli.mail.forward")
     );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.attachment.export")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.invite.inspect")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.invite.create_event")
+    );
 
     assert_eq!(responses[2]["error"]["code"], -32602);
     assert!(
@@ -811,6 +840,264 @@ client_id = "client-123"
             .as_str()
             .expect("message")
             .contains("mail forward recipient must contain `@`")
+    );
+
+    let attachment_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.attachment.export")
+        .expect("attachment export tool");
+    assert_eq!(
+        attachment_tool["inputSchema"]["required"],
+        json!(["uid", "output_path"])
+    );
+    let send_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.send")
+        .expect("send tool");
+    assert_eq!(
+        send_tool["inputSchema"]["properties"]["attachments"]["type"],
+        "array"
+    );
+    let invite_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.invite.inspect")
+        .expect("invite inspect tool");
+    assert_eq!(invite_tool["inputSchema"]["required"], json!(["uid"]));
+    let invite_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.invite.create_event")
+        .expect("invite create tool");
+    assert_eq!(
+        invite_create_tool["inputSchema"]["required"],
+        json!(["uid"])
+    );
+}
+
+#[test]
+fn mcp_stdio_mail_attachment_export_requires_selector_before_network() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(
+            [
+                initialize_request(true),
+                mcp_notification("notifications/initialized", json!({})),
+                mcp_request(
+                    2,
+                    "tools/call",
+                    json!({
+                        "name": "yacli.mail.attachment.export",
+                        "arguments": {
+                            "account": "mock",
+                            "uid": 42,
+                            "output_path": temp.path().join("invoice.pdf").display().to_string(),
+                        }
+                    }),
+                ),
+            ]
+            .concat(),
+        )
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    assert_eq!(responses[1]["error"]["code"], -32602);
+    assert!(
+        responses[1]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("yacli.mail.attachment.export requires `index` or `name`")
+    );
+}
+
+#[test]
+fn mcp_stdio_mail_invite_inspect_requires_selector_before_network() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(
+            [
+                initialize_request(true),
+                mcp_notification("notifications/initialized", json!({})),
+                mcp_request(
+                    2,
+                    "tools/call",
+                    json!({
+                        "name": "yacli.mail.invite.inspect",
+                        "arguments": {
+                            "account": "mock",
+                            "uid": 42
+                        }
+                    }),
+                ),
+            ]
+            .concat(),
+        )
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    assert_eq!(responses[1]["error"]["code"], -32602);
+    assert!(
+        responses[1]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("yacli.mail.invite.inspect requires `index` or `name`")
+    );
+}
+
+#[test]
+fn mcp_stdio_mail_invite_create_event_requires_selector_before_network() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(
+            [
+                initialize_request(true),
+                mcp_notification("notifications/initialized", json!({})),
+                mcp_request(
+                    2,
+                    "tools/call",
+                    json!({
+                        "name": "yacli.mail.invite.create_event",
+                        "arguments": {
+                            "account": "mock",
+                            "uid": 42
+                        }
+                    }),
+                ),
+            ]
+            .concat(),
+        )
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    assert_eq!(responses[1]["error"]["code"], -32602);
+    assert!(
+        responses[1]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("yacli.mail.invite.create_event requires `index` or `name`")
+    );
+}
+
+#[test]
+fn mcp_stdio_mail_send_rejects_directory_attachment_before_network() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(
+            [
+                initialize_request(true),
+                mcp_notification("notifications/initialized", json!({})),
+                mcp_request(
+                    2,
+                    "tools/call",
+                    json!({
+                        "name": "yacli.mail.send",
+                        "arguments": {
+                            "account": "mock",
+                            "to": "person@example.com",
+                            "subject": "Hello",
+                            "text": "Body",
+                            "attachments": [temp.path().display().to_string()]
+                        }
+                    }),
+                ),
+            ]
+            .concat(),
+        )
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    assert_eq!(responses[1]["error"]["code"], -32601);
+    assert!(
+        responses[1]["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("attachment path points to a directory")
     );
 }
 
@@ -1715,7 +2002,7 @@ rest_base_url = "https://cloud-api.yandex.net"
             .expect("skills catalog text"),
     )
     .expect("skills catalog json");
-    assert_eq!(skills_catalog_payload["count"], 7);
+    assert_eq!(skills_catalog_payload["count"], 8);
     assert!(
         skills_catalog_payload["items"]
             .as_array()

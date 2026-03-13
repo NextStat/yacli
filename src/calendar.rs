@@ -55,6 +55,25 @@ pub struct CalendarEvent {
     pub all_day: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct CalendarInvite {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub all_day: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct CalendarEventsRequest {
     pub calendar: String,
@@ -71,6 +90,52 @@ pub struct CalendarCreateRequest {
     pub end: String,
     pub description: Option<String>,
     pub location: Option<String>,
+}
+
+pub fn calendar_create_request_from_invites(
+    calendar: &str,
+    invites: &[CalendarInvite],
+    event_index: usize,
+    command_name: &str,
+) -> Result<(CalendarCreateRequest, CalendarInvite)> {
+    if event_index == 0 {
+        return Err(YacliError::Validation(format!(
+            "{command_name} --event-index must be greater than zero"
+        )));
+    }
+    if invites.is_empty() {
+        return Err(YacliError::Validation(format!(
+            "{command_name} attachment does not contain any VEVENT entries"
+        )));
+    }
+
+    let Some(invite) = invites.get(event_index - 1).cloned() else {
+        return Err(YacliError::Validation(format!(
+            "{command_name} --event-index {event_index} is out of range; attachment contains {} VEVENT entries",
+            invites.len()
+        )));
+    };
+    let summary = invite.summary.clone().ok_or_else(|| {
+        YacliError::Validation(format!("{command_name} selected VEVENT is missing SUMMARY"))
+    })?;
+    let start = invite.start.clone().ok_or_else(|| {
+        YacliError::Validation(format!("{command_name} selected VEVENT is missing DTSTART"))
+    })?;
+    let end = invite.end.clone().ok_or_else(|| {
+        YacliError::Validation(format!("{command_name} selected VEVENT is missing DTEND"))
+    })?;
+
+    Ok((
+        CalendarCreateRequest {
+            calendar: calendar.to_string(),
+            summary,
+            start,
+            end,
+            description: invite.description.clone(),
+            location: invite.location.clone(),
+        },
+        invite,
+    ))
 }
 
 pub fn parse_event_window(
@@ -163,6 +228,22 @@ pub fn delete_calendar_event(
 ) -> Result<(CalendarCollection, CalendarEvent)> {
     let client = CaldavClient::new(base_url, account, app_password)?;
     client.delete_event(calendar_ref, uid)
+}
+
+pub fn parse_calendar_invites(calendar_data: &str) -> Result<Vec<CalendarInvite>> {
+    Ok(parse_ical_events(calendar_data)?
+        .into_iter()
+        .map(|event| CalendarInvite {
+            uid: event.uid,
+            summary: event.summary,
+            start: event.start,
+            end: event.end,
+            description: event.description,
+            location: event.location,
+            status: event.status,
+            all_day: event.all_day,
+        })
+        .collect())
 }
 
 enum ParsedCalendarBoundary {
@@ -1128,9 +1209,10 @@ fn parse_time_boundary(value: &str, flag_name: &str) -> Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_calendar_event_ical, build_calendar_query_xml, build_calendar_uid_query_xml,
-        normalize_ical_datetime, parse_create_event_window, parse_dav_responses,
-        parse_event_window, parse_ical_events,
+        CalendarInvite, build_calendar_event_ical, build_calendar_query_xml,
+        build_calendar_uid_query_xml, calendar_create_request_from_invites,
+        normalize_ical_datetime, parse_calendar_invites, parse_create_event_window,
+        parse_dav_responses, parse_event_window, parse_ical_events,
     };
 
     #[test]
@@ -1204,6 +1286,71 @@ END:VCALENDAR]]></c:calendar-data>
         assert_eq!(
             events[0].start.as_deref(),
             Some("2026-03-12T09:00:00 [Europe/Moscow]")
+        );
+    }
+
+    #[test]
+    fn parse_calendar_invites_maps_raw_events_to_public_invites() {
+        let invites = parse_calendar_invites(
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt-1\r\nSUMMARY:Команда\\, встреча\r\nDTSTART:20260312T090000Z\r\nDTEND:20260312T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR",
+        )
+        .expect("invites");
+
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].uid.as_deref(), Some("evt-1"));
+        assert_eq!(invites[0].summary.as_deref(), Some("Команда, встреча"));
+        assert_eq!(invites[0].start.as_deref(), Some("2026-03-12T09:00:00Z"));
+        assert_eq!(invites[0].end.as_deref(), Some("2026-03-12T10:00:00Z"));
+        assert!(!invites[0].all_day);
+    }
+
+    #[test]
+    fn calendar_create_request_from_invites_selects_requested_event() {
+        let invites = parse_calendar_invites(
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt-1\r\nSUMMARY:Первый\r\nDTSTART:20260312T090000Z\r\nDTEND:20260312T100000Z\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:evt-2\r\nSUMMARY:Второй\r\nDTSTART:20260313T110000Z\r\nDTEND:20260313T120000Z\r\nLOCATION:Переговорка\r\nEND:VEVENT\r\nEND:VCALENDAR",
+        )
+        .expect("invites");
+
+        let (request, selected) = calendar_create_request_from_invites(
+            "default",
+            &invites,
+            2,
+            "mail invite create-event",
+        )
+        .expect("request");
+
+        assert_eq!(request.calendar, "default");
+        assert_eq!(request.summary, "Второй");
+        assert_eq!(request.start, "2026-03-13T11:00:00Z");
+        assert_eq!(request.end, "2026-03-13T12:00:00Z");
+        assert_eq!(request.location.as_deref(), Some("Переговорка"));
+        assert_eq!(selected.uid.as_deref(), Some("evt-2"));
+    }
+
+    #[test]
+    fn calendar_create_request_from_invites_requires_event_fields() {
+        let invites = vec![CalendarInvite {
+            uid: Some("evt-1".to_string()),
+            summary: None,
+            start: Some("2026-03-13T11:00:00Z".to_string()),
+            end: Some("2026-03-13T12:00:00Z".to_string()),
+            description: None,
+            location: None,
+            status: None,
+            all_day: false,
+        }];
+
+        let error = calendar_create_request_from_invites(
+            "default",
+            &invites,
+            1,
+            "mail invite create-event",
+        )
+        .expect_err("validation error");
+        assert!(
+            error
+                .to_string()
+                .contains("mail invite create-event selected VEVENT is missing SUMMARY")
         );
     }
 

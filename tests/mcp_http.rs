@@ -1,10 +1,11 @@
 use assert_cmd::cargo::cargo_bin;
 use base64::Engine;
 use mockito::{Matcher, Server};
+use reqwest::Method;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -50,7 +51,7 @@ impl TestHttpServer {
                 }
                 panic!("HTTP MCP server exited early with {status}: {stderr}");
             }
-            if TcpStream::connect(&addr).is_ok() {
+            if http_transport_ready(&addr) {
                 return Self { child, addr };
             }
             thread::sleep(Duration::from_millis(50));
@@ -75,6 +76,18 @@ impl Drop for TestHttpServer {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+fn http_transport_ready(addr: &str) -> bool {
+    let client = Client::builder()
+        .timeout(Duration::from_millis(200))
+        .build()
+        .expect("http readiness client");
+    client
+        .request(Method::OPTIONS, format!("http://{addr}/mcp"))
+        .send()
+        .map(|response| response.status().is_success())
+        .unwrap_or(false)
 }
 
 fn client() -> Client {
@@ -361,6 +374,11 @@ fn mcp_http_initialize_returns_session_header_and_supports_follow_up_requests() 
             .iter()
             .any(|prompt| prompt["name"] == "daily-briefing")
     );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "invite-to-calendar")
+    );
 }
 
 #[test]
@@ -416,9 +434,9 @@ fn mcp_http_renders_prompt_messages() {
     let text = payload["result"]["messages"][0]["content"]["text"]
         .as_str()
         .expect("prompt text");
-    assert!(text.contains("Mail UID: 42"));
-    assert!(text.contains("Account: work"));
-    assert!(text.contains("Send the actual reply with `yacli.mail.reply`"));
+    assert!(text.contains("UID письма: 42"));
+    assert!(text.contains("Аккаунт: work"));
+    assert!(text.contains("используй `yacli.mail.reply`"));
 }
 
 #[test]
@@ -763,6 +781,21 @@ client_id = "client-123"
             .iter()
             .any(|tool| tool["name"] == "yacli.mail.forward")
     );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.attachment.export")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.invite.inspect")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.invite.create_event")
+    );
 
     let send = post_json(
         &client,
@@ -793,6 +826,356 @@ client_id = "client-123"
             .as_str()
             .expect("message")
             .contains("mail send recipient must contain `@`")
+    );
+
+    let attachment_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.attachment.export")
+        .expect("attachment export tool");
+    assert_eq!(
+        attachment_tool["inputSchema"]["required"],
+        json!(["uid", "output_path"])
+    );
+    let send_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.send")
+        .expect("send tool");
+    assert_eq!(
+        send_tool["inputSchema"]["properties"]["attachments"]["type"],
+        "array"
+    );
+    let invite_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.invite.inspect")
+        .expect("invite inspect tool");
+    assert_eq!(invite_tool["inputSchema"]["required"], json!(["uid"]));
+    let invite_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.invite.create_event")
+        .expect("invite create tool");
+    assert_eq!(
+        invite_create_tool["inputSchema"]["required"],
+        json!(["uid"])
+    );
+}
+
+#[test]
+fn mcp_http_mail_attachment_export_requires_selector_before_network() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.attachment.export",
+                "arguments": {
+                    "account": "mock",
+                    "uid": 42,
+                    "output_path": temp.path().join("invoice.pdf").display().to_string()
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    assert_eq!(payload["error"]["code"], -32602);
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("yacli.mail.attachment.export requires `index` or `name`")
+    );
+}
+
+#[test]
+fn mcp_http_mail_invite_inspect_requires_selector_before_network() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.invite.inspect",
+                "arguments": {
+                    "account": "mock",
+                    "uid": 42
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    assert_eq!(payload["error"]["code"], -32602);
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("yacli.mail.invite.inspect requires `index` or `name`")
+    );
+}
+
+#[test]
+fn mcp_http_mail_invite_create_event_requires_selector_before_network() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.invite.create_event",
+                "arguments": {
+                    "account": "mock",
+                    "uid": 42
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    assert_eq!(payload["error"]["code"], -32602);
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("yacli.mail.invite.create_event requires `index` or `name`")
+    );
+}
+
+#[test]
+fn mcp_http_mail_send_rejects_directory_attachment_before_network() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.send",
+                "arguments": {
+                    "account": "mock",
+                    "to": "person@example.com",
+                    "subject": "Hello",
+                    "text": "Body",
+                    "attachments": [temp.path().display().to_string()]
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    assert_eq!(payload["error"]["code"], -32601);
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("attachment path points to a directory")
     );
 }
 
@@ -1871,7 +2254,7 @@ rest_base_url = "https://cloud-api.yandex.net"
             .expect("skills catalog text"),
     )
     .expect("skills catalog payload");
-    assert_eq!(skills_catalog_payload["count"], 7);
+    assert_eq!(skills_catalog_payload["count"], 8);
 
     let skill_resource = post_json(
         &client,

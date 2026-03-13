@@ -465,6 +465,79 @@ pub enum MailCommand {
         bcc: Vec<String>,
         #[arg(long, value_name = "HTML")]
         html: Option<String>,
+        #[arg(long = "attach", value_name = "ФАЙЛ")]
+        attachments: Vec<PathBuf>,
+    },
+    /// Работа с вложениями писем.
+    Attachment {
+        #[command(subcommand)]
+        action: MailAttachmentCommand,
+    },
+    /// Работа с календарными приглашениями из писем.
+    Invite {
+        #[command(subcommand)]
+        action: MailInviteCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MailAttachmentCommand {
+    /// Сохранить вложение письма в локальный файл.
+    Export {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
+        folder: String,
+        #[arg(value_name = "ID")]
+        uid: u64,
+        #[arg(long, value_name = "ЧИСЛО")]
+        index: Option<usize>,
+        #[arg(long, value_name = "ИМЯ")]
+        name: Option<String>,
+        #[arg(long, value_name = "ФАЙЛ")]
+        output: PathBuf,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        #[arg(long, default_value_t = 15 * 1024 * 1024, value_name = "БАЙТЫ")]
+        max_bytes: u64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MailInviteCommand {
+    /// Разобрать календарное приглашение из вложения письма.
+    Inspect {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
+        folder: String,
+        #[arg(value_name = "ID")]
+        uid: u64,
+        #[arg(long, value_name = "ЧИСЛО")]
+        index: Option<usize>,
+        #[arg(long, value_name = "ИМЯ")]
+        name: Option<String>,
+        #[arg(long, default_value_t = 15 * 1024 * 1024, value_name = "БАЙТЫ")]
+        max_bytes: u64,
+    },
+    /// Создать событие в календаре из приглашения во вложении письма.
+    CreateEvent {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, default_value = "INBOX", value_name = "ПАПКА")]
+        folder: String,
+        #[arg(value_name = "ID")]
+        uid: u64,
+        #[arg(long, value_name = "ЧИСЛО")]
+        index: Option<usize>,
+        #[arg(long, value_name = "ИМЯ")]
+        name: Option<String>,
+        #[arg(long, default_value = "default", value_name = "КАЛЕНДАРЬ")]
+        calendar: String,
+        #[arg(long, default_value_t = 1, value_name = "ЧИСЛО")]
+        event_index: usize,
+        #[arg(long, default_value_t = 15 * 1024 * 1024, value_name = "БАЙТЫ")]
+        max_bytes: u64,
     },
 }
 

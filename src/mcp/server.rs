@@ -31,16 +31,18 @@ use crate::runtime_context::{
 use crate::update::check_for_update;
 use crate::{
     calendar::{
-        CalendarCreateRequest, CalendarEventsRequest, create_calendar_event, delete_calendar_event,
-        list_calendar_events, list_calendars, parse_event_window,
+        CalendarCreateRequest, CalendarEventsRequest, calendar_create_request_from_invites,
+        create_calendar_event, delete_calendar_event, list_calendar_events, list_calendars,
+        parse_event_window,
     },
     disk::{
         PrivateDiskListRequest, PrivateDiskMkdirRequest, PrivateDiskUploadRequest,
         create_private_directory, fetch_disk_info, fetch_private_resource, upload_private_resource,
     },
     mail::{
-        list_mail_folders, list_mail_messages, read_mail_message, search_mail_messages,
-        send_mail_message,
+        MailAttachmentExportRequest, MailAttachmentSelector, MailInviteInspectRequest,
+        export_mail_attachment, inspect_mail_invite, list_mail_folders, list_mail_messages,
+        load_mail_attachments, read_mail_message, search_mail_messages, send_mail_message,
     },
 };
 use chrono::{DateTime, Utc};
@@ -101,6 +103,41 @@ struct MailForwardToolRequest {
     text: Option<String>,
     html: Option<String>,
     max_source_bytes: u64,
+}
+
+struct MailSendToolRequest {
+    to: String,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    subject: String,
+    text: Option<String>,
+    html: Option<String>,
+    attachment_paths: Vec<String>,
+}
+
+struct MailAttachmentExportToolRequest {
+    folder: String,
+    uid: u64,
+    selector: MailAttachmentSelector,
+    output: String,
+    force: bool,
+    max_bytes: u64,
+}
+
+struct MailInviteInspectToolRequest {
+    folder: String,
+    uid: u64,
+    selector: MailAttachmentSelector,
+    max_bytes: u64,
+}
+
+struct MailInviteCreateEventToolRequest {
+    folder: String,
+    uid: u64,
+    selector: MailAttachmentSelector,
+    calendar: String,
+    event_index: usize,
+    max_bytes: u64,
 }
 
 struct SessionState {
@@ -1102,7 +1139,11 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
                     },
                     "subject": { "type": "string" },
                     "text": { "type": "string" },
-                    "html": { "type": "string" }
+                    "html": { "type": "string" },
+                    "attachments": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
                 },
                 "required": ["to", "subject"],
                 "additionalProperties": false
@@ -1155,6 +1196,67 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
                     "max_source_bytes": { "type": "integer", "minimum": 1 }
                 },
                 "required": ["uid", "to"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.mail.attachment.export",
+            "Export one mail attachment to a local file on the MCP server host.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "folder": { "type": "string" },
+                    "uid": { "type": "integer", "minimum": 1 },
+                    "index": { "type": "integer", "minimum": 1 },
+                    "name": { "type": "string" },
+                    "output_path": { "type": "string" },
+                    "force": { "type": "boolean" },
+                    "max_bytes": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["uid", "output_path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.mail.invite.inspect",
+            "Inspect one calendar invite attachment and return parsed VEVENT fields.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "folder": { "type": "string" },
+                    "uid": { "type": "integer", "minimum": 1 },
+                    "index": { "type": "integer", "minimum": 1 },
+                    "name": { "type": "string" },
+                    "max_bytes": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["uid"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.mail.invite.create_event",
+            "Create one calendar event from a VEVENT in a mail invite attachment.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "folder": { "type": "string" },
+                    "uid": { "type": "integer", "minimum": 1 },
+                    "index": { "type": "integer", "minimum": 1 },
+                    "name": { "type": "string" },
+                    "calendar": { "type": "string" },
+                    "event_index": { "type": "integer", "minimum": 1 },
+                    "max_bytes": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["uid"],
                 "additionalProperties": false
             }),
             None,
@@ -1352,12 +1454,15 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
         )?,
         "yacli.mail.send" => mail_send(
             arguments.get("account").and_then(Value::as_str),
-            required_string(&arguments, "to")?,
-            string_list(&arguments, "cc")?,
-            string_list(&arguments, "bcc")?,
-            required_string(&arguments, "subject")?,
-            optional_string_owned(&arguments, "text"),
-            optional_string_owned(&arguments, "html"),
+            MailSendToolRequest {
+                to: required_string(&arguments, "to")?.to_string(),
+                cc: string_list(&arguments, "cc")?,
+                bcc: string_list(&arguments, "bcc")?,
+                subject: required_string(&arguments, "subject")?.to_string(),
+                text: optional_string_owned(&arguments, "text"),
+                html: optional_string_owned(&arguments, "html"),
+                attachment_paths: string_list(&arguments, "attachments")?,
+            },
         )?,
         "yacli.mail.reply" => mail_reply(
             arguments.get("account").and_then(Value::as_str),
@@ -1381,6 +1486,51 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
                 html: optional_string_owned(&arguments, "html"),
                 max_source_bytes: optional_u64(&arguments, "max_source_bytes")
                     .unwrap_or(15 * 1024 * 1024),
+            },
+        )?,
+        "yacli.mail.attachment.export" => mail_attachment_export(
+            arguments.get("account").and_then(Value::as_str),
+            MailAttachmentExportToolRequest {
+                folder: optional_string(&arguments, "folder")
+                    .unwrap_or("INBOX")
+                    .to_string(),
+                uid: required_u64(&arguments, "uid")?,
+                selector: mail_attachment_selector(&arguments)?,
+                output: required_string(&arguments, "output_path")?.to_string(),
+                force: optional_bool(&arguments, "force").unwrap_or(false),
+                max_bytes: optional_u64(&arguments, "max_bytes").unwrap_or(15 * 1024 * 1024),
+            },
+        )?,
+        "yacli.mail.invite.inspect" => mail_invite_inspect(
+            arguments.get("account").and_then(Value::as_str),
+            MailInviteInspectToolRequest {
+                folder: optional_string(&arguments, "folder")
+                    .unwrap_or("INBOX")
+                    .to_string(),
+                uid: required_u64(&arguments, "uid")?,
+                selector: mail_attachment_selector_with_context(
+                    &arguments,
+                    "yacli.mail.invite.inspect",
+                )?,
+                max_bytes: optional_u64(&arguments, "max_bytes").unwrap_or(15 * 1024 * 1024),
+            },
+        )?,
+        "yacli.mail.invite.create_event" => mail_invite_create_event(
+            arguments.get("account").and_then(Value::as_str),
+            MailInviteCreateEventToolRequest {
+                folder: optional_string(&arguments, "folder")
+                    .unwrap_or("INBOX")
+                    .to_string(),
+                uid: required_u64(&arguments, "uid")?,
+                selector: mail_attachment_selector_with_context(
+                    &arguments,
+                    "yacli.mail.invite.create_event",
+                )?,
+                calendar: optional_string(&arguments, "calendar")
+                    .unwrap_or("default")
+                    .to_string(),
+                event_index: optional_usize(&arguments, "event_index").unwrap_or(1),
+                max_bytes: optional_u64(&arguments, "max_bytes").unwrap_or(15 * 1024 * 1024),
             },
         )?,
         "yacli.calendar.calendars" => {
@@ -1809,33 +1959,33 @@ fn mail_read(account: Option<&str>, folder: &str, uid: u64, max_bytes: u64) -> R
     }))
 }
 
-fn mail_send(
-    account: Option<&str>,
-    to: &str,
-    cc: Vec<String>,
-    bcc: Vec<String>,
-    subject: &str,
-    text: Option<String>,
-    html: Option<String>,
-) -> Result<Value> {
+fn mail_send(account: Option<&str>, request: MailSendToolRequest) -> Result<Value> {
     let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let attachments = load_mail_attachments(
+        &request
+            .attachment_paths
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    )?;
     let sent = send_mail_message(
         &context.smtp_host,
         context.smtp_port,
         auth,
         crate::mail::MailSendRequest {
-            to: vec![to.to_string()],
-            cc,
-            bcc,
-            subject: subject.to_string(),
-            text,
-            html,
-            attachments: Vec::new(),
+            to: vec![request.to],
+            cc: request.cc,
+            bcc: request.bcc,
+            subject: request.subject,
+            text: request.text,
+            html: request.html,
+            attachments,
             thread_headers: None,
         },
     )?;
     Ok(json!({
         "account": resolved_account,
+        "attachments": request.attachment_paths,
         "sent": sent,
     }))
 }
@@ -1893,6 +2043,100 @@ fn mail_forward(account: Option<&str>, request: MailForwardToolRequest) -> Resul
         "account": resolved_account,
         "folder": request.folder,
         "forward": forward,
+    }))
+}
+
+fn mail_attachment_export(
+    account: Option<&str>,
+    request: MailAttachmentExportToolRequest,
+) -> Result<Value> {
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let attachment = export_mail_attachment(
+        &context.imap_host,
+        context.imap_port,
+        auth,
+        &request.folder,
+        MailAttachmentExportRequest {
+            uid: request.uid,
+            selector: request.selector,
+            output: PathBuf::from(&request.output),
+            force: request.force,
+            max_bytes: request.max_bytes,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "folder": request.folder,
+        "attachment": attachment,
+    }))
+}
+
+fn mail_invite_inspect(
+    account: Option<&str>,
+    request: MailInviteInspectToolRequest,
+) -> Result<Value> {
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let invite = inspect_mail_invite(
+        &context.imap_host,
+        context.imap_port,
+        auth,
+        &request.folder,
+        MailInviteInspectRequest {
+            uid: request.uid,
+            selector: request.selector,
+            max_bytes: request.max_bytes,
+        },
+    )?;
+    Ok(json!({
+        "account": resolved_account,
+        "folder": request.folder,
+        "invite": invite,
+    }))
+}
+
+fn mail_invite_create_event(
+    account: Option<&str>,
+    request: MailInviteCreateEventToolRequest,
+) -> Result<Value> {
+    if request.event_index == 0 {
+        return Err(YacliError::Validation(
+            "yacli.mail.invite.create_event `event_index` must be a positive integer".to_string(),
+        ));
+    }
+    let (resolved_account, auth, mail_context) = resolve_mail_private_context(account)?;
+    let inspected = inspect_mail_invite(
+        &mail_context.imap_host,
+        mail_context.imap_port,
+        auth,
+        &request.folder,
+        MailInviteInspectRequest {
+            uid: request.uid,
+            selector: request.selector,
+            max_bytes: request.max_bytes,
+        },
+    )?;
+    let (create_request, selected_invite) = calendar_create_request_from_invites(
+        &request.calendar,
+        &inspected.invites,
+        request.event_index,
+        "yacli.mail.invite.create_event",
+    )?;
+    let (_, app_password, calendar_context) =
+        resolve_calendar_private_context(Some(&resolved_account))?;
+    let (calendar, event) = create_calendar_event(
+        &calendar_context.caldav_base_url,
+        &calendar_context.email,
+        &app_password,
+        create_request,
+    )?;
+
+    Ok(json!({
+        "account": resolved_account,
+        "folder": request.folder,
+        "attachment": inspected,
+        "selected_invite": selected_invite,
+        "calendar": calendar,
+        "event": event,
     }))
 }
 
@@ -2061,6 +2305,29 @@ fn optional_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 
 fn optional_string_owned(value: &Value, key: &str) -> Option<String> {
     optional_string(value, key).map(ToString::to_string)
+}
+
+fn mail_attachment_selector(value: &Value) -> Result<MailAttachmentSelector> {
+    mail_attachment_selector_with_context(value, "yacli.mail.attachment.export")
+}
+
+fn mail_attachment_selector_with_context(
+    value: &Value,
+    tool_name: &str,
+) -> Result<MailAttachmentSelector> {
+    let index = optional_usize(value, "index");
+    let name = optional_string(value, "name");
+
+    match (index, name) {
+        (Some(index), None) => Ok(MailAttachmentSelector::Index(index)),
+        (None, Some(name)) => Ok(MailAttachmentSelector::Filename(name.to_string())),
+        (Some(_), Some(_)) => Err(YacliError::Validation(format!(
+            "{tool_name} accepts either `index` or `name`, not both"
+        ))),
+        (None, None) => Err(YacliError::Validation(format!(
+            "{tool_name} requires `index` or `name`"
+        ))),
+    }
 }
 
 fn string_list(value: &Value, key: &str) -> Result<Vec<String>> {
