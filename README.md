@@ -1,6 +1,8 @@
-<p align="center">
-  <img src="./assets/readme-hero.svg" alt="yacli hero" width="100%" />
-</p>
+<h1 align="center">yacli</h1>
+
+<p align="center"><strong>CLI и MCP Apps-сервер для Яндекс Почты, Календаря и Диска.</strong></p>
+
+<p align="center">Один продуктовый surface для людей, AI-агентов и MCP-хостов.</p>
 
 <p align="center">
   <a href="https://github.com/NextStat/yacli/releases"><img src="https://img.shields.io/github/v/release/NextStat/yacli?display_name=tag&style=flat-square&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7" alt="Релиз"></a>
@@ -24,6 +26,15 @@
 - повседневный CLI для почты, календаря и файлов;
 - MCP server для `Claude Code`, `Claude Desktop / Cowork`, `Codex`, `Gemini CLI`, `Cursor`, `Windsurf`, `Zed`, `Warp` и других MCP-клиентов;
 - MCP Apps runtime с dashboard, prompts, skills, resources, completions и roots.
+
+## С чего начать
+
+| Если вам нужно | Старт |
+| --- | --- |
+| `Быстро подключить Почту и Диск` | `yacli add` -> `yacli login` |
+| `Подключить Календарь` | получить пароль приложения Яндекс ID -> `yacli login calendar --app-password <пароль>` |
+| `Поднять MCP для Claude / Codex / Gemini` | `yacli mcp install --client <client>` |
+| `Запустить локальный HTTP MCP` | `yacli mcp --transport http --listen 127.0.0.1:8787` |
 
 ## Почему yacli
 
@@ -251,6 +262,15 @@ yacli login disk
 ```bash
 yacli login calendar --app-password <пароль>
 ```
+
+Как получить этот пароль:
+
+1. Откройте [Пароли приложений Яндекс ID](https://yandex.ru/support/id/ru/authorization/app-passwords).
+2. Перейдите `Безопасность` -> `Доступ к вашим данным` -> `Пароли приложений`.
+3. Выберите тип `Календарь`.
+4. Создайте пароль, например `yacli calendar`, и сразу скопируйте его.
+
+Если нужен подробный вариант с `env`-переменной и пояснениями по хранению секрета, см. раздел [Как получить пароль приложения для Календаря](#как-получить-пароль-приложения-для-календаря).
 
 ### 4. Проверьте, что все работает
 
