@@ -101,25 +101,22 @@ yacli update --check
 
 ## Быстрый старт
 
-<table>
-  <tr>
-    <td width="52%" valign="top">
-      <strong>Запуск за минуту</strong>
-      <pre lang="bash"><code>curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
+**Запуск за минуту**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
 yacli add me@yandex.ru
 yacli login
-yacli login calendar --app-password &lt;пароль&gt;
-yacli mcp install --client claude</code></pre>
-    </td>
-    <td width="48%" valign="top">
-      <strong>Что получите сразу</strong><br/><br/>
-      • локальный CLI для Почты, Календаря и Диска<br/>
-      • MCP server для Claude, Codex, Gemini и других клиентов<br/>
-      • prompts, embedded skills, resources и dashboard для MCP Apps<br/>
-      • готовые кросс-сервисные сценарии без клея из скриптов
-    </td>
-  </tr>
-</table>
+yacli login calendar --app-password <пароль>
+yacli mcp install --client claude
+```
+
+После этого у вас сразу будут:
+
+- локальный CLI для Почты, Календаря и Диска;
+- MCP server для Claude, Codex, Gemini и других клиентов;
+- prompts, embedded skills, resources и dashboard для MCP Apps;
+- готовые кросс-сервисные сценарии без клея из скриптов.
 
 ### С чего начать
 
