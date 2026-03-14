@@ -29,28 +29,28 @@
 
   <text x="92" y="232" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="118" font-weight="900">yacli</text>
   <text x="92" y="296" fill="#B9C5E3" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="40" font-weight="700">Яндекс Почта, Календарь, Диск</text>
-  <text x="92" y="360" fill="#E2E8F0" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="34" font-weight="500">Один интерфейс для людей, агентов и MCP Apps.</text>
+  <text x="92" y="356" fill="#E2E8F0" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="32" font-weight="500">Один интерфейс для людей, агентов и MCP Apps.</text>
 
   <rect x="92" y="406" width="356" height="82" rx="24" fill="url(#accent)" filter="url(#shadow)"/>
   <text x="130" y="458" fill="#0B1020" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="34" font-weight="900">mail  calendar  disk</text>
 
   <g filter="url(#shadow)">
-    <rect x="954" y="102" width="506" height="102" rx="28" fill="url(#panel)" stroke="#223257" stroke-width="2"/>
-    <text x="994" y="148" fill="#8EE3FF" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="800">Agent-ready</text>
-    <text x="994" y="185" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="28" font-weight="700">Claude, Codex, Gemini, Cursor</text>
+    <rect x="920" y="102" width="548" height="102" rx="28" fill="url(#panel)" stroke="#223257" stroke-width="2"/>
+    <text x="960" y="148" fill="#8EE3FF" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="800">Agent-ready</text>
+    <text x="960" y="185" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="27" font-weight="700">Claude, Codex, Gemini, Cursor</text>
   </g>
 
   <g filter="url(#shadow)">
-    <rect x="954" y="228" width="506" height="102" rx="28" fill="url(#panel)" stroke="#223257" stroke-width="2"/>
-    <text x="994" y="274" fill="#A7F3D0" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="800">MCP Apps</text>
-    <text x="994" y="311" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="28" font-weight="700">Dashboard, prompts, skills, resources</text>
+    <rect x="920" y="228" width="548" height="102" rx="28" fill="url(#panel)" stroke="#223257" stroke-width="2"/>
+    <text x="960" y="274" fill="#A7F3D0" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="800">MCP Apps</text>
+    <text x="960" y="311" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="700">Dashboard, prompts, skills, resources</text>
   </g>
 
   <g filter="url(#shadow)">
-    <rect x="954" y="354" width="506" height="102" rx="28" fill="url(#panel)" stroke="#223257" stroke-width="2"/>
-    <text x="994" y="400" fill="#FFD166" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="800">Cross-service workflows</text>
-    <text x="994" y="437" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="28" font-weight="700">Письмо, событие, файл — в одном потоке</text>
+    <rect x="920" y="354" width="548" height="102" rx="28" fill="url(#panel)" stroke="#223257" stroke-width="2"/>
+    <text x="960" y="400" fill="#FFD166" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="800">Cross-service workflows</text>
+    <text x="960" y="437" fill="#F8FAFC" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="24" font-weight="700">Письмо, событие, файл — в одном потоке</text>
   </g>
 
-  <text x="92" y="530" fill="#94A3B8" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="28" font-weight="700">Rust  |  macOS / Linux / Windows  |  Auto-update  |  HTTP + stdio  |  Linux ARM64</text>
+  <text x="92" y="522" fill="#94A3B8" font-family="SF Pro Display, Inter, Arial, sans-serif" font-size="26" font-weight="700">Rust  |  macOS / Linux / Windows  |  Auto-update  |  HTTP + stdio  |  Linux ARM64</text>
 </svg>
