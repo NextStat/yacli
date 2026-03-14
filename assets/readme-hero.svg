@@ -2,7 +2,7 @@
   <defs>
     <linearGradient id="bg" x1="80" y1="40" x2="1180" y2="600" gradientUnits="userSpaceOnUse">
       <stop stop-color="#FFF4CC"/>
-      <stop offset="0.42" stop-color="#D8F3FF"/>
+      <stop offset="0.45" stop-color="#D8F3FF"/>
       <stop offset="1" stop-color="#E9E2FF"/>
     </linearGradient>
     <linearGradient id="panel" x1="140" y1="120" x2="1120" y2="520" gradientUnits="userSpaceOnUse">
@@ -34,28 +34,29 @@
     <rect x="140" y="120" width="1000" height="380" rx="28" fill="url(#panel)"/>
   </g>
 
-  <rect x="188" y="172" width="176" height="34" rx="17" fill="#202B44"/>
+  <rect x="188" y="172" width="196" height="34" rx="17" fill="#202B44"/>
   <circle cx="214" cy="189" r="7" fill="#FFB703"/>
   <text x="232" y="195" fill="#EAF2FF" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">CLI + MCP + Apps</text>
 
   <text x="188" y="278" fill="#FFFFFF" font-family="Verdana, Arial, sans-serif" font-size="74" font-weight="800">yacli</text>
-  <text x="188" y="330" fill="#A8B8D8" font-family="Verdana, Arial, sans-serif" font-size="28" font-weight="600">Yandex Mail, Calendar, Disk</text>
-  <text x="188" y="372" fill="#D9E3F6" font-family="Verdana, Arial, sans-serif" font-size="27">One product surface for humans, agents, and MCP hosts.</text>
+  <text x="188" y="330" fill="#A8B8D8" font-family="Verdana, Arial, sans-serif" font-size="30" font-weight="700">Почта, Календарь, Диск</text>
+  <text x="188" y="374" fill="#D9E3F6" font-family="Verdana, Arial, sans-serif" font-size="26">Один продуктовый surface для людей,</text>
+  <text x="188" y="408" fill="#D9E3F6" font-family="Verdana, Arial, sans-serif" font-size="26">AI-агентов и MCP-хостов.</text>
 
-  <rect x="188" y="406" width="292" height="54" rx="14" fill="url(#accent)"/>
-  <text x="214" y="440" fill="#16120A" font-family="Verdana, Arial, sans-serif" font-size="24" font-weight="800">mail  calendar  disk</text>
+  <rect x="188" y="438" width="322" height="54" rx="14" fill="url(#accent)"/>
+  <text x="214" y="472" fill="#16120A" font-family="Verdana, Arial, sans-serif" font-size="24" font-weight="800">почта   календарь   диск</text>
 
-  <rect x="738" y="174" width="340" height="76" rx="18" fill="#111A2C" stroke="#2B3A58"/>
-  <text x="764" y="204" fill="#7BDFF2" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Agent-ready</text>
-  <text x="764" y="232" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Claude, Codex, Gemini, Cursor</text>
+  <rect x="734" y="172" width="368" height="84" rx="18" fill="#111A2C" stroke="#2B3A58"/>
+  <text x="760" y="202" fill="#7BDFF2" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Для агентов</text>
+  <text x="760" y="234" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="20" font-weight="700">Claude, Codex, Gemini</text>
 
-  <rect x="738" y="268" width="340" height="76" rx="18" fill="#111A2C" stroke="#2B3A58"/>
-  <text x="764" y="298" fill="#B8F2E6" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">MCP Apps</text>
-  <text x="764" y="326" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Dashboard, prompts, skills, resources</text>
+  <rect x="734" y="274" width="368" height="84" rx="18" fill="#111A2C" stroke="#2B3A58"/>
+  <text x="760" y="304" fill="#B8F2E6" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">MCP Apps</text>
+  <text x="760" y="336" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="20" font-weight="700">Dashboard, prompts, skills</text>
 
-  <rect x="738" y="362" width="340" height="76" rx="18" fill="#111A2C" stroke="#2B3A58"/>
-  <text x="764" y="392" fill="#FFD166" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Cross-service workflows</text>
-  <text x="764" y="420" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Mail invite to calendar. File to mail.</text>
+  <rect x="734" y="376" width="368" height="84" rx="18" fill="#111A2C" stroke="#2B3A58"/>
+  <text x="760" y="406" fill="#FFD166" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Сквозные сценарии</text>
+  <text x="760" y="438" fill="#F6F9FF" font-family="Verdana, Arial, sans-serif" font-size="20" font-weight="700">Письмо -> файл -> событие</text>
 
-  <text x="188" y="548" fill="#31415F" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Rust  |  Linux ARM64 releases  |  Auto-update  |  Streamable HTTP  |  Stdio JSONL</text>
+  <text x="188" y="548" fill="#31415F" font-family="Verdana, Arial, sans-serif" font-size="18" font-weight="700">Rust  |  macOS, Linux, Windows  |  автообновление  |  streamable HTTP  |  stdio JSONL</text>
 </svg>

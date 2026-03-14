@@ -2,16 +2,12 @@
   <img src="./assets/readme-hero.svg" alt="yacli hero" width="100%" />
 </p>
 
-<h1 align="center">yacli</h1>
-
-<p align="center"><strong>CLI и MCP Apps-сервер для Яндекс Почты, Календаря и Диска для людей, AI-агентов и MCP-хостов.</strong></p>
-
 <p align="center">
-  <a href="https://github.com/NextStat/yacli/releases"><img src="https://img.shields.io/github/v/release/NextStat/yacli?display_name=tag&style=flat-square" alt="Release"></a>
-  <a href="https://github.com/NextStat/yacli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/NextStat/yacli/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/NextStat/yacli/releases"><img src="https://img.shields.io/github/v/release/NextStat/yacli?display_name=tag&style=flat-square&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7" alt="Релиз"></a>
+  <a href="https://github.com/NextStat/yacli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/NextStat/yacli/ci.yml?branch=main&style=flat-square&label=%D0%BF%D1%80%D0%BE%D0%B2%D0%B5%D1%80%D0%BA%D0%B8" alt="Проверки"></a>
   <img src="https://img.shields.io/badge/MCP-Apps-ffb703?style=flat-square" alt="MCP Apps">
-  <img src="https://img.shields.io/badge/Linux-ARM64-219ebc?style=flat-square" alt="Linux ARM64">
-  <img src="https://img.shields.io/badge/Auto--update-ready-8ecae6?style=flat-square" alt="Auto update">
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-%D0%B3%D0%BE%D1%82%D0%BE%D0%B2%D1%8B%D0%B5%20%D1%80%D0%B5%D0%BB%D0%B8%D0%B7%D1%8B-219ebc?style=flat-square" alt="Готовые релизы для macOS, Linux и Windows">
+  <img src="https://img.shields.io/badge/%D0%B0%D0%B2%D1%82%D0%BE%D0%BE%D0%B1%D0%BD%D0%BE%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5-ready-8ecae6?style=flat-square" alt="Автообновление">
   <a href="https://github.com/NextStat/yacli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-90be6d?style=flat-square" alt="MIT"></a>
 </p>
 
