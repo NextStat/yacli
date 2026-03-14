@@ -2,7 +2,7 @@
 
 <p align="center"><strong>CLI, MCP server и MCP Apps для Яндекс Почты, Календаря и Диска</strong></p>
 
-<p align="center">Один аккуратный продуктовый интерфейс для терминала, AI-агентов и MCP-хостов.</p>
+<p align="center">Один аккуратный продуктовый интерфейс для терминала, ИИ-агентов и MCP-хостов.</p>
 
 <p align="center">
   <a href="https://github.com/NextStat/yacli/releases"><img src="https://img.shields.io/github/v/release/NextStat/yacli?display_name=tag&style=for-the-badge&label=%D0%A0%D0%95%D0%9B%D0%98%D0%97" alt="Релиз"></a>
@@ -21,19 +21,23 @@
   <a href="#mcp"><strong>MCP</strong></a>
 </p>
 
+## Один продуктовый интерфейс для Яндекс Почты, Календаря и Диска
+
+> `yacli` связывает Яндекс Почту, Календарь и Диск в один внятный интерфейс: в терминале, в агентских клиентах и внутри MCP Apps.
+
 <table>
   <tr>
     <td width="33%" valign="top">
-      <strong>Для людей</strong><br/><br/>
-      Повседневный CLI для почты, календаря, вложений, событий и приватного Диска.
+      <strong>CLI для ежедневной работы</strong><br/><br/>
+      Почта, календарь, вложения, события и приватный Диск в одном бинаре и одном конфиге.
     </td>
     <td width="33%" valign="top">
-      <strong>Для агентов</strong><br/><br/>
-      Полноценный MCP server c <code>stdio</code>, <code>http</code>, prompts, skills, resources, completions, roots и write-tools.
+      <strong>MCP для агентов</strong><br/><br/>
+      Полноценный MCP-сервер с <code>stdio</code>, <code>http</code>, prompts, skills, resources, completions, roots и write-tools.
     </td>
     <td width="33%" valign="top">
-      <strong>Для MCP-хостов с UI</strong><br/><br/>
-      MCP Apps с dashboard, deep links, браузером ресурсов и кросс-сервисными сценариями.
+      <strong>MCP Apps для UI-хостов</strong><br/><br/>
+      Дашборд, deep links, prompts, браузер ресурсов и живые кросс-сервисные сценарии.
     </td>
   </tr>
 </table>
@@ -42,20 +46,18 @@
   <tr>
     <td width="33%" valign="top">
       <strong>Письмо → вложение → файл</strong><br/><br/>
-      Найти письмо, выгрузить нужное вложение и сохранить его локально или передать дальше агенту.
+      Найти письмо, выгрузить нужное вложение и сохранить его локально без промежуточных скриптов.
     </td>
     <td width="33%" valign="top">
       <strong>Письмо → <code>.ics</code> → событие</strong><br/><br/>
-      Разобрать приглашение из письма и сразу завести встречу в нужный календарь.
+      Разобрать приглашение из письма и сразу создать встречу в нужном календаре.
     </td>
     <td width="33%" valign="top">
       <strong>Файл → письмо</strong><br/><br/>
-      Взять локальный файл, приложить его к письму и отправить без ручной рутины.
+      Взять локальный файл, приложить его к письму и отправить через тот же интерфейс.
     </td>
   </tr>
 </table>
-
-> `yacli` нужен, когда хочется один внятный интерфейс для Яндекс Почты, Календаря и Диска: в терминале, в Claude / Codex / Gemini и внутри MCP Apps-хостов.
 
 <!--
 TODO: добавить GIF / скриншот терминала с yacli mail list + yacli status
