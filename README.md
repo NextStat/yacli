@@ -206,7 +206,7 @@ yacli update --check
 Если нужен private release mirror или локальный test feed, можно переопределить base URL:
 
 ```bash
-export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.4.0'
+export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.4.1'
 yacli update --check
 ```
 
