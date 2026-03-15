@@ -23,6 +23,7 @@ use url::Url;
 
 use crate::account_store::AccountStore;
 use crate::activity_store::{ActivityStore, NewActivityEntry, record_activity};
+use crate::activity_undo::{apply_activity_undo, calendar_create_undo, disk_publish_undo};
 use crate::commands::{apply_safe_doctor_remediation, doctor_safe_remediation_activity_entry};
 use crate::credential_store::CredentialStore;
 use crate::disk_link::{DiskUploadLinkRequest, review_disk_upload_link, upload_link_to_disk};
@@ -1104,6 +1105,20 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
             ui_enabled,
         ),
         tool(
+            "yacli.activity.undo",
+            "Undo one reversible activity entry by ID.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            Some(MODEL_AND_APP_VISIBILITY),
+            ui_enabled,
+        ),
+        tool(
             "yacli.account.current",
             "Return the current yacli account.",
             json!({
@@ -1778,6 +1793,7 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
                 max_bytes: optional_u64(&arguments, "max_bytes").unwrap_or(15 * 1024 * 1024),
             },
         )?,
+        "yacli.activity.undo" => activity_undo(required_string(&arguments, "id")?)?,
         "yacli.calendar.calendars" => {
             calendar_calendars(arguments.get("account").and_then(Value::as_str))?
         }
@@ -2409,6 +2425,26 @@ fn mail_read(account: Option<&str>, folder: &str, uid: u64, max_bytes: u64) -> R
     }))
 }
 
+fn activity_undo(id: &str) -> Result<Value> {
+    let store = ActivityStore::load()?;
+    let entry = store.find(id).cloned().ok_or_else(|| {
+        YacliError::Validation(format!("activity undo: запись `{id}` не найдена"))
+    })?;
+    let applied = apply_activity_undo(&entry)?;
+    record_activity_mcp(NewActivityEntry {
+        source: "mcp".to_string(),
+        operation: "activity.undo".to_string(),
+        account: applied.account.clone(),
+        summary: applied.summary.clone(),
+        replay_command: applied.replay_command.clone(),
+        undo: None,
+    });
+    Ok(json!({
+        "entry": entry,
+        "undo": applied,
+    }))
+}
+
 fn mail_send(account: Option<&str>, request: MailSendToolRequest) -> Result<Value> {
     let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
     let attachments = load_mail_attachments(
@@ -2459,6 +2495,7 @@ fn mail_send(account: Option<&str>, request: MailSendToolRequest) -> Result<Valu
                 sent.subject
             ),
             replay_command: std::mem::take(&mut replay),
+            undo: None,
         });
         Ok(json!({
             "account": resolved_account,
@@ -2527,6 +2564,7 @@ fn mail_send_link(account: Option<&str>, request: MailSendLinkToolRequest) -> Re
                 result.resource.public_url.as_deref().unwrap_or("-")
             ),
             replay_command: replay,
+            undo: None,
         });
         Ok(json!({
             "account": resolved_account,
@@ -2698,6 +2736,7 @@ fn mail_invite_create_event(
             event.summary.as_deref().unwrap_or("-")
         ),
         replay_command: replay,
+        undo: None,
     });
 
     Ok(json!({
@@ -2805,6 +2844,7 @@ fn calendar_create(account: Option<&str>, request: CalendarCreateToolRequest) ->
                 event.summary.as_deref().unwrap_or("-")
             ),
             replay_command: replay,
+            undo: calendar_create_undo(&calendar, &event),
         });
         Ok(json!({
             "account": resolved_account,
@@ -2871,6 +2911,7 @@ fn disk_mkdir(account: Option<&str>, path: &str) -> Result<Value> {
         account: resolved_account.clone(),
         summary: format!("Создана папка на Диске: {}", resource.path),
         replay_command: format!("yacli disk mkdir {}", shell_quote(&resource.path)),
+        undo: None,
     });
     Ok(json!({
         "account": resolved_account,
@@ -2913,6 +2954,7 @@ fn disk_upload(account: Option<&str>, request: DiskUploadToolRequest) -> Result<
             account: resolved_account.clone(),
             summary: format!("Загружен файл на Диск: {}", upload.remote_path),
             replay_command: replay,
+            undo: None,
         });
         Ok(json!({
             "account": resolved_account,
@@ -2957,6 +2999,7 @@ fn disk_upload_link(account: Option<&str>, request: DiskUploadLinkToolRequest) -
                 shell_quote(&result.upload.source_path),
                 shell_quote(&result.resource.path)
             ),
+            undo: None,
         });
         Ok(json!({
             "account": resolved_account,
@@ -2990,6 +3033,7 @@ fn disk_download(account: Option<&str>, request: DiskDownloadToolRequest) -> Res
         account: resolved_account.clone(),
         summary: mcp_transfer_activity_summary("Скачан файл с Диска", &resource.path, &download),
         replay_command: replay,
+        undo: None,
     });
 
     Ok(json!({
@@ -3027,6 +3071,7 @@ fn disk_publish(account: Option<&str>, request: DiskPublishToolRequest) -> Resul
                 "yacli disk publish {} --dry-run",
                 shell_quote(&resource.path)
             ),
+            undo: Some(disk_publish_undo(&resource)),
         });
         Ok(json!({
             "account": resolved_account,
@@ -3066,6 +3111,7 @@ fn disk_unpublish(account: Option<&str>, request: DiskUnpublishToolRequest) -> R
                 "yacli disk unpublish {} --dry-run",
                 shell_quote(&result.resource.path)
             ),
+            undo: None,
         });
         Ok(json!({
             "account": resolved_account,

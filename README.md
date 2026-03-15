@@ -288,11 +288,13 @@ yacli disk unpublish disk:/docs/archive/report.pdf --dry-run
 yacli activity list
 yacli activity list --limit 20
 yacli activity show <id>
+yacli activity undo <id>
 ```
 
 - В журнал попадают только успешные реальные write-операции.
 - `--dry-run` в журнал не записывается.
 - У каждой записи есть `replay_command`, который можно повторить или передать агенту.
+- Для честно обратимых действий запись дополнительно несёт `undo_command`, а `yacli activity undo <id>` выполняет штатный rollback.
 
 ### Публичный Диск
 

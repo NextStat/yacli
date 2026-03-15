@@ -349,6 +349,11 @@ pub enum ActivityCommand {
         #[arg(value_name = "ID")]
         id: String,
     },
+    /// Откатить одно обратимое действие.
+    Undo {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

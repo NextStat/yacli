@@ -1,5 +1,6 @@
 pub mod account_store;
 pub mod activity_store;
+pub mod activity_undo;
 mod calendar;
 pub mod cli;
 pub mod commands;

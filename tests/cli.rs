@@ -1402,6 +1402,11 @@ fn guide_lists_stable_commands_and_workflows() {
             .iter()
             .any(|entry| entry["path"] == "activity show")
     );
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "activity undo")
+    );
     assert!(commands.iter().any(|entry| entry["path"] == "login"));
     assert!(
         commands
@@ -6298,12 +6303,174 @@ client_id = "client-123"
     let items = activity_value["items"].as_array().expect("items");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["operation"], "disk.publish");
+    assert_eq!(items[0]["undo"]["kind"], "disk_unpublish");
+    assert!(
+        items[0]["undo_command"]
+            .as_str()
+            .expect("undo command")
+            .contains("yacli disk unpublish")
+    );
     assert!(
         items[0]["replay_command"]
             .as_str()
             .expect("replay command")
             .contains("yacli disk publish")
     );
+}
+
+#[test]
+fn activity_undo_revokes_public_disk_link_and_records_undo_activity() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _publish = server
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata_after_publish = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(2)
+        .create();
+
+    let _unpublish = server
+        .mock("PUT", "/v1/disk/resources/unpublish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata_after_unpublish = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:03+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 20
+}"#,
+        )
+        .create();
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "publish",
+            "--account",
+            "mock",
+            "disk:/docs/report.pdf",
+        ])
+        .assert()
+        .success();
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let activity_id = activity_value["items"][0]["id"]
+        .as_str()
+        .expect("activity id")
+        .to_string();
+
+    let undo_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "undo", &activity_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let undo_value: Value = serde_json::from_slice(&undo_output).expect("undo json");
+    assert_eq!(undo_value["operation"], "activity.undo");
+    assert_eq!(undo_value["undo"]["result"]["kind"], "disk_unpublish");
+    assert_eq!(
+        undo_value["undo"]["result"]["result"]["revoked_public_url"],
+        "https://disk.yandex.ru/i/public-report"
+    );
+
+    let activity_after_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_after: Value =
+        serde_json::from_slice(&activity_after_output).expect("activity json after undo");
+    let items = activity_after["items"].as_array().expect("items");
+    assert_eq!(items[0]["operation"], "activity.undo");
+    assert_eq!(items[1]["operation"], "disk.publish");
 }
 
 #[test]

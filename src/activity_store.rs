@@ -4,6 +4,7 @@ use chrono::{SecondsFormat, Utc};
 use rand::{Rng, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 
+use crate::activity_undo::ActivityUndoAction;
 use crate::error::Result;
 use crate::paths::activity_log_path;
 use crate::persist::write_config_file;
@@ -20,6 +21,10 @@ pub struct ActivityEntry {
     pub account: String,
     pub summary: String,
     pub replay_command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<ActivityUndoAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_command: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -29,6 +34,7 @@ pub struct NewActivityEntry {
     pub account: String,
     pub summary: String,
     pub replay_command: String,
+    pub undo: Option<ActivityUndoAction>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,6 +88,10 @@ impl ActivityStore {
     }
 
     pub fn append(&mut self, new_entry: NewActivityEntry) -> ActivityEntry {
+        let undo_command = new_entry
+            .undo
+            .as_ref()
+            .map(ActivityUndoAction::command_line);
         let entry = ActivityEntry {
             id: generate_activity_id(),
             occurred_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -90,6 +100,8 @@ impl ActivityStore {
             account: new_entry.account,
             summary: new_entry.summary,
             replay_command: new_entry.replay_command,
+            undo: new_entry.undo,
+            undo_command,
         };
         self.file.entries.insert(0, entry.clone());
         if self.file.entries.len() > MAX_ACTIVITY_ENTRIES {

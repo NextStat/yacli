@@ -2366,6 +2366,198 @@ client_id = "client-123"
 }
 
 #[test]
+fn mcp_stdio_activity_undo_revokes_public_link_for_reversible_publish() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+
+    write_mock_disk_account(temp.path(), &server.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _publish = server
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata_after_publish = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(2)
+        .create();
+
+    let _unpublish = server
+        .mock("PUT", "/v1/disk/resources/unpublish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata_after_unpublish = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:03+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 20
+}"#,
+        )
+        .create();
+
+    let publish_input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+        mcp_request(
+            3,
+            "tools/call",
+            json!({
+                "name": "yacli.disk.publish",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/report.pdf"
+                }
+            }),
+        ),
+        mcp_request(
+            4,
+            "resources/read",
+            json!({
+                "uri": "resource://yacli/activity"
+            }),
+        ),
+    ]
+    .concat();
+
+    let publish_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(publish_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let publish_responses = parse_responses(&publish_output);
+    let tools = publish_responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.activity.undo")
+    );
+    let activity_contents = publish_responses[3]["result"]["contents"]
+        .as_array()
+        .expect("activity contents");
+    let activity_payload: Value = serde_json::from_str(
+        activity_contents[0]["text"]
+            .as_str()
+            .expect("activity text"),
+    )
+    .expect("activity payload");
+    let activity_id = activity_payload["items"][0]["id"]
+        .as_str()
+        .expect("activity id");
+
+    let undo_input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(
+            2,
+            "tools/call",
+            json!({
+                "name": "yacli.activity.undo",
+                "arguments": {
+                    "id": activity_id
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let undo_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(undo_input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let undo_responses = parse_responses(&undo_output);
+    assert_eq!(
+        undo_responses[1]["result"]["structuredContent"]["undo"]["result"]["kind"],
+        "disk_unpublish"
+    );
+    assert_eq!(
+        undo_responses[1]["result"]["structuredContent"]["undo"]["result"]["result"]["revoked_public_url"],
+        "https://disk.yandex.ru/i/public-report"
+    );
+}
+
+#[test]
 fn mcp_stdio_exposes_disk_unpublish_tool_and_revokes_public_link() {
     let temp = tempdir().expect("tempdir");
     let mut server = Server::new();

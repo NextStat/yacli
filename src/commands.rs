@@ -7,6 +7,10 @@ use serde_json::json;
 
 use crate::account_store::{AccountStore, validate_account};
 use crate::activity_store::{ActivityEntry, ActivityStore, NewActivityEntry, record_activity};
+use crate::activity_undo::{
+    ActivityUndoApplied, ActivityUndoResult, apply_activity_undo, calendar_create_undo,
+    disk_publish_undo,
+};
 use crate::calendar::{
     CalendarCollection, CalendarCreateRequest, CalendarCreateReview, CalendarEvent,
     CalendarEventWindow, CalendarEventsRequest, CalendarInvite,
@@ -737,6 +741,30 @@ fn execute_activity(format: OutputFormat, action: ActivityCommand) -> Result<Ren
                 render_activity_show_table(&entry),
             )
         }
+        ActivityCommand::Undo { id } => {
+            let store = ActivityStore::load()?;
+            let entry = store.find(&id).cloned().ok_or_else(|| {
+                YacliError::Validation(format!("activity undo: запись `{id}` не найдена"))
+            })?;
+            let applied = apply_activity_undo(&entry)?;
+            record_activity_best_effort(NewActivityEntry {
+                source: "cli".to_string(),
+                operation: "activity.undo".to_string(),
+                account: applied.account.clone(),
+                summary: applied.summary.clone(),
+                replay_command: applied.replay_command.clone(),
+                undo: None,
+            });
+            ok_output(
+                format,
+                "activity.undo",
+                json!({
+                    "entry": entry,
+                    "undo": applied,
+                }),
+                render_activity_undo_table(&applied),
+            )
+        }
     }
 }
 
@@ -1064,6 +1092,7 @@ pub fn doctor_safe_remediation_activity_entry(
         account,
         summary: format!("Применены safe fixes: {}", applied_titles.join(", ")),
         replay_command,
+        undo: None,
     })
 }
 
@@ -1750,6 +1779,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                     account: resolved_account.clone(),
                     summary: format!("Создана папка на Диске: {}", resource.path),
                     replay_command: format!("yacli disk mkdir {}", shell_quote(&resource.path)),
+                    undo: None,
                 });
             })
         }
@@ -1822,6 +1852,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                             None,
                         ),
                         replay_command: replay,
+                        undo: None,
                     });
                 })
             }
@@ -1883,6 +1914,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                             shell_quote(&result.upload.source_path),
                             shell_quote(&result.resource.path)
                         ),
+                        undo: None,
                     });
                 })
             }
@@ -1941,6 +1973,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                         Some(artifact.resumed_from_bytes),
                     ),
                     replay_command: replay,
+                    undo: None,
                 });
             })
         }
@@ -1991,6 +2024,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                             "yacli disk publish {} --dry-run",
                             shell_quote(&resource.path)
                         ),
+                        undo: Some(disk_publish_undo(&resource)),
                     });
                 })
             }
@@ -2045,6 +2079,7 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                             "yacli disk unpublish {} --dry-run",
                             shell_quote(&result.resource.path)
                         ),
+                        undo: None,
                     });
                 })
             }
@@ -2254,6 +2289,7 @@ fn execute_calendar(format: OutputFormat, action: CalendarCommand) -> Result<Ren
                             event.summary.as_deref().unwrap_or("-")
                         ),
                         replay_command: replay,
+                        undo: calendar_create_undo(&calendar, &event),
                     });
                 })
             }
@@ -2471,6 +2507,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                             sent.subject
                         ),
                         replay_command: replay,
+                        undo: None,
                     });
                 })
             }
@@ -2569,6 +2606,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                             result.resource.public_url.as_deref().unwrap_or("-")
                         ),
                         replay_command: replay,
+                        undo: None,
                     });
                 })
             }
@@ -2834,6 +2872,7 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
                         event.summary.as_deref().unwrap_or("-")
                     ),
                     replay_command: replay,
+                    undo: None,
                 });
             })
         }
@@ -2973,6 +3012,7 @@ fn execute_disk_public(format: OutputFormat, action: DiskPublicCommand) -> Resul
                         Some(artifact.resumed_from_bytes),
                     ),
                     replay_command: replay,
+                    undo: None,
                 });
             })
         }
@@ -3209,6 +3249,13 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             summary: "Показать одну запись журнала и безопасную replay-команду.",
             requires_account: false,
             examples: vec!["yacli activity show <id>"],
+        },
+        GuideCommandEntry {
+            path: "activity undo",
+            topic: "all",
+            summary: "Откатить одно обратимое действие по ID из Activity Log.",
+            requires_account: false,
+            examples: vec!["yacli activity undo <id>"],
         },
         GuideCommandEntry {
             path: "login",
@@ -4223,16 +4270,17 @@ fn render_disk_upload_link_review_table(account: &str, review: &DiskUploadLinkRe
 fn render_activity_list_table(entries: &[ActivityEntry]) -> String {
     let mut lines = vec![
         format!("count\t{}", entries.len()),
-        "ID\tAT\tSOURCE\tOPERATION\tACCOUNT\tSUMMARY".to_string(),
+        "ID\tAT\tSOURCE\tOPERATION\tACCOUNT\tUNDO\tSUMMARY".to_string(),
     ];
     lines.extend(entries.iter().map(|entry| {
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             sanitize_table_cell(&entry.id),
             sanitize_table_cell(&entry.occurred_at),
             sanitize_table_cell(&entry.source),
             sanitize_table_cell(&entry.operation),
             sanitize_table_cell(&entry.account),
+            if entry.undo.is_some() { "yes" } else { "-" },
             sanitize_table_cell(&entry.summary),
         )
     }));
@@ -4240,7 +4288,7 @@ fn render_activity_list_table(entries: &[ActivityEntry]) -> String {
 }
 
 fn render_activity_show_table(entry: &ActivityEntry) -> String {
-    render_key_value_table(&[
+    let mut rows = vec![
         ("id", entry.id.clone()),
         ("occurred_at", entry.occurred_at.clone()),
         ("source", entry.source.clone()),
@@ -4248,7 +4296,55 @@ fn render_activity_show_table(entry: &ActivityEntry) -> String {
         ("account", entry.account.clone()),
         ("summary", entry.summary.clone()),
         ("replay_command", entry.replay_command.clone()),
-    ])
+    ];
+    if let Some(undo_command) = entry.undo_command.clone() {
+        rows.push(("undo_command", undo_command));
+    }
+    render_key_value_table(&rows)
+}
+
+fn render_activity_undo_table(applied: &ActivityUndoApplied) -> String {
+    let mut rows = vec![
+        ("original_activity_id", applied.original_activity_id.clone()),
+        ("original_operation", applied.original_operation.clone()),
+        ("account", applied.account.clone()),
+        ("summary", applied.summary.clone()),
+        ("replay_command", applied.replay_command.clone()),
+    ];
+
+    match &applied.result {
+        ActivityUndoResult::CalendarDelete {
+            calendar,
+            deleted_event,
+        } => {
+            rows.push(("undo_kind", "calendar.delete".to_string()));
+            rows.push(("calendar", calendar.name.clone()));
+            rows.push((
+                "uid",
+                deleted_event.uid.clone().unwrap_or_else(|| "-".to_string()),
+            ));
+            rows.push((
+                "deleted_summary",
+                deleted_event
+                    .summary
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+            ));
+        }
+        ActivityUndoResult::DiskUnpublish { result } => {
+            rows.push(("undo_kind", "disk.unpublish".to_string()));
+            rows.push(("path", result.resource.path.clone()));
+            rows.push((
+                "revoked_public_url",
+                result
+                    .revoked_public_url
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+            ));
+        }
+    }
+
+    render_key_value_table(&rows)
 }
 
 fn render_home_table(payload: &serde_json::Value) -> String {
