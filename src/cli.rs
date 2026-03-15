@@ -177,6 +177,13 @@ pub enum Command {
         #[arg(long, value_name = "ЦЕЛЬ")]
         goal: Option<String>,
     },
+    /// Показать proactive suggestions из реальной history действий и текущего продуктового состояния.
+    Suggest {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, value_name = "ЦЕЛЬ")]
+        goal: Option<String>,
+    },
     /// Маршрутизировать естественную цель в лучший workflow, prompt и MCP tool-path.
     Goal {
         #[arg(value_name = "ЗАПРОС")]

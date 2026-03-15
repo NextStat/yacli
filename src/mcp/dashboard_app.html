@@ -675,6 +675,8 @@
                 <button id="action-home-apply-safe-fixes" class="secondary">Apply safe fixes</button>
                 <button id="action-home-refresh-next-actions" class="secondary">Refresh next actions</button>
                 <button id="action-home-share-next-actions" class="secondary">Share next actions</button>
+                <button id="action-home-refresh-suggestions" class="secondary">Refresh suggestions</button>
+                <button id="action-home-share-suggestions" class="secondary">Share suggestions</button>
                 <button id="action-home-undo-latest" class="secondary">Undo latest action</button>
                 <button id="action-home-open-workflows" class="secondary">Open Workflow Hub</button>
                 <button id="action-home-open-activity" class="secondary">Open Activity Log</button>
@@ -692,6 +694,9 @@
             </div>
             <div class="json-frame" style="margin-top: 14px;">
               <pre id="next-actions-json">Next actions are warming up.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="suggestions-json">Suggestions are warming up.</pre>
             </div>
           </article>
 
@@ -1106,6 +1111,8 @@
             homePayload: source.homePayload != null ? source.homePayload : null,
             nextActionsPayload:
               source.nextActionsPayload != null ? source.nextActionsPayload : null,
+            suggestionsPayload:
+              source.suggestionsPayload != null ? source.suggestionsPayload : null,
             onboardingPayload:
               source.onboardingPayload != null ? source.onboardingPayload : null,
             doctorPayload:
@@ -1164,6 +1171,7 @@
           resourceTemplatesPayload: null,
           homePayload: null,
           nextActionsPayload: null,
+          suggestionsPayload: null,
           onboardingPayload: null,
           doctorPayload: null,
           goalRoutePayload: null,
@@ -1199,6 +1207,8 @@
           actionHomeApplySafeFixes: document.getElementById("action-home-apply-safe-fixes"),
           actionHomeRefreshNextActions: document.getElementById("action-home-refresh-next-actions"),
           actionHomeShareNextActions: document.getElementById("action-home-share-next-actions"),
+          actionHomeRefreshSuggestions: document.getElementById("action-home-refresh-suggestions"),
+          actionHomeShareSuggestions: document.getElementById("action-home-share-suggestions"),
           actionHomeUndoLatest: document.getElementById("action-home-undo-latest"),
           actionHomeOpenWorkflows: document.getElementById("action-home-open-workflows"),
           actionHomeOpenActivity: document.getElementById("action-home-open-activity"),
@@ -1259,6 +1269,7 @@
           onboardingJson: document.getElementById("onboarding-json"),
           doctorJson: document.getElementById("doctor-json"),
           nextActionsJson: document.getElementById("next-actions-json"),
+          suggestionsJson: document.getElementById("suggestions-json"),
           goalInput: document.getElementById("goal-input"),
           goalJson: document.getElementById("goal-json"),
           lastTool: document.getElementById("last-tool"),
@@ -1468,6 +1479,7 @@
                 goalRoutePayload: state.goalRoutePayload,
                 homePayload: state.homePayload,
                 nextActionsPayload: state.nextActionsPayload,
+                suggestionsPayload: state.suggestionsPayload,
                 onboardingPayload: state.onboardingPayload,
                 doctorPayload: state.doctorPayload,
                 activityCatalogPayload: state.activityCatalogPayload,
@@ -1506,6 +1518,7 @@
           state.goalRoutePayload = persisted.goalRoutePayload;
           state.homePayload = persisted.homePayload;
           state.nextActionsPayload = persisted.nextActionsPayload;
+          state.suggestionsPayload = persisted.suggestionsPayload;
           state.onboardingPayload = persisted.onboardingPayload;
           state.doctorPayload = persisted.doctorPayload;
           state.activityCatalogPayload = persisted.activityCatalogPayload;
@@ -1527,6 +1540,7 @@
             state.goalRoutePayload ||
             state.homePayload ||
             state.nextActionsPayload ||
+            state.suggestionsPayload ||
             state.lastToolResult ||
             state.promptPayload ||
             state.resourcePayload ||
@@ -1992,6 +2006,14 @@
                 : nextActionsPayload() && Array.isArray(nextActionsPayload().actions)
                   ? nextActionsPayload().actions.length
                   : 0,
+            suggestions:
+              detail &&
+              detail.suggestions &&
+              Array.isArray(detail.suggestions.suggestions)
+                ? detail.suggestions.suggestions.length
+                : suggestionsPayload() && Array.isArray(suggestionsPayload().suggestions)
+                  ? suggestionsPayload().suggestions.length
+                  : 0,
             goal:
               detail && typeof detail.goal === "string"
                 ? detail.goal
@@ -2188,6 +2210,11 @@
           return payload && typeof payload === "object" ? payload : null;
         }
 
+        function suggestionsPayload() {
+          const payload = resourceJsonPayload(state.suggestionsPayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
         function doctorPayload() {
           const payload = resourceJsonPayload(state.doctorPayload);
           return payload && typeof payload === "object" ? payload : null;
@@ -2225,12 +2252,31 @@
           if (detail && detail.next_actions && typeof detail.next_actions === "object") {
             renderNextActions(detail.next_actions);
           }
+          if (detail && detail.suggestions && typeof detail.suggestions === "object") {
+            renderSuggestions(detail.suggestions);
+          }
           if (detail && detail.doctor && typeof detail.doctor === "object") {
             renderDoctor(detail.doctor);
           }
           savePersistedRuntimeState();
           renderHomeSummary();
           renderRuntimeState();
+        }
+
+        function renderSuggestions(payload) {
+          if (arguments.length > 0) {
+            state.suggestionsPayload = payload;
+          }
+          elements.suggestionsJson.textContent =
+            state.suggestionsPayload == null
+              ? "Suggestions are warming up."
+              : typeof state.suggestionsPayload === "string"
+                ? state.suggestionsPayload
+                : safeStringify(state.suggestionsPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+          syncHostActionAvailability();
         }
 
         function renderDoctor(payload) {
@@ -3144,6 +3190,11 @@
             !hostSupportsMessages() ||
             !hostSupportsModelContext() ||
             !nextActionsPayload();
+          elements.actionHomeShareSuggestions.disabled =
+            disposed ||
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !suggestionsPayload();
           elements.actionHomeUndoLatest.disabled =
             disposed || !latestUndoableActivity();
           elements.actionPreviewWorkflow.disabled =
@@ -4226,6 +4277,7 @@
           await refreshHomeResource();
           await refreshWorkflowCatalog();
           await refreshActivityCatalog();
+          await refreshSuggestionsResource();
           renderBrowser();
           renderHomeSummary();
           setStatus("ready", "Home refreshed");
@@ -4314,6 +4366,36 @@
             const detail = error && error.message ? error.message : String(error);
             renderNextActions({ error: detail, actions: [] });
             logEvent("next actions error", detail);
+          }
+        }
+
+        async function refreshSuggestionsResource() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderSuggestions({ status: "unsupported", suggestions: [] });
+            return;
+          }
+
+          const account = accountAlias();
+          const goal = goalQuery();
+          const baseUri =
+            typeof account === "string" && account.length > 0
+              ? "resource://yacli/suggestions/" + encodeURIComponent(account)
+              : "resource://yacli/suggestions";
+          const finalUri =
+            typeof goal === "string" && goal.length > 0
+              ? baseUri + "?goal=" + encodeURIComponent(goal)
+              : baseUri;
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: finalUri,
+            });
+            renderSuggestions(result);
+            logEvent("suggestions", "loaded proactive suggestions");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderSuggestions({ error: detail, suggestions: [] });
+            logEvent("suggestions error", detail);
           }
         }
 
@@ -4434,6 +4516,7 @@
             await refreshDoctorResource();
             await refreshHomeResource();
             await refreshNextActionsResource();
+            await refreshSuggestionsResource();
             await refreshActivityCatalog();
             renderBrowser();
             setStatus("ready", "Safe fixes processed");
@@ -4490,6 +4573,45 @@
               (actions || "- Нет обязательных шагов."),
           });
           logEvent("next actions", "shared ranked next steps with host");
+        }
+
+        async function shareSuggestions() {
+          const payload = suggestionsPayload();
+          if (!payload) {
+            await refreshSuggestionsResource();
+          }
+          const detail = suggestionsPayload();
+          if (!detail) {
+            logEvent("share suggestions blocked", "no suggestions payload available");
+            return;
+          }
+          if (!hostSupportsMessages() || !hostSupportsModelContext()) {
+            logEvent("share suggestions blocked", "host does not support context sharing");
+            return;
+          }
+          const items = Array.isArray(detail.suggestions)
+            ? detail.suggestions
+                .slice(0, 5)
+                .map(function (item) {
+                  return (
+                    "- " +
+                    String(item.title || item.id || "suggestion") +
+                    " -> `" +
+                    String(item.command || "") +
+                    "`"
+                  );
+                })
+                .join("\n")
+            : "";
+          await updateModelContext({
+            kind: "markdown",
+            content:
+              "Proactive suggestions yacli:\n\n" +
+              "- status: `" + String(detail.status || "unknown") + "`\n" +
+              "- summary: " + String(detail.summary || "") + "\n\n" +
+              (items || "- Пока нет proactive suggestions из activity history."),
+          });
+          logEvent("suggestions", "shared proactive suggestions with host");
         }
 
         async function openHomeAccountResource() {
@@ -4650,6 +4772,7 @@
             await readActivityResource();
             await refreshHomeResource();
             await refreshNextActionsResource();
+            await refreshSuggestionsResource();
             renderBrowser();
             renderHomeSummary();
             setStatus("ready", "Undo completed");
@@ -4756,6 +4879,7 @@
             await refreshDoctorResource();
             await refreshHomeResource();
             await refreshNextActionsResource();
+            await refreshSuggestionsResource();
             setStatus("ready", "Goal routed");
             logEvent("goal route", goal);
           } catch (error) {
@@ -5373,6 +5497,7 @@
           renderOnboarding(state.onboardingPayload);
           renderDoctor(state.doctorPayload);
           renderNextActions(state.nextActionsPayload);
+          renderSuggestions(state.suggestionsPayload);
           renderActivityCatalog(state.activityCatalogPayload);
           renderActivity(state.activityPayload);
           renderResourceTemplates(state.resourceTemplatesPayload);
@@ -5471,6 +5596,8 @@
             elements.actionHomeApplySafeFixes.addEventListener("click", applySafeDoctorFixes);
             elements.actionHomeRefreshNextActions.addEventListener("click", refreshNextActionsResource);
             elements.actionHomeShareNextActions.addEventListener("click", shareNextActions);
+            elements.actionHomeRefreshSuggestions.addEventListener("click", refreshSuggestionsResource);
+            elements.actionHomeShareSuggestions.addEventListener("click", shareSuggestions);
             elements.actionHomeUndoLatest.addEventListener("click", undoLatestHomeActivity);
             elements.actionHomeOpenWorkflows.addEventListener("click", openHomeWorkflowHub);
             elements.actionHomeOpenActivity.addEventListener("click", openHomeActivityLog);

@@ -69,6 +69,7 @@ use crate::runtime_context::{
     auth_state, ensure_calendar_supports_app_password, resolve_calendar_private_context,
     resolve_disk_private_context, resolve_mail_private_context,
 };
+use crate::suggestions::suggestions_payload;
 use crate::update::execute_update;
 use crate::workflows;
 
@@ -109,6 +110,7 @@ pub fn execute(cli: Cli) -> Result<RenderedOutput> {
             apply_safe,
         } => execute_doctor(cli.format, account, goal, apply_safe),
         Command::Next { account, goal } => execute_next(cli.format, account, goal),
+        Command::Suggest { account, goal } => execute_suggest(cli.format, account, goal),
         Command::Goal { query, account } => execute_goal(cli.format, query, account),
         Command::Accounts => execute_account(cli.format, AccountCommand::List),
         Command::Activity { action } => execute_activity(cli.format, action),
@@ -825,6 +827,16 @@ fn execute_next(
     let payload = next_actions_payload(account.as_deref(), goal.as_deref())?;
     let table = render_next_actions_table(&payload);
     ok_output(format, "next", payload, table)
+}
+
+fn execute_suggest(
+    format: OutputFormat,
+    account: Option<String>,
+    goal: Option<String>,
+) -> Result<RenderedOutput> {
+    let payload = suggestions_payload(account.as_deref(), goal.as_deref())?;
+    let table = render_suggestions_table(&payload);
+    ok_output(format, "suggest", payload, table)
 }
 
 fn execute_goal(
@@ -3314,6 +3326,23 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             examples: vec!["yacli doctor", "yacli doctor --account work"],
         },
         GuideCommandEntry {
+            path: "next",
+            topic: "all",
+            summary: "Показать ranked next actions с наибольшим продуктовым эффектом.",
+            requires_account: false,
+            examples: vec!["yacli next", "yacli next --goal \"отправь файл по почте\""],
+        },
+        GuideCommandEntry {
+            path: "suggest",
+            topic: "all",
+            summary: "Показать proactive suggestions из реальной activity history и обратимых действий.",
+            requires_account: false,
+            examples: vec![
+                "yacli suggest",
+                "yacli suggest --goal \"отправь ссылку по почте\"",
+            ],
+        },
+        GuideCommandEntry {
             path: "goal",
             topic: "all",
             summary: "Маршрутизировать естественную цель в лучший workflow, prompt и MCP tool-path.",
@@ -4502,6 +4531,10 @@ fn render_home_table(payload: &serde_json::Value) -> String {
             "RECENT_ACTIVITY_COUNT\t{}",
             payload["recent_activity_count"].as_u64().unwrap_or(0)
         ),
+        format!(
+            "SUGGESTION_COUNT\t{}",
+            payload["suggestions"]["count"].as_u64().unwrap_or(0)
+        ),
     ];
 
     if let Some(goal) = payload["goal"].as_str()
@@ -4575,6 +4608,21 @@ fn render_home_table(payload: &serde_json::Value) -> String {
         lines.push("SUGGESTED_COMMANDS".to_string());
         for command in commands {
             lines.push(command.as_str().unwrap_or_default().to_string());
+        }
+    }
+
+    if let Some(items) = payload["suggestions"]["suggestions"].as_array()
+        && !items.is_empty()
+    {
+        lines.push("PROACTIVE_SUGGESTIONS".to_string());
+        lines.push("TITLE\tKIND\tCOMMAND".to_string());
+        for item in items.iter().take(3) {
+            lines.push(format!(
+                "{}\t{}\t{}",
+                item["title"].as_str().unwrap_or_default(),
+                item["kind"].as_str().unwrap_or_default(),
+                item["command"].as_str().unwrap_or_default()
+            ));
         }
     }
 
@@ -4727,6 +4775,43 @@ fn render_next_actions_table(payload: &serde_json::Value) -> String {
                 action["title"].as_str().unwrap_or_default(),
                 action["status"].as_str().unwrap_or_default(),
                 action["command"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_suggestions_table(payload: &serde_json::Value) -> String {
+    let mut lines = vec![
+        format!("STATUS\t{}", payload["status"].as_str().unwrap_or_default()),
+        format!(
+            "ACCOUNT\t{}",
+            payload["current_account"].as_str().unwrap_or("-")
+        ),
+        format!("COUNT\t{}", payload["count"].as_u64().unwrap_or(0)),
+        format!(
+            "SUMMARY\t{}",
+            sanitize_table_cell(payload["summary"].as_str().unwrap_or_default())
+        ),
+        "SUGGESTIONS".to_string(),
+        "ID\tTITLE\tKIND\tCOMMAND".to_string(),
+    ];
+
+    if let Some(goal) = payload["goal"].as_str()
+        && !goal.is_empty()
+    {
+        lines.insert(3, format!("GOAL\t{goal}"));
+    }
+
+    if let Some(items) = payload["suggestions"].as_array() {
+        for item in items {
+            lines.push(format!(
+                "{}\t{}\t{}\t{}",
+                item["id"].as_str().unwrap_or_default(),
+                item["title"].as_str().unwrap_or_default(),
+                item["kind"].as_str().unwrap_or_default(),
+                item["command"].as_str().unwrap_or_default(),
             ));
         }
     }

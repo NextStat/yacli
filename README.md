@@ -119,6 +119,7 @@ yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude
 - product health-check через `yacli doctor` и `resource://yacli/doctor`, чтобы быстро понять, что ещё мешает readiness.
 - safe remediation через `yacli doctor --apply-safe` и кнопку `Apply safe fixes` в Unified Home, чтобы автоматически закрыть безопасные локальные фиксы.
 - ranked next actions через `yacli next` и `resource://yacli/next-actions`, чтобы сразу видеть самые выгодные следующие шаги.
+- proactive suggestions через `yacli suggest` и `resource://yacli/suggestions`, чтобы получать recovery / cleanup / undo подсказки из реальной activity history.
 
 ### С чего начать
 
@@ -156,6 +157,7 @@ yacli home
 yacli doctor
 yacli doctor --apply-safe
 yacli next
+yacli suggest
 yacli status
 yacli mail list
 yacli calendar calendars
@@ -536,12 +538,14 @@ MCP Apps доступны через `ui://yacli/dashboard`:
 - Unified Home — стартовый экран с snapshot, workflows, activity и быстрыми переходами
 - Canonical home resources — `resource://yacli/home`, `resource://yacli/home/{account}` и goal-aware варианты с `?goal=...` дают один и тот же summary surface в CLI, MCP и Apps
 - Ranked next actions — `yacli next` и `resource://yacli/next-actions` теперь умеют и goal-aware приоритизацию через `--goal` / `?goal=...`
+- Proactive suggestions — `yacli suggest` и `resource://yacli/suggestions` собирают recovery / cleanup / undo подсказки из реальной activity history и optional goal context
 - Goal Router — `yacli goal "..."` и `yacli.goal.route` маршрутизируют естественную цель в лучший workflow, prompt и MCP tool-path
 - Goal-driven remediation — route сразу показывает, чего не хватает в setup/readiness и какой командой это добить
 - Goal Router в Apps — routed goal можно сразу довести до `Preview action`, `Apply routed action` и `Share goal replay`
 - Live onboarding checklist — показывает, что ещё не подключено, и какие команды добьют setup
 - Live doctor health-check — показывает config/secret backend/service readiness, статус MCP-клиентов и suggested commands
 - Apply safe fixes — запускает `yacli.doctor.apply_safe`, применяет только безопасные локальные remediation-шаги и сразу refresh-ит Home / Doctor / Next Actions
+- Suggestions in Unified Home — Home умеет отдельно refresh/share `suggestions` рядом с `doctor` и `next actions`
 - Round-trip deep links — dashboard пересобирает canonical URI при смене view
 - Unified searchable browser по tools, prompts, resources, templates и skills
 - Workflow Hub и Activity Log с replay-командами

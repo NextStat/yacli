@@ -42,6 +42,7 @@ use crate::runtime_context::{
     auth_state, resolve_calendar_private_context, resolve_disk_private_context,
     resolve_mail_private_context,
 };
+use crate::suggestions::suggestions_payload;
 use crate::update::check_for_update;
 use crate::workflows;
 use crate::{
@@ -1991,6 +1992,12 @@ fn resource_definitions(ui_enabled: bool) -> Vec<Value> {
             "mimeType": "application/json"
         }),
         json!({
+            "uri": "resource://yacli/suggestions",
+            "name": "yacli Suggestions",
+            "description": "Proactive suggestions derived from real activity history, reversible actions and optional goal context",
+            "mimeType": "application/json"
+        }),
+        json!({
             "uri": "resource://yacli/skills",
             "name": "yacli Embedded Skills",
             "description": "Catalog of embedded yacli SKILL.md workflows mirrored into MCP resources",
@@ -2093,6 +2100,18 @@ fn resource_templates(_ui_enabled: bool) -> Vec<Value> {
             "uriTemplate": "resource://yacli/next-actions/{account}{?goal}",
             "name": "yacli Goal-aware Account Next Actions Resource",
             "description": "Read ranked next steps for a configured account and natural-language goal",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/suggestions{?goal}",
+            "name": "yacli Goal-aware Suggestions Resource",
+            "description": "Read proactive suggestions derived from real activity history and optional goal context",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/suggestions/{account}{?goal}",
+            "name": "yacli Goal-aware Account Suggestions Resource",
+            "description": "Read proactive suggestions for a configured account using activity history and optional goal context",
             "mimeType": "application/json"
         }),
     ];
@@ -2270,6 +2289,14 @@ fn next_actions_resource_contents(uri: &str) -> Result<Vec<Value>> {
     json_resource_contents(
         uri,
         next_actions_payload(account_name.as_deref(), goal.as_deref())?,
+    )
+}
+
+fn suggestions_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let (account_name, goal) = suggestions_resource_request(uri)?;
+    json_resource_contents(
+        uri,
+        suggestions_payload(account_name.as_deref(), goal.as_deref())?,
     )
 }
 
@@ -3422,6 +3449,9 @@ fn resource_contents(uri: &str) -> Result<Vec<Value>> {
         next_actions_uri if is_next_actions_resource_uri(next_actions_uri) => {
             next_actions_resource_contents(next_actions_uri)
         }
+        suggestions_uri if is_suggestions_resource_uri(suggestions_uri) => {
+            suggestions_resource_contents(suggestions_uri)
+        }
         "resource://yacli/skills" => json_resource_contents(uri, skills_catalog_resource()),
         "resource://yacli/workflows" => {
             json_resource_contents(uri, workflows::workflow_resource_catalog())
@@ -3470,6 +3500,10 @@ fn is_next_actions_resource_uri(uri: &str) -> bool {
     resource_request(uri, "next-actions").is_ok()
 }
 
+fn is_suggestions_resource_uri(uri: &str) -> bool {
+    resource_request(uri, "suggestions").is_ok()
+}
+
 fn is_onboarding_resource_uri(uri: &str) -> bool {
     goal_query_resource_request(uri, "onboarding").is_ok()
 }
@@ -3505,6 +3539,10 @@ fn home_resource_request(uri: &str) -> Result<(Option<String>, Option<String>)> 
 
 fn next_actions_resource_request(uri: &str) -> Result<(Option<String>, Option<String>)> {
     resource_request(uri, "next-actions")
+}
+
+fn suggestions_resource_request(uri: &str) -> Result<(Option<String>, Option<String>)> {
+    resource_request(uri, "suggestions")
 }
 
 fn onboarding_resource_request(uri: &str) -> Result<Option<String>> {

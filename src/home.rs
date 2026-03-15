@@ -9,12 +9,14 @@ use crate::goal_router::goal_route_payload;
 use crate::next_actions::next_actions_payload;
 use crate::onboarding::onboarding_resource_payload;
 use crate::runtime_context::auth_state;
+use crate::suggestions::suggestions_payload;
 use crate::workflows;
 
 pub fn home_payload(requested_account: Option<&str>, goal: Option<&str>) -> Result<Value> {
     let onboarding = onboarding_resource_payload(goal)?;
     let doctor = doctor_payload(requested_account, goal)?;
     let next_actions = next_actions_payload(requested_account, goal)?;
+    let suggestions = suggestions_payload(requested_account, goal)?;
     let goal = goal.and_then(normalize_goal);
     let goal_route = if let Some(goal) = goal.as_deref() {
         Some(goal_route_payload(goal, requested_account)?)
@@ -44,6 +46,7 @@ pub fn home_payload(requested_account: Option<&str>, goal: Option<&str>) -> Resu
             "goal": goal,
             "goal_route": goal_route,
             "next_actions": next_actions,
+            "suggestions": suggestions,
             "suggested_commands": suggested_commands_from_onboarding(&onboarding),
         }));
     }
@@ -86,6 +89,7 @@ pub fn home_payload(requested_account: Option<&str>, goal: Option<&str>) -> Resu
         "goal": goal,
         "goal_route": goal_route,
         "next_actions": next_actions,
+        "suggestions": suggestions,
         "suggested_commands": suggested_commands_from_onboarding(&onboarding),
     }))
 }

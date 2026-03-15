@@ -3418,6 +3418,8 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("action-home-apply-safe-fixes"));
     assert!(html.contains("action-home-refresh-next-actions"));
     assert!(html.contains("action-home-share-next-actions"));
+    assert!(html.contains("action-home-refresh-suggestions"));
+    assert!(html.contains("action-home-share-suggestions"));
     assert!(html.contains("action-home-undo-latest"));
     assert!(html.contains("action-home-open-workflows"));
     assert!(html.contains("action-home-open-activity"));
@@ -3425,8 +3427,10 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("renderHomeSummary"));
     assert!(html.contains("renderOnboarding"));
     assert!(html.contains("renderDoctor"));
+    assert!(html.contains("renderSuggestions"));
     assert!(html.contains("refreshOnboardingResource"));
     assert!(html.contains("shareOnboarding"));
+    assert!(html.contains("resource://yacli/suggestions"));
     assert!(html.contains("resource://yacli/onboarding"));
     assert!(html.contains("refreshDoctorResource"));
     assert!(html.contains("shareDoctor"));
@@ -4014,11 +4018,18 @@ rest_base_url = "https://cloud-api.yandex.net"
             17,
             "resources/read",
             json!({
-                "uri": "resource://yacli/onboarding?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
+                "uri": "resource://yacli/suggestions"
             }),
         ),
         mcp_request(
             18,
+            "resources/read",
+            json!({
+                "uri": "resource://yacli/onboarding?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
+            }),
+        ),
+        mcp_request(
+            19,
             "resources/read",
             json!({
                 "uri": "resource://yacli/doctor?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
@@ -4090,6 +4101,17 @@ rest_base_url = "https://cloud-api.yandex.net"
     assert!(templates.iter().any(
         |template| template["uriTemplate"] == "resource://yacli/next-actions/{account}{?goal}"
     ));
+    assert!(
+        templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/suggestions{?goal}")
+    );
+    assert!(
+        templates
+            .iter()
+            .any(|template| template["uriTemplate"]
+                == "resource://yacli/suggestions/{account}{?goal}")
+    );
     assert!(
         templates
             .iter()
@@ -4281,6 +4303,7 @@ rest_base_url = "https://cloud-api.yandex.net"
     assert_eq!(home_payload["workflow_count"], 8);
     assert_eq!(home_payload["onboarding"]["current_account"], "personal");
     assert_eq!(home_payload["doctor"]["current_account"], "personal");
+    assert_eq!(home_payload["suggestions"]["count"], 0);
 
     let templated_home_contents = responses[12]["result"]["contents"]
         .as_array()
@@ -4345,7 +4368,19 @@ rest_base_url = "https://cloud-api.yandex.net"
     );
     assert_eq!(goal_next_actions_payload["actions"][0]["source"], "goal");
 
-    let goal_onboarding_contents = responses[16]["result"]["contents"]
+    let suggestions_contents = responses[16]["result"]["contents"]
+        .as_array()
+        .expect("suggestions contents");
+    let suggestions_payload: Value = serde_json::from_str(
+        suggestions_contents[0]["text"]
+            .as_str()
+            .expect("suggestions text"),
+    )
+    .expect("suggestions json");
+    assert_eq!(suggestions_payload["status"], "idle");
+    assert_eq!(suggestions_payload["count"], 0);
+
+    let goal_onboarding_contents = responses[17]["result"]["contents"]
         .as_array()
         .expect("goal onboarding contents");
     let goal_onboarding_payload: Value = serde_json::from_str(
@@ -4360,7 +4395,7 @@ rest_base_url = "https://cloud-api.yandex.net"
         "invite-to-calendar"
     );
 
-    let goal_doctor_contents = responses[17]["result"]["contents"]
+    let goal_doctor_contents = responses[18]["result"]["contents"]
         .as_array()
         .expect("goal doctor contents");
     let goal_doctor_payload: Value = serde_json::from_str(

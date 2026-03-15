@@ -4213,6 +4213,17 @@ rest_base_url = "https://cloud-api.yandex.net"
     assert!(
         resource_templates
             .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/suggestions{?goal}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"]
+                == "resource://yacli/suggestions/{account}{?goal}")
+    );
+    assert!(
+        resource_templates
+            .iter()
             .any(|template| template["uriTemplate"] == "resource://yacli/onboarding{?goal}")
     );
     assert!(
@@ -4493,6 +4504,7 @@ rest_base_url = "https://cloud-api.yandex.net"
     assert_eq!(home_json["workflow_count"], 8);
     assert_eq!(home_json["onboarding"]["current_account"], "personal");
     assert_eq!(home_json["doctor"]["current_account"], "personal");
+    assert_eq!(home_json["suggestions"]["count"], 0);
 
     let templated_home_resource = post_json(
         &client,
@@ -4625,12 +4637,42 @@ rest_base_url = "https://cloud-api.yandex.net"
     );
     assert_eq!(goal_next_actions_json["actions"][0]["source"], "goal");
 
-    let goal_onboarding_resource = post_json(
+    let suggestions_resource = post_json(
         &client,
         &server.url(),
         json!({
             "jsonrpc": "2.0",
             "id": 16,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/suggestions"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(suggestions_resource.status().is_success());
+    let suggestions_resource_payload: Value = suggestions_resource
+        .json()
+        .expect("suggestions resource json");
+    let suggestions_contents = suggestions_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("suggestions contents");
+    let suggestions_json: Value = serde_json::from_str(
+        suggestions_contents[0]["text"]
+            .as_str()
+            .expect("suggestions text"),
+    )
+    .expect("suggestions payload");
+    assert_eq!(suggestions_json["status"], "idle");
+    assert_eq!(suggestions_json["count"], 0);
+
+    let goal_onboarding_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 17,
             "method": "resources/read",
             "params": {
                 "uri": "resource://yacli/onboarding?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
@@ -4663,7 +4705,7 @@ rest_base_url = "https://cloud-api.yandex.net"
         &server.url(),
         json!({
             "jsonrpc": "2.0",
-            "id": 17,
+            "id": 18,
             "method": "resources/read",
             "params": {
                 "uri": "resource://yacli/doctor?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"

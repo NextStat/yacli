@@ -816,6 +816,55 @@ fn next_with_goal_prioritizes_goal_remediation() {
 }
 
 #[test]
+fn suggest_help_describes_proactive_surface() {
+    yacli()
+        .args(["suggest", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Показать proactive suggestions из реальной history действий и текущего продуктового состояния",
+        ));
+}
+
+#[test]
+fn suggest_returns_recovery_actions_for_partial_send_link_activity() {
+    let temp = tempdir().expect("tempdir");
+    write_activity_file(
+        temp.path(),
+        r#"
+version = 1
+
+[[entries]]
+id = "act_20260315T100000Z_partial123"
+occurred_at = "2026-03-15T10:00:00Z"
+source = "cli"
+operation = "mail.send_link.partial"
+account = "mock"
+summary = "Публичная ссылка создана, но письмо не отправлено: disk:/docs/archive.zip -> https://disk.yandex.example/public"
+replay_command = "yacli mail send-published-link andrei@nextstat.io \"Материалы\" --public-url https://disk.yandex.example/public"
+undo_command = "yacli disk unpublish disk:/docs/archive.zip"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["suggest", "--goal", "отправь ссылку по почте"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "suggest");
+    assert_eq!(value["status"], "ready");
+    assert_eq!(value["count"], 2);
+    assert_eq!(value["suggestions"][0]["kind"], "recovery");
+    assert_eq!(value["suggestions"][0]["workflow_id"], "send-link-by-mail");
+    assert_eq!(value["suggestions"][1]["kind"], "cleanup");
+}
+
+#[test]
 fn home_with_goal_embeds_goal_route_and_goal_aware_next_actions() {
     let temp = tempdir().expect("tempdir");
 
@@ -837,6 +886,7 @@ fn home_with_goal_embeds_goal_route_and_goal_aware_next_actions() {
         "send-file-by-mail"
     );
     assert_eq!(value["next_actions"]["goal"], "отправь файл по почте");
+    assert!(value["suggestions"].is_object());
 }
 
 #[test]
