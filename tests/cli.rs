@@ -865,7 +865,22 @@ undo_command = "yacli disk unpublish disk:/docs/archive.zip"
     assert_eq!(value["count"], 2);
     assert_eq!(value["suggestions"][0]["kind"], "recovery");
     assert_eq!(value["suggestions"][0]["workflow_id"], "send-link-by-mail");
+    assert_eq!(value["suggestions"][0]["action"]["kind"], "open_workflow");
+    assert_eq!(
+        value["suggestions"][0]["action"]["workflow_id"],
+        "send-link-by-mail"
+    );
+    assert_eq!(
+        value["suggestions"][0]["action"]["primary_tool"],
+        "yacli.mail.send_link"
+    );
+    assert_eq!(value["suggestions"][0]["action"]["supports_review"], true);
     assert_eq!(value["suggestions"][1]["kind"], "cleanup");
+    assert_eq!(value["suggestions"][1]["action"]["kind"], "undo_activity");
+    assert_eq!(
+        value["suggestions"][1]["action"]["activity_id"],
+        value["suggestions"][1]["activity_id"]
+    );
 }
 
 #[test]

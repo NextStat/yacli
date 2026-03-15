@@ -120,6 +120,7 @@ yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude
 - safe remediation через `yacli doctor --apply-safe` и кнопку `Apply safe fixes` в Unified Home, чтобы автоматически закрыть безопасные локальные фиксы.
 - ranked next actions через `yacli next` и `resource://yacli/next-actions`, чтобы сразу видеть самые выгодные следующие шаги.
 - proactive suggestions через `yacli suggest` и `resource://yacli/suggestions`, чтобы получать recovery / cleanup / undo подсказки из реальной activity history.
+  В `Unified Home` эти suggestions теперь не только видны, но и ведут прямо в `undo` или канонический workflow/review path.
 
 ### С чего начать
 
@@ -556,7 +557,7 @@ MCP Apps доступны через `ui://yacli/dashboard`:
 - Live onboarding checklist — показывает, что ещё не подключено, и какие команды добьют setup
 - Live doctor health-check — показывает config/secret backend/service readiness, статус MCP-клиентов и suggested commands
 - Apply safe fixes — запускает `yacli.doctor.apply_safe`, применяет только безопасные локальные remediation-шаги и сразу refresh-ит Home / Doctor / Next Actions
-- Suggestions in Unified Home — Home умеет отдельно refresh/share `suggestions` рядом с `doctor` и `next actions`
+- Suggestions in Unified Home — Home умеет отдельно refresh/share `suggestions`, открывать top suggestion и запускать её через `undo` или workflow/review path рядом с `doctor` и `next actions`
 - Round-trip deep links — dashboard пересобирает canonical URI при смене view
 - Unified searchable browser по tools, prompts, resources, templates и skills
 - Workflow Hub и Activity Log с replay-командами

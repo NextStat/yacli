@@ -677,6 +677,8 @@
                 <button id="action-home-share-next-actions" class="secondary">Share next actions</button>
                 <button id="action-home-refresh-suggestions" class="secondary">Refresh suggestions</button>
                 <button id="action-home-share-suggestions" class="secondary">Share suggestions</button>
+                <button id="action-home-open-suggestion" class="secondary">Open top suggestion</button>
+                <button id="action-home-apply-suggestion" class="secondary">Apply top suggestion</button>
                 <button id="action-home-undo-latest" class="secondary">Undo latest action</button>
                 <button id="action-home-open-workflows" class="secondary">Open Workflow Hub</button>
                 <button id="action-home-open-activity" class="secondary">Open Activity Log</button>
@@ -1209,6 +1211,8 @@
           actionHomeShareNextActions: document.getElementById("action-home-share-next-actions"),
           actionHomeRefreshSuggestions: document.getElementById("action-home-refresh-suggestions"),
           actionHomeShareSuggestions: document.getElementById("action-home-share-suggestions"),
+          actionHomeOpenSuggestion: document.getElementById("action-home-open-suggestion"),
+          actionHomeApplySuggestion: document.getElementById("action-home-apply-suggestion"),
           actionHomeUndoLatest: document.getElementById("action-home-undo-latest"),
           actionHomeOpenWorkflows: document.getElementById("action-home-open-workflows"),
           actionHomeOpenActivity: document.getElementById("action-home-open-activity"),
@@ -2215,6 +2219,24 @@
           return payload && typeof payload === "object" ? payload : null;
         }
 
+        function suggestionItems() {
+          const payload = suggestionsPayload();
+          return payload && Array.isArray(payload.suggestions) ? payload.suggestions : [];
+        }
+
+        function topSuggestion() {
+          return suggestionItems()[0] || null;
+        }
+
+        function suggestionAction(item) {
+          return item &&
+            typeof item === "object" &&
+            item.action &&
+            typeof item.action === "object"
+            ? item.action
+            : null;
+        }
+
         function doctorPayload() {
           const payload = resourceJsonPayload(state.doctorPayload);
           return payload && typeof payload === "object" ? payload : null;
@@ -3195,6 +3217,10 @@
             !hostSupportsMessages() ||
             !hostSupportsModelContext() ||
             !suggestionsPayload();
+          elements.actionHomeOpenSuggestion.disabled =
+            disposed || !topSuggestion();
+          elements.actionHomeApplySuggestion.disabled =
+            disposed || !topSuggestion();
           elements.actionHomeUndoLatest.disabled =
             disposed || !latestUndoableActivity();
           elements.actionPreviewWorkflow.disabled =
@@ -4614,6 +4640,121 @@
           logEvent("suggestions", "shared proactive suggestions with host");
         }
 
+        async function openSuggestionItem(item, sourceLabel) {
+          const suggestion = item && typeof item === "object" ? item : topSuggestion();
+          if (!suggestion) {
+            logEvent("suggestion blocked", "no proactive suggestion is available yet");
+            return;
+          }
+          const action = suggestionAction(suggestion);
+          if (!action || typeof action.kind !== "string") {
+            logEvent("suggestion blocked", "suggestion has no actionable contract");
+            return;
+          }
+
+          if (action.kind === "undo_activity") {
+            const activityId =
+              typeof action.activity_id === "string" ? action.activity_id : "";
+            if (!activityId) {
+              logEvent("suggestion blocked", "undo suggestion has no activity id");
+              return;
+            }
+            elements.activityIdInput.value = activityId;
+            state.bootstrap.preferredActivity = activityId;
+            state.bootstrap.preferredSection = "activity";
+            focusPanel("panel-activity");
+            await readActivityResource();
+            logEvent(
+              "suggestion open",
+              (sourceLabel || "home") + " opened undoable activity " + activityId,
+            );
+            return;
+          }
+
+          if (action.kind === "open_workflow") {
+            const workflowId =
+              typeof action.workflow_id === "string" ? action.workflow_id : "";
+            if (!workflowId) {
+              logEvent("suggestion blocked", "workflow suggestion has no workflow id");
+              return;
+            }
+            elements.workflowNameInput.value = workflowId;
+            state.bootstrap.preferredWorkflow = workflowId;
+            state.bootstrap.preferredSection = "workflows";
+            focusPanel("panel-workflows");
+            await readWorkflowResource();
+            logEvent(
+              "suggestion open",
+              (sourceLabel || "home") + " opened workflow " + workflowId,
+            );
+            return;
+          }
+
+          logEvent("suggestion blocked", "unsupported suggestion action: " + action.kind);
+        }
+
+        async function applySuggestionItem(item, sourceLabel) {
+          const suggestion = item && typeof item === "object" ? item : topSuggestion();
+          if (!suggestion) {
+            logEvent("suggestion apply blocked", "no proactive suggestion is available yet");
+            return;
+          }
+          const action = suggestionAction(suggestion);
+          if (!action || typeof action.kind !== "string") {
+            logEvent("suggestion apply blocked", "suggestion has no actionable contract");
+            return;
+          }
+
+          if (action.kind === "undo_activity") {
+            const activityId =
+              typeof action.activity_id === "string" ? action.activity_id : "";
+            if (!activityId) {
+              logEvent("suggestion apply blocked", "undo suggestion has no activity id");
+              return;
+            }
+            await undoActivityById(activityId, sourceLabel || "suggestions");
+            return;
+          }
+
+          if (action.kind === "open_workflow") {
+            const workflowId =
+              typeof action.workflow_id === "string" ? action.workflow_id : "";
+            if (!workflowId) {
+              logEvent("suggestion apply blocked", "workflow suggestion has no workflow id");
+              return;
+            }
+            elements.workflowNameInput.value = workflowId;
+            state.bootstrap.preferredWorkflow = workflowId;
+            state.bootstrap.preferredSection = "workflows";
+            focusPanel("panel-workflows");
+            await readWorkflowResource();
+            if (action.supports_review === true) {
+              await previewWorkflowAction();
+              logEvent(
+                "suggestion apply",
+                (sourceLabel || "suggestions") + " opened review for " + workflowId,
+              );
+              return;
+            }
+            await openWorkflowRunner();
+            logEvent(
+              "suggestion apply",
+              (sourceLabel || "suggestions") + " opened runner for " + workflowId,
+            );
+            return;
+          }
+
+          logEvent("suggestion apply blocked", "unsupported suggestion action: " + action.kind);
+        }
+
+        async function openTopSuggestion() {
+          await openSuggestionItem(topSuggestion(), "home");
+        }
+
+        async function applyTopSuggestion() {
+          await applySuggestionItem(topSuggestion(), "home");
+        }
+
         async function openHomeAccountResource() {
           state.bootstrap.preferredSection = "home";
           focusPanel("panel-home");
@@ -5598,6 +5739,8 @@
             elements.actionHomeShareNextActions.addEventListener("click", shareNextActions);
             elements.actionHomeRefreshSuggestions.addEventListener("click", refreshSuggestionsResource);
             elements.actionHomeShareSuggestions.addEventListener("click", shareSuggestions);
+            elements.actionHomeOpenSuggestion.addEventListener("click", openTopSuggestion);
+            elements.actionHomeApplySuggestion.addEventListener("click", applyTopSuggestion);
             elements.actionHomeUndoLatest.addEventListener("click", undoLatestHomeActivity);
             elements.actionHomeOpenWorkflows.addEventListener("click", openHomeWorkflowHub);
             elements.actionHomeOpenActivity.addEventListener("click", openHomeActivityLog);

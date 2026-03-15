@@ -3420,6 +3420,8 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("action-home-share-next-actions"));
     assert!(html.contains("action-home-refresh-suggestions"));
     assert!(html.contains("action-home-share-suggestions"));
+    assert!(html.contains("action-home-open-suggestion"));
+    assert!(html.contains("action-home-apply-suggestion"));
     assert!(html.contains("action-home-undo-latest"));
     assert!(html.contains("action-home-open-workflows"));
     assert!(html.contains("action-home-open-activity"));
@@ -3428,6 +3430,9 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("renderOnboarding"));
     assert!(html.contains("renderDoctor"));
     assert!(html.contains("renderSuggestions"));
+    assert!(html.contains("topSuggestion"));
+    assert!(html.contains("openTopSuggestion"));
+    assert!(html.contains("applyTopSuggestion"));
     assert!(html.contains("refreshOnboardingResource"));
     assert!(html.contains("shareOnboarding"));
     assert!(html.contains("resource://yacli/suggestions"));

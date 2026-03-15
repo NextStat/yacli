@@ -7,6 +7,18 @@ use crate::activity_store::{ActivityEntry, ActivityStore};
 use crate::doctor::doctor_payload;
 use crate::error::Result;
 use crate::goal_router::goal_route_payload;
+use crate::workflows;
+
+#[derive(Clone, Debug, Serialize)]
+struct SuggestionAction {
+    kind: &'static str,
+    label: &'static str,
+    workflow_id: Option<&'static str>,
+    activity_id: Option<String>,
+    primary_tool: Option<&'static str>,
+    primary_operation: Option<&'static str>,
+    supports_review: bool,
+}
 
 #[derive(Clone, Debug, Serialize)]
 struct SuggestionItem {
@@ -21,6 +33,7 @@ struct SuggestionItem {
     activity_id: String,
     operation: String,
     workflow_id: Option<&'static str>,
+    action: SuggestionAction,
 }
 
 pub fn suggestions_payload(requested_account: Option<&str>, goal: Option<&str>) -> Result<Value> {
@@ -81,6 +94,7 @@ fn collect_suggestions(
                         activity_id: entry.id.clone(),
                         operation: entry.operation.clone(),
                         workflow_id: Some("send-link-by-mail"),
+                        action: workflow_action("send-link-by-mail"),
                     },
                 );
                 if let Some(command) = undo_command(entry) {
@@ -99,6 +113,7 @@ fn collect_suggestions(
                             activity_id: entry.id.clone(),
                             operation: entry.operation.clone(),
                             workflow_id: Some("revoke-public-link"),
+                            action: undo_activity_action(entry),
                         },
                     );
                 }
@@ -122,6 +137,7 @@ fn collect_suggestions(
                         activity_id: entry.id.clone(),
                         operation: entry.operation.clone(),
                         workflow_id: Some("invite-to-calendar"),
+                        action: workflow_action("invite-to-calendar"),
                     },
                 );
             }
@@ -149,6 +165,7 @@ fn collect_suggestions(
                             activity_id: entry.id.clone(),
                             operation: entry.operation.clone(),
                             workflow_id: Some("revoke-public-link"),
+                            action: undo_activity_action(entry),
                         },
                     );
                 }
@@ -173,6 +190,7 @@ fn collect_suggestions(
                             activity_id: entry.id.clone(),
                             operation: entry.operation.clone(),
                             workflow_id: None,
+                            action: undo_activity_action(entry),
                         },
                     );
                 }
@@ -210,6 +228,30 @@ fn revoke_public_link_command(entry: &ActivityEntry) -> Option<String> {
     undo_command(entry).or_else(|| {
         extract_disk_path(&entry.replay_command).map(|path| format!("yacli disk unpublish {path}"))
     })
+}
+
+fn workflow_action(workflow_id: &'static str) -> SuggestionAction {
+    SuggestionAction {
+        kind: "open_workflow",
+        label: "Open workflow",
+        workflow_id: Some(workflow_id),
+        activity_id: None,
+        primary_tool: workflows::workflow_primary_tool(workflow_id),
+        primary_operation: Some(workflows::workflow_primary_operation(workflow_id)),
+        supports_review: workflows::workflow_supports_review(workflow_id),
+    }
+}
+
+fn undo_activity_action(entry: &ActivityEntry) -> SuggestionAction {
+    SuggestionAction {
+        kind: "undo_activity",
+        label: "Undo action",
+        workflow_id: None,
+        activity_id: Some(entry.id.clone()),
+        primary_tool: Some("yacli.activity.undo"),
+        primary_operation: Some("activity.undo"),
+        supports_review: false,
+    }
 }
 
 fn extract_disk_path(command: &str) -> Option<String> {
@@ -280,7 +322,19 @@ mod tests {
         assert_eq!(suggestions.len(), 2);
         assert_eq!(suggestions[0].kind, "recovery");
         assert_eq!(suggestions[0].workflow_id, Some("send-link-by-mail"));
+        assert_eq!(suggestions[0].action.kind, "open_workflow");
+        assert_eq!(suggestions[0].action.workflow_id, Some("send-link-by-mail"));
+        assert_eq!(
+            suggestions[0].action.primary_tool,
+            Some("yacli.mail.send_link")
+        );
+        assert!(suggestions[0].action.supports_review);
         assert_eq!(suggestions[1].kind, "cleanup");
+        assert_eq!(suggestions[1].action.kind, "undo_activity");
+        assert_eq!(
+            suggestions[1].action.activity_id.as_deref(),
+            Some(entries[0].id.as_str())
+        );
     }
 
     #[test]
@@ -304,5 +358,11 @@ mod tests {
         assert_eq!(suggestions[0].kind, "recovery");
         assert_eq!(suggestions[0].workflow_id, Some("invite-to-calendar"));
         assert!(suggestions[0].command.contains("calendar create"));
+        assert_eq!(suggestions[0].action.kind, "open_workflow");
+        assert_eq!(
+            suggestions[0].action.primary_tool,
+            Some("yacli.mail.invite.create_event")
+        );
+        assert!(!suggestions[0].action.supports_review);
     }
 }
