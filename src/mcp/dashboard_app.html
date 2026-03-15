@@ -675,6 +675,7 @@
                 <button id="action-home-apply-safe-fixes" class="secondary">Apply safe fixes</button>
                 <button id="action-home-refresh-next-actions" class="secondary">Refresh next actions</button>
                 <button id="action-home-share-next-actions" class="secondary">Share next actions</button>
+                <button id="action-home-undo-latest" class="secondary">Undo latest action</button>
                 <button id="action-home-open-workflows" class="secondary">Open Workflow Hub</button>
                 <button id="action-home-open-activity" class="secondary">Open Activity Log</button>
                 <button id="action-home-open-account" class="secondary">Open account resource</button>
@@ -777,6 +778,7 @@
               <div class="actions">
                 <button id="action-list-activity" class="secondary">List activity</button>
                 <button id="action-read-activity" class="secondary">Open selected action</button>
+                <button id="action-undo-activity" class="secondary">Undo selected action</button>
                 <button id="action-share-activity-replay" class="secondary">Share replay</button>
               </div>
             </div>
@@ -1197,6 +1199,7 @@
           actionHomeApplySafeFixes: document.getElementById("action-home-apply-safe-fixes"),
           actionHomeRefreshNextActions: document.getElementById("action-home-refresh-next-actions"),
           actionHomeShareNextActions: document.getElementById("action-home-share-next-actions"),
+          actionHomeUndoLatest: document.getElementById("action-home-undo-latest"),
           actionHomeOpenWorkflows: document.getElementById("action-home-open-workflows"),
           actionHomeOpenActivity: document.getElementById("action-home-open-activity"),
           actionHomeOpenAccount: document.getElementById("action-home-open-account"),
@@ -1220,6 +1223,7 @@
           actionListActivity: document.getElementById("action-list-activity"),
           actionListPrompts: document.getElementById("action-list-prompts"),
           actionReadActivity: document.getElementById("action-read-activity"),
+          actionUndoActivity: document.getElementById("action-undo-activity"),
           actionReadSkillResource: document.getElementById("action-read-skill-resource"),
           actionReadSkillsCatalog: document.getElementById("action-read-skills-catalog"),
           actionRenderPrompt: document.getElementById("action-render-prompt"),
@@ -1794,6 +1798,7 @@
           savePersistedRuntimeState();
           renderHomeSummary();
           renderRuntimeState();
+          syncHostActionAvailability();
         }
 
         function renderActivity(payload) {
@@ -1954,6 +1959,13 @@
                   operation: latestActivity.operation || "",
                   summary: latestActivity.summary || "",
                   replay: latestActivity.replay_command || "",
+                  undo:
+                    activitySupportsUndo(latestActivity) && activityUndoPayload(latestActivity)
+                      ? {
+                          command: latestActivity.undo_command || "",
+                          action: activityUndoPayload(latestActivity),
+                        }
+                      : null,
                 }
               : null,
             onboardingStatus:
@@ -2101,6 +2113,29 @@
           return (
             activityCatalogItems().find(function (entry) {
               return operations.includes(String(entry.operation || ""));
+            }) || null
+          );
+        }
+
+        function activityUndoPayload(payload) {
+          const source = payload && typeof payload === "object" ? payload : null;
+          return source && source.undo && typeof source.undo === "object" ? source.undo : null;
+        }
+
+        function activitySupportsUndo(payload) {
+          const source = payload && typeof payload === "object" ? payload : null;
+          return Boolean(
+            source &&
+            activityUndoPayload(source) &&
+            typeof source.undo_command === "string" &&
+            source.undo_command.length > 0,
+          );
+        }
+
+        function latestUndoableActivity() {
+          return (
+            activityCatalogItems().find(function (entry) {
+              return activitySupportsUndo(entry);
             }) || null
           );
         }
@@ -3109,6 +3144,8 @@
             !hostSupportsMessages() ||
             !hostSupportsModelContext() ||
             !nextActionsPayload();
+          elements.actionHomeUndoLatest.disabled =
+            disposed || !latestUndoableActivity();
           elements.actionPreviewWorkflow.disabled =
             disposed || !workflowDryRunToolName();
           elements.actionApplyWorkflow.disabled =
@@ -3120,6 +3157,8 @@
             !hostSupportsMessages() ||
             !hostSupportsModelContext() ||
             !latestWorkflowActivity();
+          elements.actionUndoActivity.disabled =
+            disposed || !activitySupportsUndo(activityDetailPayload());
           const selectedToolName = elements.toolNameInput ? elements.toolNameInput.value.trim() : "";
           elements.actionPreviewSelectedTool.disabled =
             disposed || !selectedToolName || !toolSupportsDryRun(selectedToolName);
@@ -3294,6 +3333,21 @@
             setButtonsDisabled(false);
             syncHostActionAvailability();
           }
+        }
+
+        async function callTool(toolName, explicitArguments) {
+          if (disposed) {
+            return null;
+          }
+
+          const result = await sendRequest("tools/call", {
+            name: toolName,
+            arguments:
+              explicitArguments && typeof explicitArguments === "object" ? explicitArguments : {},
+          });
+          return result && typeof result === "object" && result.structuredContent
+            ? result.structuredContent
+            : result;
         }
 
         function reviewedToolArguments() {
@@ -4571,6 +4625,68 @@
           }
         }
 
+        async function undoActivityById(id, sourceLabel) {
+          const activityIdValue = typeof id === "string" ? id.trim() : "";
+          if (!activityIdValue) {
+            renderActivity({ error: "No undoable activity selected." });
+            setStatus("error", "Undo requires an activity ID");
+            logEvent("undo blocked", "no activity id selected");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "activity";
+          state.bootstrap.preferredActivity = activityIdValue;
+          elements.activityIdInput.value = activityIdValue;
+          focusPanel("panel-activity");
+          setStatus("running", "Undoing action");
+          try {
+            await callTool("yacli.activity.undo", {
+              id: activityIdValue,
+            });
+            await refreshActivityCatalog();
+            const latestId = activityId();
+            elements.activityIdInput.value = latestId;
+            state.bootstrap.preferredActivity = latestId;
+            await readActivityResource();
+            await refreshHomeResource();
+            await refreshNextActionsResource();
+            renderBrowser();
+            renderHomeSummary();
+            setStatus("ready", "Undo completed");
+            logEvent(
+              "activity undo",
+              (sourceLabel || "activity") + " rolled back " + activityIdValue,
+            );
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderActivity({ error: detail, activity: activityIdValue });
+            setStatus("error", "Undo failed");
+            logEvent("activity undo error", detail);
+          }
+        }
+
+        async function undoSelectedActivity() {
+          let payload = activityDetailPayload();
+          if (!payload || String(payload.id || "") !== activityId()) {
+            await readActivityResource();
+            payload = activityDetailPayload();
+          }
+          if (!activitySupportsUndo(payload)) {
+            logEvent("undo blocked", "selected activity does not support rollback");
+            return;
+          }
+          await undoActivityById(String(payload.id || activityId()), "activity panel");
+        }
+
+        async function undoLatestHomeActivity() {
+          const latest = latestUndoableActivity();
+          if (!latest) {
+            logEvent("undo blocked", "home has no reversible action yet");
+            return;
+          }
+          await undoActivityById(String(latest.id || ""), "home");
+        }
+
         async function shareActivityReplay() {
           const detail = activityDetailPayload();
           if (!detail || !detail.replay_command) {
@@ -5355,6 +5471,7 @@
             elements.actionHomeApplySafeFixes.addEventListener("click", applySafeDoctorFixes);
             elements.actionHomeRefreshNextActions.addEventListener("click", refreshNextActionsResource);
             elements.actionHomeShareNextActions.addEventListener("click", shareNextActions);
+            elements.actionHomeUndoLatest.addEventListener("click", undoLatestHomeActivity);
             elements.actionHomeOpenWorkflows.addEventListener("click", openHomeWorkflowHub);
             elements.actionHomeOpenActivity.addEventListener("click", openHomeActivityLog);
             elements.actionHomeOpenAccount.addEventListener("click", openHomeAccountResource);
@@ -5374,6 +5491,7 @@
             elements.actionPreviewWorkflow.addEventListener("click", previewWorkflowAction);
             elements.actionApplyWorkflow.addEventListener("click", applyWorkflowAction);
             elements.actionReadActivity.addEventListener("click", readActivityResource);
+            elements.actionUndoActivity.addEventListener("click", undoSelectedActivity);
             elements.actionReadWorkflow.addEventListener("click", readWorkflowResource);
             elements.actionOpenWorkflowPrompt.addEventListener("click", openWorkflowPrompt);
             elements.actionOpenWorkflowSkill.addEventListener("click", openWorkflowSkill);

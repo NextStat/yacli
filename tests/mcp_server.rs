@@ -3368,6 +3368,7 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("activity-id-input"));
     assert!(html.contains("List activity"));
     assert!(html.contains("Open selected action"));
+    assert!(html.contains("Undo selected action"));
     assert!(html.contains("Share replay"));
     assert!(html.contains("resource://yacli/activity"));
     assert!(html.contains("resource://yacli/activity/"));
@@ -3375,6 +3376,11 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("renderActivity"));
     assert!(html.contains("activityCatalogItems"));
     assert!(html.contains("activityDetailPayload"));
+    assert!(html.contains("activitySupportsUndo"));
+    assert!(html.contains("latestUndoableActivity"));
+    assert!(html.contains("undoActivityById"));
+    assert!(html.contains("undoSelectedActivity"));
+    assert!(html.contains("undoLatestHomeActivity"));
     assert!(html.contains("Searchable browser"));
     assert!(html.contains("browser-query-input"));
     assert!(html.contains("browser-filter-select"));
@@ -3412,6 +3418,7 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("action-home-apply-safe-fixes"));
     assert!(html.contains("action-home-refresh-next-actions"));
     assert!(html.contains("action-home-share-next-actions"));
+    assert!(html.contains("action-home-undo-latest"));
     assert!(html.contains("action-home-open-workflows"));
     assert!(html.contains("action-home-open-activity"));
     assert!(html.contains("action-home-open-account"));
@@ -3661,6 +3668,8 @@ fn mcp_stdio_reads_activity_aware_dashboard_resource() {
     assert!(html.contains("\"preferredActivity\":\"act_20260314T104600Z_demo1234\""));
     assert!(html.contains("activity-id-input"));
     assert!(html.contains("readActivityResource"));
+    assert!(html.contains("action-undo-activity"));
+    assert!(html.contains("undoSelectedActivity"));
     assert!(html.contains("shareActivityReplay"));
     assert!(html.contains("panel-activity"));
 }
