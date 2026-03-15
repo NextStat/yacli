@@ -12,7 +12,7 @@ use crate::doctor::doctor_payload;
 use crate::error::Result;
 use crate::goal_router::goal_route_payload;
 use crate::mail::{
-    MailAttachmentSummary, MailMessage, list_mail_messages, read_mail_message,
+    MailAttachmentSummary, MailMessage, MailMessageSummary, list_mail_messages, read_mail_message,
     smtp_safe_message_bytes,
 };
 use crate::runtime_context::{
@@ -484,9 +484,11 @@ fn collect_live_calendar_suggestions(
         return;
     };
     let disk_root = fetch_live_disk_root_items(Some(&resolved_account));
+    let mail_inbox = fetch_live_mail_summaries(Some(&resolved_account));
     let mut cancelled_suggestion = None;
     let mut materials_suggestion = None;
     let mut follow_up_suggestion = None;
+    let mut reply_suggestion = None;
 
     for calendar in calendars {
         let Ok((resolved_calendar, _, events)) = list_calendar_events(
@@ -544,9 +546,23 @@ fn collect_live_calendar_suggestions(
             ));
         }
 
+        if reply_suggestion.is_none()
+            && let Some((mail_account, messages)) = mail_inbox.as_ref()
+            && mail_account == &resolved_account
+            && let Some(event) = first_recent_follow_up_event(&events, now)
+            && let Some(message) = first_recent_follow_up_message(messages, event)
+        {
+            reply_suggestion = Some(build_live_calendar_mail_follow_up_suggestion(
+                &resolved_account,
+                event,
+                message,
+            ));
+        }
+
         if cancelled_suggestion.is_some()
             && materials_suggestion.is_some()
             && follow_up_suggestion.is_some()
+            && reply_suggestion.is_some()
         {
             break;
         }
@@ -559,6 +575,9 @@ fn collect_live_calendar_suggestions(
         push_suggestion(suggestions, seen, suggestion);
     }
     if let Some(suggestion) = follow_up_suggestion {
+        push_suggestion(suggestions, seen, suggestion);
+    }
+    if let Some(suggestion) = reply_suggestion {
         push_suggestion(suggestions, seen, suggestion);
     }
 }
@@ -587,6 +606,25 @@ fn fetch_live_disk_root_items(
         .map(|children| children.items)
         .unwrap_or_default();
     Some((resolved_account, items))
+}
+
+fn fetch_live_mail_summaries(
+    requested_account: Option<&str>,
+) -> Option<(String, Vec<MailMessageSummary>)> {
+    let Ok((resolved_account, auth, context)) = resolve_mail_private_context(requested_account)
+    else {
+        return None;
+    };
+    let Ok(messages) = list_mail_messages(
+        &context.imap_host,
+        context.imap_port,
+        auth,
+        LIVE_MAILBOX_NAME,
+        LIVE_MAIL_SCAN_LIMIT,
+    ) else {
+        return None;
+    };
+    Some((resolved_account, messages))
 }
 
 fn build_live_mail_invite_suggestion(
@@ -915,6 +953,51 @@ fn build_live_calendar_publish_materials_suggestion(
     }
 }
 
+fn build_live_calendar_mail_follow_up_suggestion(
+    account: &str,
+    event: &CalendarEvent,
+    message: &MailMessageSummary,
+) -> SuggestionItem {
+    let event_summary = event.summary.as_deref().unwrap_or("Без названия");
+    let mail_subject = message.subject.as_deref().unwrap_or("Без темы");
+    let from = message.from.as_deref().unwrap_or("-");
+    let suggested_text =
+        format!("Спасибо за встречу \"{event_summary}\". Отправляю follow-up по итогам.");
+    let command = format!(
+        "yacli mail reply --account {} {} {}",
+        shell_quote(account),
+        message.uid,
+        shell_quote(&suggested_text)
+    );
+    SuggestionItem {
+        id: format!("live-calendar-mail-follow-up-{}", message.uid),
+        title: "Ответить на свежее письмо после встречи".to_string(),
+        status: "ready",
+        priority: 2,
+        reason: format!(
+            "После события \"{}\" в INBOX есть свежее письмо \"{}\" от {} с похожей темой. Можно сразу открыть follow-up reply с уже выбранным письмом.",
+            event_summary, mail_subject, from
+        ),
+        command,
+        source: "calendar_live",
+        kind: "follow_up",
+        activity_id: format!("calendar:{}:mail:{}", event.calendar_id, message.uid),
+        operation: "calendar.mail_follow_up.suggested".to_string(),
+        workflow_id: Some("reply-with-context"),
+        action: open_tool_action(
+            Some("reply-with-context"),
+            Some("mail.reply"),
+            "yacli.mail.reply",
+            json!({
+                "account": account,
+                "uid": message.uid,
+                "text": suggested_text,
+            }),
+            false,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -1014,6 +1097,23 @@ fn first_recent_follow_up_event(
         .max_by_key(|event| event.end.clone())
 }
 
+fn first_recent_follow_up_message<'a>(
+    messages: &'a [MailMessageSummary],
+    event: &CalendarEvent,
+) -> Option<&'a MailMessageSummary> {
+    let summary = normalize_follow_up_match_text(event.summary.as_deref()?);
+    if summary.is_empty() {
+        return None;
+    }
+    messages.iter().find(|message| {
+        message
+            .subject
+            .as_deref()
+            .map(normalize_follow_up_match_text)
+            .is_some_and(|subject| !subject.is_empty() && subject.contains(&summary))
+    })
+}
+
 fn suggested_calendar_materials_path(event: &CalendarEvent) -> Option<String> {
     let summary = event.summary.as_deref()?.trim();
     if summary.is_empty() {
@@ -1059,6 +1159,16 @@ fn sanitize_disk_folder_name(value: &str) -> String {
     } else {
         sanitized
     }
+}
+
+fn normalize_follow_up_match_text(value: &str) -> String {
+    let lowercase = value.trim().to_lowercase();
+    let normalized = lowercase
+        .strip_prefix("re: ")
+        .or_else(|| lowercase.strip_prefix("fw: "))
+        .or_else(|| lowercase.strip_prefix("fwd: "))
+        .unwrap_or(&lowercase);
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn is_public_disk_item(item: &DiskResourceItem) -> bool {
@@ -1150,17 +1260,19 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         LiveMailMessageContext, build_live_calendar_cancelled_suggestion,
-        build_live_calendar_materials_suggestion, build_live_calendar_publish_materials_suggestion,
-        build_live_disk_public_link_suggestion, build_live_disk_send_link_suggestion,
-        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
-        collect_suggestions, first_invite_attachment_in_summaries, first_recent_follow_up_event,
-        first_regular_attachment_in_summaries, is_cancelled_calendar_event, is_public_disk_item,
-        suggested_calendar_materials_path, summary_for_suggestions,
+        build_live_calendar_mail_follow_up_suggestion, build_live_calendar_materials_suggestion,
+        build_live_calendar_publish_materials_suggestion, build_live_disk_public_link_suggestion,
+        build_live_disk_send_link_suggestion, build_live_mail_attachment_suggestion,
+        build_live_mail_invite_suggestion, collect_suggestions,
+        first_invite_attachment_in_summaries, first_recent_follow_up_event,
+        first_recent_follow_up_message, first_regular_attachment_in_summaries,
+        is_cancelled_calendar_event, is_public_disk_item, suggested_calendar_materials_path,
+        summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
     use crate::calendar::CalendarEvent;
     use crate::disk::DiskResourceItem;
-    use crate::mail::{MailAttachmentSummary, smtp_safe_message_bytes};
+    use crate::mail::{MailAttachmentSummary, MailMessageSummary, smtp_safe_message_bytes};
     use chrono::Utc;
 
     #[test]
@@ -1693,5 +1805,86 @@ mod tests {
             Some("disk:/2026-03-15 Ревью")
         );
         assert!(suggestion.reason.contains("завершилось"));
+    }
+
+    #[test]
+    fn first_recent_follow_up_message_matches_re_subject() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/review.ics".to_string(),
+            uid: Some("uid-recent".to_string()),
+            summary: Some("Ревью платформы".to_string()),
+            start: Some("2026-03-15T08:00:00Z".to_string()),
+            end: Some("2026-03-15T08:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        let messages = vec![
+            MailMessageSummary {
+                uid: 77,
+                subject: Some("Re: Ревью платформы".to_string()),
+                from: Some("organizer@example.com".to_string()),
+                date: None,
+                flags: vec![],
+                size: None,
+            },
+            MailMessageSummary {
+                uid: 88,
+                subject: Some("Другая тема".to_string()),
+                from: Some("other@example.com".to_string()),
+                date: None,
+                flags: vec![],
+                size: None,
+            },
+        ];
+        assert_eq!(
+            first_recent_follow_up_message(&messages, &event).map(|message| message.uid),
+            Some(77)
+        );
+    }
+
+    #[test]
+    fn build_live_calendar_mail_follow_up_suggestion_returns_reply_handoff() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/review.ics".to_string(),
+            uid: Some("uid-recent".to_string()),
+            summary: Some("Ревью платформы".to_string()),
+            start: Some("2026-03-15T08:00:00Z".to_string()),
+            end: Some("2026-03-15T08:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        let message = MailMessageSummary {
+            uid: 77,
+            subject: Some("Re: Ревью платформы".to_string()),
+            from: Some("organizer@example.com".to_string()),
+            date: None,
+            flags: vec![],
+            size: None,
+        };
+        let suggestion = build_live_calendar_mail_follow_up_suggestion("mock", &event, &message);
+        assert_eq!(suggestion.source, "calendar_live");
+        assert_eq!(suggestion.kind, "follow_up");
+        assert_eq!(suggestion.workflow_id, Some("reply-with-context"));
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(suggestion.action.tool_name, Some("yacli.mail.reply"));
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|value| value["uid"].as_u64()),
+            Some(77)
+        );
+        assert!(suggestion.reason.contains("похожей темой"));
     }
 }
