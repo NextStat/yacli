@@ -22,6 +22,10 @@ const IMAP_TIMEOUT_SECS: u64 = 20;
 const SMTP_TIMEOUT_SECS: u64 = 20;
 const SMTP_SAFE_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
 
+pub fn smtp_safe_message_bytes() -> u64 {
+    SMTP_SAFE_MESSAGE_BYTES as u64
+}
+
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct MailFolder {
     pub name: String,

@@ -9,7 +9,10 @@ use crate::disk::{DiskResourceItem, PrivateDiskListRequest, fetch_private_resour
 use crate::doctor::doctor_payload;
 use crate::error::Result;
 use crate::goal_router::goal_route_payload;
-use crate::mail::{MailAttachmentSummary, MailMessage, list_mail_messages, read_mail_message};
+use crate::mail::{
+    MailAttachmentSummary, MailMessage, list_mail_messages, read_mail_message,
+    smtp_safe_message_bytes,
+};
 use crate::runtime_context::{resolve_disk_private_context, resolve_mail_private_context};
 use crate::workflows;
 
@@ -413,6 +416,7 @@ fn collect_live_mail_suggestions(
                     subject: full_message.subject.as_deref(),
                     from: full_message.from.as_deref(),
                 },
+                full_message.size,
                 attachment_index,
                 attachment,
                 goal_workflow,
@@ -511,6 +515,7 @@ fn build_live_mail_invite_suggestion(
 
 fn build_live_mail_attachment_suggestion(
     context: LiveMailMessageContext<'_>,
+    message_size: Option<u64>,
     attachment_index: usize,
     attachment: &MailAttachmentSummary,
     goal_workflow: Option<&str>,
@@ -519,6 +524,7 @@ fn build_live_mail_attachment_suggestion(
     let from = context.from.unwrap_or("-");
     let output_path =
         suggested_attachment_output_path(attachment, context.message_uid, attachment_index);
+    let oversized = message_size.is_some_and(is_oversized_mail_message);
     let command = format!(
         "yacli mail attachment export --account {} --folder {} {} --index {} --output {}",
         shell_quote(context.account),
@@ -532,14 +538,31 @@ fn build_live_mail_attachment_suggestion(
             "live-mail-attachment-{}-{}",
             context.message_uid, attachment_index
         ),
-        title: "Сохранить свежее вложение на диск".to_string(),
+        title: if oversized {
+            "Сохранить крупное вложение и дальше работать через ссылку".to_string()
+        } else {
+            "Сохранить свежее вложение на диск".to_string()
+        },
         status: "ready",
-        priority: goal_adjusted_priority(3, "attachment-to-disk", goal_workflow),
-        reason: format!(
-            "Письмо \"{subject}\" от {from} в {} содержит вложение {}. Можно сразу открыть export с готовым путём сохранения.",
-            context.mailbox_name,
-            attachment_label(attachment)
+        priority: goal_adjusted_priority(
+            if oversized { 1 } else { 3 },
+            "attachment-to-disk",
+            goal_workflow,
         ),
+        reason: if oversized {
+            format!(
+                "Письмо \"{subject}\" от {from} в {} весит {} байт и содержит вложение {}. Безопаснее сначала выгрузить файл локально, а затем при необходимости отправлять его через workflow `send-link-by-mail`.",
+                context.mailbox_name,
+                message_size.unwrap_or_default(),
+                attachment_label(attachment)
+            )
+        } else {
+            format!(
+                "Письмо \"{subject}\" от {from} в {} содержит вложение {}. Можно сразу открыть export с готовым путём сохранения.",
+                context.mailbox_name,
+                attachment_label(attachment)
+            )
+        },
         command,
         source: "mail_live",
         kind: "discovery",
@@ -637,6 +660,10 @@ fn is_calendar_invite_attachment(attachment: &MailAttachmentSummary) -> bool {
             .is_some_and(|name| name.to_ascii_lowercase().ends_with(".ics"))
 }
 
+fn is_oversized_mail_message(size: u64) -> bool {
+    size > smtp_safe_message_bytes()
+}
+
 fn is_public_disk_item(item: &DiskResourceItem) -> bool {
     item.public_url.is_some() || item.public_key.is_some()
 }
@@ -732,7 +759,7 @@ mod tests {
     };
     use crate::activity_store::ActivityEntry;
     use crate::disk::DiskResourceItem;
-    use crate::mail::MailAttachmentSummary;
+    use crate::mail::{MailAttachmentSummary, smtp_safe_message_bytes};
 
     #[test]
     fn collect_suggestions_promotes_partial_send_link_recovery() {
@@ -914,6 +941,7 @@ mod tests {
                 subject: Some("Материалы"),
                 from: Some("sender@example.com"),
             },
+            Some(1024),
             1,
             &attachments[0],
             Some("attachment-to-disk"),
@@ -940,6 +968,36 @@ mod tests {
                 .as_ref()
                 .and_then(|v| v["output_path"].as_str()),
             Some("./quarterly-report.pdf")
+        );
+    }
+
+    #[test]
+    fn build_live_mail_attachment_suggestion_for_oversized_mail_mentions_send_link_path() {
+        let attachments = [MailAttachmentSummary {
+            filename: Some("archive.zip".to_string()),
+            mime_type: "application/zip".to_string(),
+            content_id: None,
+            inline: false,
+        }];
+        let suggestion = build_live_mail_attachment_suggestion(
+            LiveMailMessageContext {
+                account: "mock",
+                mailbox_name: "INBOX",
+                message_uid: 777,
+                subject: Some("Большой архив"),
+                from: Some("sender@example.com"),
+            },
+            Some(smtp_safe_message_bytes() + 1),
+            1,
+            &attachments[0],
+            None,
+        );
+        assert!(suggestion.title.contains("крупное вложение"));
+        assert!(suggestion.reason.contains("send-link-by-mail"));
+        assert_eq!(suggestion.workflow_id, Some("attachment-to-disk"));
+        assert_eq!(
+            suggestion.action.tool_name,
+            Some("yacli.mail.attachment.export")
         );
     }
 

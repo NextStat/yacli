@@ -553,7 +553,7 @@ MCP Apps доступны через `ui://yacli/dashboard`:
 - Unified Home — стартовый экран с snapshot, workflows, activity и быстрыми переходами
 - Canonical home resources — `resource://yacli/home`, `resource://yacli/home/{account}` и goal-aware варианты с `?goal=...` дают один и тот же summary surface в CLI, MCP и Apps
 - Ranked next actions — `yacli next` и `resource://yacli/next-actions` теперь умеют и goal-aware приоритизацию через `--goal` / `?goal=...`
-- Proactive suggestions — `yacli suggest` и `resource://yacli/suggestions` собирают recovery / cleanup / undo подсказки из реальной activity history, optional goal context и live signal'ов вроде свежего письма с calendar invite или обычным вложением в `INBOX` и уже опубликованных файлов на Яндекс Диске
+- Proactive suggestions — `yacli suggest` и `resource://yacli/suggestions` собирают recovery / cleanup / undo подсказки из реальной activity history, optional goal context и live signal'ов вроде свежего письма с calendar invite, обычным или уже слишком тяжёлым вложением в `INBOX`, а также уже опубликованных файлов на Яндекс Диске
 - Goal Router — `yacli goal "..."` и `yacli.goal.route` маршрутизируют естественную цель в лучший workflow, prompt и MCP tool-path
 - Goal-driven remediation — route сразу показывает, чего не хватает в setup/readiness и какой командой это добить
 - Goal Router в Apps — routed goal можно сразу довести до `Preview action`, `Apply routed action` и `Share goal replay`

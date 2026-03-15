@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +92,10 @@ pub struct PendingOauthSessionStore {
 impl PendingOauthSessionStore {
     pub fn load() -> Result<Self> {
         let path = oauth_sessions_path()?;
+        Self::load_from_path(&path)
+    }
+
+    fn load_from_path(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
                 file: PendingOauthSessionsFile::default(),
@@ -106,6 +111,10 @@ impl PendingOauthSessionStore {
 
     pub fn save(&self) -> Result<()> {
         let path = oauth_sessions_path()?;
+        self.save_to_path(&path)
+    }
+
+    fn save_to_path(&self, path: &Path) -> Result<()> {
         if self.file.sessions.is_empty() {
             if path.exists() {
                 fs::remove_file(path)?;
@@ -114,7 +123,7 @@ impl PendingOauthSessionStore {
         }
 
         let content = toml::to_string_pretty(&self.file)?;
-        write_config_file(&path, &content)
+        write_config_file(path, &content)
     }
 
     pub fn get_matching(
@@ -208,15 +217,13 @@ mod tests {
             .lock()
             .expect("oauth sessions test lock");
         let temp = tempdir().expect("tempdir");
-        unsafe {
-            std::env::set_var("YACLI_CONFIG_DIR", temp.path());
-        }
+        let path = temp.path().join("oauth_sessions.toml");
 
-        let mut store = PendingOauthSessionStore::load().expect("load");
+        let mut store = PendingOauthSessionStore::load_from_path(&path).expect("load");
         store.replace_matching(sample_session("mock"));
-        store.save().expect("save");
+        store.save_to_path(&path).expect("save");
 
-        let store = PendingOauthSessionStore::load().expect("reload");
+        let store = PendingOauthSessionStore::load_from_path(&path).expect("reload");
         let saved = store
             .get_matching(
                 "mock",
@@ -237,18 +244,16 @@ mod tests {
             .lock()
             .expect("oauth sessions test lock");
         let temp = tempdir().expect("tempdir");
-        unsafe {
-            std::env::set_var("YACLI_CONFIG_DIR", temp.path());
-        }
+        let path = temp.path().join("oauth_sessions.toml");
 
         let mut stale = sample_session("mock");
         stale.created_at_epoch_secs = unix_timestamp_now() - PENDING_OAUTH_SESSION_TTL_SECS - 1;
 
-        let mut store = PendingOauthSessionStore::load().expect("load");
+        let mut store = PendingOauthSessionStore::load_from_path(&path).expect("load");
         store.replace_matching(stale);
-        store.save().expect("save");
+        store.save_to_path(&path).expect("save");
 
-        let store = PendingOauthSessionStore::load().expect("reload");
+        let store = PendingOauthSessionStore::load_from_path(&path).expect("reload");
         assert!(
             store
                 .get_matching(
