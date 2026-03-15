@@ -4875,7 +4875,7 @@
             if (!setExplicitToolRunnerState(toolName, toolArguments, true)) {
               return;
             }
-            if (toolSupportsDryRun(toolName)) {
+            if (action.supports_review === true && toolSupportsDryRun(toolName)) {
               await previewSelectedTool();
               logEvent(
                 "suggestion apply",

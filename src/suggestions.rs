@@ -460,6 +460,12 @@ fn collect_live_disk_suggestions(
     push_suggestion(
         suggestions,
         seen,
+        build_live_disk_send_link_suggestion(&resolved_account, public_item, goal_workflow),
+    );
+
+    push_suggestion(
+        suggestions,
+        seen,
         build_live_disk_public_link_suggestion(&resolved_account, public_item, goal_workflow),
     );
 }
@@ -624,6 +630,50 @@ fn build_live_disk_public_link_suggestion(
     }
 }
 
+fn build_live_disk_send_link_suggestion(
+    account: &str,
+    item: &DiskResourceItem,
+    goal_workflow: Option<&str>,
+) -> SuggestionItem {
+    let public_url = item.public_url.as_deref().unwrap_or("-");
+    let subject = format!("Материалы: {}", item.name);
+    let text = format!("Отправляю ссылку на файл {}.", item.name);
+    let command = format!(
+        "yacli mail send-published-link <email> {} {} --public-url {} --dry-run",
+        shell_quote(&subject),
+        shell_quote(&text),
+        shell_quote(public_url)
+    );
+    SuggestionItem {
+        id: format!("live-disk-send-link-{}", item.path),
+        title: "Отправить уже опубликованную ссылку по почте".to_string(),
+        status: "ready",
+        priority: goal_adjusted_priority(1, "send-link-by-mail", goal_workflow),
+        reason: format!(
+            "На Диске уже опубликован ресурс {} ({public_url}). Можно сразу перейти в mail-step и отправить эту ссылку без повторного upload/publish.",
+            item.path
+        ),
+        command,
+        source: "disk_live",
+        kind: "follow_up",
+        activity_id: format!("disk:{}", item.path),
+        operation: "disk.publish.follow_up".to_string(),
+        workflow_id: Some("send-link-by-mail"),
+        action: open_tool_action(
+            Some("send-link-by-mail"),
+            Some("mail.send_published_link"),
+            "yacli.mail.send_published_link",
+            json!({
+                "account": account,
+                "subject": subject,
+                "text": text,
+                "public_url": public_url,
+            }),
+            false,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -753,9 +803,10 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         LiveMailMessageContext, build_live_disk_public_link_suggestion,
-        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
-        collect_suggestions, first_invite_attachment_in_summaries,
-        first_regular_attachment_in_summaries, is_public_disk_item, summary_for_suggestions,
+        build_live_disk_send_link_suggestion, build_live_mail_attachment_suggestion,
+        build_live_mail_invite_suggestion, collect_suggestions,
+        first_invite_attachment_in_summaries, first_regular_attachment_in_summaries,
+        is_public_disk_item, summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
     use crate::disk::DiskResourceItem;
@@ -1057,5 +1108,42 @@ mod tests {
             Some("disk:/docs/report.pdf")
         );
         assert!(suggestion.command.contains("--dry-run"));
+    }
+
+    #[test]
+    fn build_live_disk_send_link_suggestion_returns_open_tool_handoff() {
+        let item = DiskResourceItem {
+            name: "report.pdf".to_string(),
+            path: "disk:/docs/report.pdf".to_string(),
+            resource_type: "file".to_string(),
+            mime_type: Some("application/pdf".to_string()),
+            size: Some(1024),
+            created: None,
+            modified: None,
+            md5: None,
+            revision: None,
+            public_url: Some("https://disk.yandex.ru/i/report".to_string()),
+            public_key: None,
+        };
+        let suggestion =
+            build_live_disk_send_link_suggestion("mock", &item, Some("send-link-by-mail"));
+        assert_eq!(suggestion.workflow_id, Some("send-link-by-mail"));
+        assert_eq!(suggestion.source, "disk_live");
+        assert_eq!(suggestion.kind, "follow_up");
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(
+            suggestion.action.tool_name,
+            Some("yacli.mail.send_published_link")
+        );
+        assert!(!suggestion.action.supports_review);
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|v| v["public_url"].as_str()),
+            Some("https://disk.yandex.ru/i/report")
+        );
+        assert!(suggestion.command.contains("send-published-link"));
     }
 }
