@@ -462,11 +462,7 @@ fn workflow_execution_actions(
                 "kind": "open_doctor",
                 "label": "Connect services",
             })),
-            "review" => actions.push(json!({
-                "kind": "review_workflow",
-                "label": "Preview workflow",
-                "workflow_id": id,
-            })),
+            "review" => actions.push(workflow_review_action(id)),
             "open_workflow" => actions.push(json!({
                 "kind": "open_workflow_runner",
                 "label": "Open workflow",
@@ -474,13 +470,17 @@ fn workflow_execution_actions(
             })),
             "resume" => {
                 if let Some(entry) = latest_activity {
-                    actions.push(json!({
-                        "kind": "open_activity",
-                        "label": "Resume workflow",
-                        "workflow_id": id,
-                        "activity_id": entry.id,
-                        "operation": entry.operation,
-                    }));
+                    if let Some(action) = workflow_resume_action(id, entry) {
+                        actions.push(action);
+                    } else {
+                        actions.push(json!({
+                            "kind": "open_activity",
+                            "label": "Resume workflow",
+                            "workflow_id": id,
+                            "activity_id": entry.id,
+                            "operation": entry.operation,
+                        }));
+                    }
                 }
             }
             "undo" => {
@@ -522,6 +522,177 @@ fn workflow_execution_actions(
     }
 
     actions
+}
+
+fn workflow_review_action(id: &str) -> Value {
+    let tool_name = workflow_primary_tool(id).unwrap_or_default().to_string();
+    let mut tool_arguments = workflow_primary_tool_arguments(id);
+    if let Some(object) = tool_arguments.as_object_mut() {
+        object.insert("dry_run".to_string(), json!(true));
+    }
+    json!({
+        "kind": "review_tool",
+        "label": "Preview workflow",
+        "workflow_id": id,
+        "tool_name": tool_name,
+        "tool_arguments": tool_arguments,
+    })
+}
+
+fn workflow_resume_action(id: &str, entry: &ActivityEntry) -> Option<Value> {
+    let (tool_name, mut tool_arguments) = match id {
+        "send-link-by-mail" => (
+            "yacli.mail.send_published_link",
+            parse_send_published_link_replay(&entry.replay_command)?,
+        ),
+        "invite-to-calendar" => (
+            "yacli.calendar.create",
+            parse_calendar_create_replay(&entry.replay_command)?,
+        ),
+        _ => return None,
+    };
+    if let Some(object) = tool_arguments.as_object_mut() {
+        if !entry.account.trim().is_empty() {
+            object
+                .entry("account".to_string())
+                .or_insert_with(|| json!(entry.account));
+        }
+        object.insert("dry_run".to_string(), json!(true));
+    }
+    Some(json!({
+        "kind": "review_tool",
+        "label": "Retry failed step",
+        "workflow_id": id,
+        "activity_id": entry.id,
+        "operation": entry.operation,
+        "tool_name": tool_name,
+        "tool_arguments": tool_arguments,
+    }))
+}
+
+fn parse_send_published_link_replay(command: &str) -> Option<Value> {
+    let tokens = parse_shell_words(command)?;
+    if tokens.len() < 5
+        || tokens[0] != "yacli"
+        || tokens[1] != "mail"
+        || tokens[2] != "send-published-link"
+    {
+        return None;
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert("to".to_string(), json!(tokens[3].clone()));
+    object.insert("subject".to_string(), json!(tokens[4].clone()));
+    let mut index = 5;
+    if index < tokens.len() && !tokens[index].starts_with("--") {
+        object.insert("text".to_string(), json!(tokens[index].clone()));
+        index += 1;
+    }
+
+    let mut cc = Vec::new();
+    let mut bcc = Vec::new();
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--cc" => {
+                index += 1;
+                cc.push(tokens.get(index)?.clone());
+            }
+            "--bcc" => {
+                index += 1;
+                bcc.push(tokens.get(index)?.clone());
+            }
+            "--html" => {
+                index += 1;
+                object.insert("html".to_string(), json!(tokens.get(index)?.clone()));
+            }
+            "--public-url" => {
+                index += 1;
+                object.insert("public_url".to_string(), json!(tokens.get(index)?.clone()));
+            }
+            "--dry-run" => {}
+            _ => return None,
+        }
+        index += 1;
+    }
+    if !cc.is_empty() {
+        object.insert("cc".to_string(), json!(cc));
+    }
+    if !bcc.is_empty() {
+        object.insert("bcc".to_string(), json!(bcc));
+    }
+    Some(Value::Object(object))
+}
+
+fn parse_calendar_create_replay(command: &str) -> Option<Value> {
+    let tokens = parse_shell_words(command)?;
+    if tokens.len() < 6 || tokens[0] != "yacli" || tokens[1] != "calendar" || tokens[2] != "create"
+    {
+        return None;
+    }
+
+    let mut object = serde_json::Map::new();
+    object.insert("summary".to_string(), json!(tokens[3].clone()));
+    object.insert("start".to_string(), json!(tokens[4].clone()));
+    object.insert("end".to_string(), json!(tokens[5].clone()));
+
+    let mut index = 6;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--calendar" => {
+                index += 1;
+                object.insert("calendar".to_string(), json!(tokens.get(index)?.clone()));
+            }
+            "--location" => {
+                index += 1;
+                object.insert("location".to_string(), json!(tokens.get(index)?.clone()));
+            }
+            "--description" => {
+                index += 1;
+                object.insert("description".to_string(), json!(tokens.get(index)?.clone()));
+            }
+            "--dry-run" => {}
+            _ => return None,
+        }
+        index += 1;
+    }
+
+    Some(Value::Object(object))
+}
+
+fn parse_shell_words(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut chars = command.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '\\' if in_double => {
+                current.push(chars.next()?);
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if in_single || in_double {
+        return None;
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    Some(words)
 }
 
 fn workflow_required_services(id: &str) -> &'static [&'static str] {
@@ -696,7 +867,15 @@ mod tests {
         assert_eq!(payload["state"], "recovery_ready");
         assert_eq!(payload["next_action"], "resume");
         assert_eq!(payload["available_actions"][0], "resume");
-        assert_eq!(payload["actions"][0]["kind"], "open_activity");
+        assert_eq!(payload["actions"][0]["kind"], "review_tool");
+        assert_eq!(
+            payload["actions"][0]["tool_name"],
+            "yacli.mail.send_published_link"
+        );
+        assert_eq!(
+            payload["actions"][0]["tool_arguments"]["public_url"],
+            "https://disk.example/public"
+        );
         assert_eq!(payload["actions"][1]["kind"], "share_replay");
         assert_eq!(payload["actions"][2]["kind"], "undo_activity");
         assert_eq!(
@@ -762,6 +941,8 @@ mod tests {
         assert_eq!(payload["state"], "review_ready");
         assert_eq!(payload["next_action"], "review");
         assert_eq!(payload["available_actions"][0], "review");
+        assert_eq!(payload["actions"][0]["kind"], "review_tool");
+        assert_eq!(payload["actions"][0]["tool_name"], "yacli.mail.send_link");
     }
 
     #[test]
@@ -792,5 +973,16 @@ mod tests {
         assert_eq!(payload["next_action"], "undo");
         assert_eq!(payload["available_actions"][0], "undo");
         assert_eq!(payload["actions"][0]["kind"], "undo_activity");
+    }
+
+    #[test]
+    fn parse_shell_words_supports_single_quoted_segments() {
+        let words = parse_shell_words(
+            "yacli mail send-published-link person@example.com 'Материалы ревью' 'Текст письма' --public-url 'https://disk.yandex.ru/i/report'",
+        )
+        .expect("words");
+        assert_eq!(words[4], "Материалы ревью");
+        assert_eq!(words[5], "Текст письма");
+        assert_eq!(words[7], "https://disk.yandex.ru/i/report");
     }
 }

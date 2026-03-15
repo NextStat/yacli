@@ -3436,6 +3436,8 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("workflowExecutionPayload"));
     assert!(html.contains("workflowExecutionActions"));
     assert!(html.contains("workflowNextActionPayload"));
+    assert!(html.contains("workflowNextActionToolName"));
+    assert!(html.contains("workflowNextActionToolArguments"));
     assert!(html.contains("action-open-workflow-next"));
     assert!(html.contains("action-apply-workflow-next"));
     assert!(html.contains("openWorkflowNextAction"));

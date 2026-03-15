@@ -2549,6 +2549,21 @@
             : null;
         }
 
+        function workflowNextActionToolName(detail) {
+          const action = workflowNextActionPayload(detail);
+          return action && typeof action.tool_name === "string" ? action.tool_name : "";
+        }
+
+        function workflowNextActionToolArguments(detail) {
+          const action = workflowNextActionPayload(detail);
+          return action &&
+            action.tool_arguments &&
+            typeof action.tool_arguments === "object" &&
+            !Array.isArray(action.tool_arguments)
+            ? JSON.parse(JSON.stringify(action.tool_arguments))
+            : null;
+        }
+
         function fallbackGoalTextHints() {
           const recommendation = bestGoalRecommendation();
           const source =
@@ -5555,6 +5570,21 @@
               focusPanel("panel-home");
               await refreshDoctorResource();
               break;
+            case "review_tool":
+              if (!workflowNextActionToolName()) {
+                logEvent("workflow next blocked", "workflow tool action has no tool name");
+                return;
+              }
+              state.bootstrap.preferredSection = "tools";
+              focusPanel("panel-tools");
+              elements.toolNameInput.value = workflowNextActionToolName();
+              elements.toolArgsInput.value = safeStringify(
+                workflowNextActionToolArguments() || {},
+              );
+              selectTool(workflowNextActionToolName(), true);
+              renderSelectedToolSchema();
+              renderRuntimeState();
+              break;
             case "review_workflow":
               await previewWorkflowAction();
               break;
@@ -5610,6 +5640,28 @@
               }
               await undoActivityById(String(action.activity_id), "workflow");
               break;
+            case "review_tool": {
+              const toolName = workflowNextActionToolName();
+              const toolArguments = workflowNextActionToolArguments();
+              if (!toolName || !toolArguments) {
+                logEvent("workflow apply-next blocked", "workflow review action has no tool payload");
+                return;
+              }
+              state.bootstrap.preferredSection = "tools";
+              focusPanel("panel-tools");
+              elements.toolNameInput.value = toolName;
+              elements.toolArgsInput.value = safeStringify(toolArguments);
+              selectTool(toolName, true);
+              renderSelectedToolSchema();
+              renderRuntimeState();
+              await previewSelectedTool();
+              if (state.reviewedToolName === toolName && state.reviewPayload) {
+                await applyReviewedTool();
+                await refreshActivityCatalog();
+                renderBrowser();
+              }
+              break;
+            }
             case "review_workflow":
               await applyWorkflowAction();
               break;
