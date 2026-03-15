@@ -4883,10 +4883,12 @@
               );
               return;
             }
-            await runTool(toolName, toolArguments);
             logEvent(
               "suggestion apply",
-              (sourceLabel || "suggestions") + " ran tool " + toolName,
+              (sourceLabel || "suggestions") +
+                " opened runner for " +
+                toolName +
+                " (no dry-run available)",
             );
             return;
           }

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -49,7 +50,7 @@ struct SuggestionItem {
     action: SuggestionAction,
 }
 
-struct LiveMailInviteContext<'a> {
+struct LiveMailMessageContext<'a> {
     account: &'a str,
     mailbox_name: &'a str,
     message_uid: u64,
@@ -338,7 +339,7 @@ fn collect_live_mail_suggestions(
         return;
     };
 
-    for message in messages {
+    for message in &messages {
         if let Some(size) = message.size
             && size > LIVE_MAIL_MAX_BYTES
         {
@@ -364,7 +365,48 @@ fn collect_live_mail_suggestions(
             suggestions,
             seen,
             build_live_mail_invite_suggestion(
-                LiveMailInviteContext {
+                LiveMailMessageContext {
+                    account: &resolved_account,
+                    mailbox_name: LIVE_MAILBOX_NAME,
+                    message_uid: full_message.uid,
+                    subject: full_message.subject.as_deref(),
+                    from: full_message.from.as_deref(),
+                },
+                attachment_index,
+                attachment,
+                goal_workflow,
+            ),
+        );
+        break;
+    }
+
+    for message in messages {
+        if let Some(size) = message.size
+            && size > LIVE_MAIL_MAX_BYTES
+        {
+            continue;
+        }
+
+        let Ok(full_message) = read_mail_message(
+            &context.imap_host,
+            context.imap_port,
+            auth.clone(),
+            LIVE_MAILBOX_NAME,
+            message.uid,
+            LIVE_MAIL_MAX_BYTES,
+        ) else {
+            continue;
+        };
+
+        let Some((attachment_index, attachment)) = first_regular_attachment(&full_message) else {
+            continue;
+        };
+
+        push_suggestion(
+            suggestions,
+            seen,
+            build_live_mail_attachment_suggestion(
+                LiveMailMessageContext {
                     account: &resolved_account,
                     mailbox_name: LIVE_MAILBOX_NAME,
                     message_uid: full_message.uid,
@@ -419,7 +461,7 @@ fn collect_live_disk_suggestions(
 }
 
 fn build_live_mail_invite_suggestion(
-    context: LiveMailInviteContext<'_>,
+    context: LiveMailMessageContext<'_>,
     attachment_index: usize,
     attachment: &MailAttachmentSummary,
     goal_workflow: Option<&str>,
@@ -461,6 +503,59 @@ fn build_live_mail_invite_suggestion(
                 "folder": context.mailbox_name,
                 "uid": context.message_uid,
                 "index": attachment_index,
+            }),
+            false,
+        ),
+    }
+}
+
+fn build_live_mail_attachment_suggestion(
+    context: LiveMailMessageContext<'_>,
+    attachment_index: usize,
+    attachment: &MailAttachmentSummary,
+    goal_workflow: Option<&str>,
+) -> SuggestionItem {
+    let subject = context.subject.unwrap_or("Без темы");
+    let from = context.from.unwrap_or("-");
+    let output_path =
+        suggested_attachment_output_path(attachment, context.message_uid, attachment_index);
+    let command = format!(
+        "yacli mail attachment export --account {} --folder {} {} --index {} --output {}",
+        shell_quote(context.account),
+        shell_quote(context.mailbox_name),
+        context.message_uid,
+        attachment_index,
+        shell_quote(&output_path)
+    );
+    SuggestionItem {
+        id: format!(
+            "live-mail-attachment-{}-{}",
+            context.message_uid, attachment_index
+        ),
+        title: "Сохранить свежее вложение на диск".to_string(),
+        status: "ready",
+        priority: goal_adjusted_priority(3, "attachment-to-disk", goal_workflow),
+        reason: format!(
+            "Письмо \"{subject}\" от {from} в {} содержит вложение {}. Можно сразу открыть export с готовым путём сохранения.",
+            context.mailbox_name,
+            attachment_label(attachment)
+        ),
+        command,
+        source: "mail_live",
+        kind: "discovery",
+        activity_id: format!("mail:{}:{}", context.message_uid, attachment_index),
+        operation: "mail.attachment.detected".to_string(),
+        workflow_id: Some("attachment-to-disk"),
+        action: open_tool_action(
+            Some("attachment-to-disk"),
+            Some("mail.attachment.export"),
+            "yacli.mail.attachment.export",
+            json!({
+                "account": context.account,
+                "folder": context.mailbox_name,
+                "uid": context.message_uid,
+                "index": attachment_index,
+                "output_path": output_path,
             }),
             false,
         ),
@@ -510,6 +605,10 @@ fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachm
     first_invite_attachment_in_summaries(&message.attachments)
 }
 
+fn first_regular_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
+    first_regular_attachment_in_summaries(&message.attachments)
+}
+
 fn first_invite_attachment_in_summaries(
     attachments: &[MailAttachmentSummary],
 ) -> Option<(usize, &MailAttachmentSummary)> {
@@ -517,6 +616,16 @@ fn first_invite_attachment_in_summaries(
         .iter()
         .enumerate()
         .find(|(_, attachment)| is_calendar_invite_attachment(attachment))
+        .map(|(index, attachment)| (index + 1, attachment))
+}
+
+fn first_regular_attachment_in_summaries(
+    attachments: &[MailAttachmentSummary],
+) -> Option<(usize, &MailAttachmentSummary)> {
+    attachments
+        .iter()
+        .enumerate()
+        .find(|(_, attachment)| !is_calendar_invite_attachment(attachment))
         .map(|(index, attachment)| (index + 1, attachment))
 }
 
@@ -537,6 +646,22 @@ fn attachment_label(attachment: &MailAttachmentSummary) -> String {
         .filename
         .clone()
         .unwrap_or_else(|| attachment.mime_type.clone())
+}
+
+fn suggested_attachment_output_path(
+    attachment: &MailAttachmentSummary,
+    message_uid: u64,
+    attachment_index: usize,
+) -> String {
+    let filename = attachment
+        .filename
+        .as_deref()
+        .and_then(|name| Path::new(name).file_name())
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("attachment-{message_uid}-{attachment_index}"));
+    format!("./{filename}")
 }
 
 fn shell_quote(value: &str) -> String {
@@ -600,9 +725,10 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveMailInviteContext, build_live_disk_public_link_suggestion,
-        build_live_mail_invite_suggestion, collect_suggestions,
-        first_invite_attachment_in_summaries, is_public_disk_item, summary_for_suggestions,
+        LiveMailMessageContext, build_live_disk_public_link_suggestion,
+        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
+        collect_suggestions, first_invite_attachment_in_summaries,
+        first_regular_attachment_in_summaries, is_public_disk_item, summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
     use crate::disk::DiskResourceItem;
@@ -709,7 +835,7 @@ mod tests {
             inline: false,
         }];
         let suggestion = build_live_mail_invite_suggestion(
-            LiveMailInviteContext {
+            LiveMailMessageContext {
                 account: "mock",
                 mailbox_name: "INBOX",
                 message_uid: 1353,
@@ -746,6 +872,74 @@ mod tests {
                 .as_ref()
                 .and_then(|v| v["index"].as_u64()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn first_regular_attachment_skips_calendar_invites() {
+        let attachments = vec![
+            MailAttachmentSummary {
+                filename: Some("invite.ics".to_string()),
+                mime_type: "text/calendar".to_string(),
+                content_id: None,
+                inline: false,
+            },
+            MailAttachmentSummary {
+                filename: Some("report.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                content_id: None,
+                inline: false,
+            },
+        ];
+
+        let (index, attachment) =
+            first_regular_attachment_in_summaries(&attachments).expect("regular attachment");
+        assert_eq!(index, 2);
+        assert_eq!(attachment.filename.as_deref(), Some("report.pdf"));
+    }
+
+    #[test]
+    fn build_live_mail_attachment_suggestion_returns_open_tool_handoff() {
+        let attachments = [MailAttachmentSummary {
+            filename: Some("quarterly-report.pdf".to_string()),
+            mime_type: "application/pdf".to_string(),
+            content_id: None,
+            inline: false,
+        }];
+        let suggestion = build_live_mail_attachment_suggestion(
+            LiveMailMessageContext {
+                account: "mock",
+                mailbox_name: "INBOX",
+                message_uid: 2468,
+                subject: Some("Материалы"),
+                from: Some("sender@example.com"),
+            },
+            1,
+            &attachments[0],
+            Some("attachment-to-disk"),
+        );
+        assert_eq!(suggestion.workflow_id, Some("attachment-to-disk"));
+        assert_eq!(suggestion.source, "mail_live");
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(
+            suggestion.action.tool_name,
+            Some("yacli.mail.attachment.export")
+        );
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|v| v["uid"].as_u64()),
+            Some(2468)
+        );
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|v| v["output_path"].as_str()),
+            Some("./quarterly-report.pdf")
         );
     }
 
