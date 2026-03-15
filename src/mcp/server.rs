@@ -31,6 +31,9 @@ use crate::doctor::doctor_payload;
 use crate::error::{Result, YacliError};
 use crate::goal_router::goal_route_payload;
 use crate::home::home_payload;
+use crate::mail_invite_flow::{
+    invite_create_event_command, partial_failure as invite_create_event_partial_failure,
+};
 use crate::mail_link::{
     MailSendLinkOutcome, MailSendLinkRequest, MailSendPublishedLinkRequest, review_mail_send_link,
     review_mail_send_published_link, send_link_via_mail, send_published_link_command,
@@ -47,9 +50,9 @@ use crate::update::check_for_update;
 use crate::workflows;
 use crate::{
     calendar::{
-        CalendarCreateRequest, CalendarEventsRequest, calendar_create_request_from_invites,
-        create_calendar_event, delete_calendar_event, list_calendar_events, list_calendars,
-        parse_event_window, review_calendar_event_creation,
+        CalendarCreateRequest, CalendarEventsRequest, calendar_create_command,
+        calendar_create_request_from_invites, create_calendar_event, delete_calendar_event,
+        list_calendar_events, list_calendars, parse_event_window, review_calendar_event_creation,
     },
     disk::{
         DownloadedFile, PrivateDiskDownloadRequest, PrivateDiskListRequest,
@@ -2866,25 +2869,50 @@ fn mail_invite_create_event(
     )?;
     let (_, app_password, calendar_context) =
         resolve_calendar_private_context(Some(&resolved_account))?;
-    let (calendar, event) = create_calendar_event(
+    let (calendar, event) = match create_calendar_event(
         &calendar_context.caldav_base_url,
         &calendar_context.email,
         &app_password,
-        create_request,
-    )?;
-    let mut replay = format!(
-        "yacli mail invite create-event {} --folder {} --calendar {} --event-index {}",
-        request.uid,
-        shell_quote(&request.folder),
-        shell_quote(&calendar.id),
-        request.event_index
-    );
-    match &replay_selector {
-        MailAttachmentSelector::Index(index) => replay.push_str(&format!(" --index {}", index)),
-        MailAttachmentSelector::Filename(name) => {
-            replay.push_str(&format!(" --name {}", shell_quote(name)));
+        create_request.clone(),
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            let partial = invite_create_event_partial_failure(
+                &inspected,
+                &selected_invite,
+                &create_request,
+                &request.folder,
+                &replay_selector,
+                request.max_bytes,
+                err,
+            );
+            record_activity_mcp(NewActivityEntry {
+                source: "mcp".to_string(),
+                operation: "mail.invite.create_event.partial".to_string(),
+                account: resolved_account.clone(),
+                summary: format!(
+                    "Не удалось создать событие из приглашения письма {}: {}",
+                    request.uid,
+                    partial.selected_invite.summary.as_deref().unwrap_or("-")
+                ),
+                replay_command: partial.recovery.retry_calendar_step.command.clone(),
+                undo: None,
+            });
+            return Ok(json!({
+                "status": "partial",
+                "account": resolved_account,
+                "folder": request.folder,
+                "partial": partial,
+            }));
         }
-    }
+    };
+    let replay = invite_create_event_command(
+        request.uid,
+        &request.folder,
+        &replay_selector,
+        &calendar.id,
+        request.event_index,
+    );
     record_activity_mcp(NewActivityEntry {
         source: "mcp".to_string(),
         operation: "mail.invite.create_event".to_string(),
@@ -2895,7 +2923,7 @@ fn mail_invite_create_event(
             event.summary.as_deref().unwrap_or("-")
         ),
         replay_command: replay,
-        undo: None,
+        undo: calendar_create_undo(&calendar, &event),
     });
 
     Ok(json!({
@@ -2977,22 +3005,17 @@ fn calendar_create(account: Option<&str>, request: CalendarCreateToolRequest) ->
             &app_password,
             create_request,
         )?;
-        let mut replay = format!(
-            "yacli calendar create {} {} {}",
-            shell_quote(event.summary.as_deref().unwrap_or("")),
-            shell_quote(event.start.as_deref().unwrap_or("")),
-            shell_quote(event.end.as_deref().unwrap_or(""))
+        let replay = calendar_create_command(
+            &CalendarCreateRequest {
+                calendar: calendar.id.clone(),
+                summary: event.summary.clone().unwrap_or_default(),
+                start: event.start.clone().unwrap_or_default(),
+                end: event.end.clone().unwrap_or_default(),
+                description: event.description.clone(),
+                location: event.location.clone(),
+            },
+            true,
         );
-        if calendar.id != "default" {
-            replay.push_str(&format!(" --calendar {}", shell_quote(&calendar.id)));
-        }
-        if let Some(location) = event.location.as_deref() {
-            replay.push_str(&format!(" --location {}", shell_quote(location)));
-        }
-        if let Some(description) = event.description.as_deref() {
-            replay.push_str(&format!(" --description {}", shell_quote(description)));
-        }
-        replay.push_str(" --dry-run");
         record_activity_mcp(NewActivityEntry {
             source: "mcp".to_string(),
             operation: "calendar.create".to_string(),

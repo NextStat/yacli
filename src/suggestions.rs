@@ -103,6 +103,28 @@ fn collect_suggestions(
                     );
                 }
             }
+            "mail.invite.create_event.partial" => {
+                push_suggestion(
+                    &mut suggestions,
+                    &mut seen,
+                    SuggestionItem {
+                        id: format!("recover-invite-create-event-{}", entry.id),
+                        title: "Повторить календарный шаг для приглашения".to_string(),
+                        status: "ready",
+                        priority: goal_adjusted_priority(0, "invite-to-calendar", goal_workflow),
+                        reason: format!(
+                            "{} Повторяем только создание события, не перечитывая письмо заново.",
+                            entry.summary
+                        ),
+                        command: entry.replay_command.clone(),
+                        source: "activity",
+                        kind: "recovery",
+                        activity_id: entry.id.clone(),
+                        operation: entry.operation.clone(),
+                        workflow_id: Some("invite-to-calendar"),
+                    },
+                );
+            }
             "disk.publish" | "disk.upload_link" => {
                 if let Some(command) = revoke_public_link_command(entry) {
                     push_suggestion(
@@ -259,5 +281,28 @@ mod tests {
         assert_eq!(suggestions[0].kind, "recovery");
         assert_eq!(suggestions[0].workflow_id, Some("send-link-by-mail"));
         assert_eq!(suggestions[1].kind, "cleanup");
+    }
+
+    #[test]
+    fn collect_suggestions_promotes_partial_invite_recovery() {
+        let entries = vec![ActivityEntry {
+            id: "act_20260315T110000Z_partial456".to_string(),
+            occurred_at: "2026-03-15T11:00:00Z".to_string(),
+            source: "cli".to_string(),
+            operation: "mail.invite.create_event.partial".to_string(),
+            account: "mock".to_string(),
+            summary: "Не удалось создать событие из приглашения письма 77: Ревью".to_string(),
+            replay_command:
+                "yacli calendar create 'Ревью' '2026-03-16T10:00:00Z' '2026-03-16T10:30:00Z' --calendar team --dry-run"
+                    .to_string(),
+            undo: None,
+            undo_command: None,
+        }];
+
+        let suggestions = collect_suggestions(&entries, Some("invite-to-calendar"));
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].kind, "recovery");
+        assert_eq!(suggestions[0].workflow_id, Some("invite-to-calendar"));
+        assert!(suggestions[0].command.contains("calendar create"));
     }
 }

@@ -13,7 +13,7 @@ use crate::activity_undo::{
 };
 use crate::calendar::{
     CalendarCollection, CalendarCreateRequest, CalendarCreateReview, CalendarEvent,
-    CalendarEventWindow, CalendarEventsRequest, CalendarInvite,
+    CalendarEventWindow, CalendarEventsRequest, CalendarInvite, calendar_create_command,
     calendar_create_request_from_invites, create_calendar_event, delete_calendar_event,
     list_calendar_events, list_calendars, parse_event_window, review_calendar_event_creation,
 };
@@ -52,6 +52,10 @@ use crate::mail::{
     read_mail_message, reply_to_mail_message, review_mail_submission, search_mail_messages,
     send_mail_message,
 };
+use crate::mail_invite_flow::{
+    MailInviteCreateEventPartialFailure, invite_create_event_command,
+    partial_failure as invite_create_event_partial_failure,
+};
 use crate::mail_link::{
     MailSendLinkOutcome, MailSendLinkPartialFailure, MailSendLinkRequest, MailSendLinkResult,
     MailSendLinkReview, MailSendPublishedLinkRequest, MailSendPublishedLinkReview,
@@ -64,6 +68,7 @@ use crate::next_actions::next_actions_payload;
 use crate::oauth::{
     OauthService, default_yacli_client_id, exchange_authorization_code, start_pkce_authorization,
 };
+use crate::oauth_session_store::{PendingOauthSession, PendingOauthSessionStore};
 use crate::output::RenderedOutput;
 use crate::runtime_context::{
     auth_state, ensure_calendar_supports_app_password, resolve_calendar_private_context,
@@ -342,12 +347,27 @@ fn execute_setup(format: OutputFormat, request: SetupRequest) -> Result<Rendered
                     login_hint: Some(account.email.clone()),
                 },
             )?;
+            let login_pending = login.json["status"].as_str() == Some("pending");
             steps.push(SetupStep {
                 id: "mail_disk_login",
-                status: "completed",
-                detail: "mail and disk are connected".to_string(),
+                status: if login_pending {
+                    "pending"
+                } else {
+                    "completed"
+                },
+                detail: if login_pending {
+                    "mail and disk OAuth session is started; finish it with the browser code"
+                        .to_string()
+                } else {
+                    "mail and disk are connected".to_string()
+                },
                 output: Some(login.json),
             });
+            if login_pending {
+                next_actions.push(
+                    "complete mail/disk OAuth with `yacli login --account <аккаунт> --code <код>`",
+                );
+            }
         }
 
         if let Some(app_password) = calendar_app_password {
@@ -1561,15 +1581,58 @@ fn execute_auth(format: OutputFormat, action: AuthCommand) -> Result<RenderedOut
                     };
                     let client_id =
                         client_id.unwrap_or_else(|| default_yacli_client_id().to_string());
-                    let resolved_login_hint =
-                        login_hint.as_deref().or(Some(account.email.as_str()));
-                    let session =
-                        start_pkce_authorization(&services, &client_id, resolved_login_hint)?;
+                    let resolved_login_hint = login_hint.or(Some(account.email.clone()));
+                    let mut session_store = PendingOauthSessionStore::load()?;
+                    let existing_pending = session_store
+                        .get_matching(&account_name, &services, &client_id)
+                        .cloned();
+                    let session_reused = existing_pending.is_some();
+                    let mut pending_session_persisted = false;
+                    let session = if let Some(pending) = existing_pending {
+                        pending_session_persisted = true;
+                        pending.to_authorization_session()
+                    } else {
+                        let session = start_pkce_authorization(
+                            &services,
+                            &client_id,
+                            resolved_login_hint.as_deref(),
+                        )?;
+                        if code.is_none() {
+                            session_store.replace_matching(
+                                PendingOauthSession::from_authorization_session(
+                                    account_name.clone(),
+                                    &services,
+                                    resolved_login_hint.clone(),
+                                    session.clone(),
+                                ),
+                            );
+                            session_store.save()?;
+                            pending_session_persisted = true;
+                        }
+                        session
+                    };
+
+                    if code.is_none() && !io::stdin().is_terminal() {
+                        return oauth_login_pending_output(
+                            format,
+                            &account_name,
+                            &services,
+                            &client_id,
+                            client_id_source,
+                            session.request.clone(),
+                            session_reused,
+                        );
+                    }
+
                     let code = match code {
                         Some(code) => code,
                         None => read_confirmation_code(&session.request.authorization_url)?,
                     };
                     let login = exchange_authorization_code(session, &code)?;
+                    if pending_session_persisted {
+                        session_store.remove_matching(&account_name, &services, &client_id);
+                        session_store.save()?;
+                    }
 
                     let mut credential_store = CredentialStore::load()?;
                     let credential_refs: Vec<_> = services
@@ -2277,22 +2340,17 @@ fn execute_calendar(format: OutputFormat, action: CalendarCommand) -> Result<Ren
                     render_calendar_create_table(&resolved_account, &calendar, &event),
                 )
                 .inspect(|_| {
-                    let mut replay = format!(
-                        "yacli calendar create {} {} {}",
-                        shell_quote(event.summary.as_deref().unwrap_or("")),
-                        shell_quote(event.start.as_deref().unwrap_or("")),
-                        shell_quote(event.end.as_deref().unwrap_or(""))
+                    let replay = calendar_create_command(
+                        &CalendarCreateRequest {
+                            calendar: calendar.id.clone(),
+                            summary: event.summary.clone().unwrap_or_default(),
+                            start: event.start.clone().unwrap_or_default(),
+                            end: event.end.clone().unwrap_or_default(),
+                            description: event.description.clone(),
+                            location: event.location.clone(),
+                        },
+                        true,
                     );
-                    if calendar.id != "default" {
-                        replay.push_str(&format!(" --calendar {}", shell_quote(&calendar.id)));
-                    }
-                    if let Some(location) = event.location.as_deref() {
-                        replay.push_str(&format!(" --location {}", shell_quote(location)));
-                    }
-                    if let Some(description) = event.description.as_deref() {
-                        replay.push_str(&format!(" --description {}", shell_quote(description)));
-                    }
-                    replay.push_str(" --dry-run");
                     record_activity_best_effort(NewActivityEntry {
                         source: "cli".to_string(),
                         operation: "calendar.create".to_string(),
@@ -2912,7 +2970,6 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
             event_index,
             max_bytes,
         } => {
-            let replay_name = name.clone();
             let selector =
                 mail_attachment_selector_for_command("mail invite create-event", index, name)?;
             validate_positive_event_index("mail invite create-event", event_index)?;
@@ -2925,7 +2982,7 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
                 &folder,
                 MailInviteInspectRequest {
                     uid,
-                    selector,
+                    selector: selector.clone(),
                     max_bytes,
                 },
             )?;
@@ -2937,12 +2994,55 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
             )?;
             let (_, app_password, calendar_context) =
                 resolve_calendar_private_context(Some(&resolved_account))?;
-            let (calendar, event) = create_calendar_event(
+            let (calendar, event) = match create_calendar_event(
                 &calendar_context.caldav_base_url,
                 &calendar_context.email,
                 &app_password,
-                create_request,
-            )?;
+                create_request.clone(),
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    let partial = invite_create_event_partial_failure(
+                        &inspected,
+                        &selected_invite,
+                        &create_request,
+                        &folder,
+                        &selector,
+                        max_bytes,
+                        err,
+                    );
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "mail.invite.create_event.partial".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Не удалось создать событие из приглашения письма {}: {}",
+                            uid,
+                            partial.selected_invite.summary.as_deref().unwrap_or("-")
+                        ),
+                        replay_command: partial.recovery.retry_calendar_step.command.clone(),
+                        undo: None,
+                    });
+                    return non_ok_output(
+                        format,
+                        "mail.invite.create_event",
+                        json!({
+                            "status": "partial",
+                            "account": resolved_account,
+                            "email": mail_context.email,
+                            "folder": folder,
+                            "partial": partial,
+                        }),
+                        render_mail_invite_create_event_partial_table(
+                            &resolved_account,
+                            &folder,
+                            event_index,
+                            &partial,
+                        ),
+                        partial.error.exit_code,
+                    );
+                }
+            };
 
             ok_output(
                 format,
@@ -2967,19 +3067,8 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
                 ),
             )
             .inspect(|_| {
-                let mut replay = format!(
-                    "yacli mail invite create-event {} --folder {} --calendar {} --event-index {}",
-                    uid,
-                    shell_quote(&folder),
-                    shell_quote(&calendar.id),
-                    event_index
-                );
-                if let Some(index) = index {
-                    replay.push_str(&format!(" --index {}", index));
-                }
-                if let Some(name) = replay_name.as_deref() {
-                    replay.push_str(&format!(" --name {}", shell_quote(name)));
-                }
+                let replay =
+                    invite_create_event_command(uid, &folder, &selector, &calendar.id, event_index);
                 record_activity_best_effort(NewActivityEntry {
                     source: "cli".to_string(),
                     operation: "mail.invite.create_event".to_string(),
@@ -2990,7 +3079,7 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
                         event.summary.as_deref().unwrap_or("-")
                     ),
                     replay_command: replay,
-                    undo: None,
+                    undo: calendar_create_undo(&calendar, &event),
                 });
             })
         }
@@ -3965,6 +4054,82 @@ fn read_confirmation_code(authorization_url: &str) -> Result<String> {
     }
 
     Ok(code)
+}
+
+fn oauth_login_pending_output(
+    format: OutputFormat,
+    account_name: &str,
+    services: &[OauthService],
+    client_id: &str,
+    client_id_source: &str,
+    authorization: crate::oauth::AuthorizationRequest,
+    session_reused: bool,
+) -> Result<RenderedOutput> {
+    let resume_command =
+        oauth_login_resume_command(account_name, services, client_id_source, client_id);
+    let service_names = services
+        .iter()
+        .map(|service| service.as_str())
+        .collect::<Vec<_>>();
+    let mut payload = serde_json::Map::new();
+    payload.insert("account".to_string(), json!(account_name));
+    payload.insert("status".to_string(), json!("pending"));
+    payload.insert("services".to_string(), json!(service_names));
+    payload.insert("client_id_source".to_string(), json!(client_id_source));
+    payload.insert("authorization".to_string(), json!(authorization));
+    payload.insert("session_reused".to_string(), json!(session_reused));
+    payload.insert("resume_command".to_string(), json!(resume_command.clone()));
+    if services.len() == 1 {
+        payload.insert("service".to_string(), json!(services[0].as_str()));
+    }
+
+    ok_output(
+        format,
+        "auth.login",
+        serde_json::Value::Object(payload),
+        render_key_value_table(&[
+            ("operation", "auth.login".to_string()),
+            ("account", account_name.to_string()),
+            (
+                if services.len() == 1 {
+                    "service"
+                } else {
+                    "services"
+                },
+                if services.len() == 1 {
+                    services[0].as_str().to_string()
+                } else {
+                    services
+                        .iter()
+                        .map(|service| service.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                },
+            ),
+            ("status", "pending".to_string()),
+            ("session_reused", session_reused.to_string()),
+            ("client_id_source", client_id_source.to_string()),
+            ("authorization_url", authorization.authorization_url),
+            ("resume_command", resume_command),
+        ]),
+    )
+}
+
+fn oauth_login_resume_command(
+    account_name: &str,
+    services: &[OauthService],
+    client_id_source: &str,
+    client_id: &str,
+) -> String {
+    let mut command = format!("yacli login --account {}", shell_quote(account_name));
+    if services.len() == 1 {
+        command.push_str(&format!(" --service {}", services[0].as_str()));
+    }
+    if client_id_source == "override" {
+        command.push_str(&format!(" --client-id {}", shell_quote(client_id)));
+    }
+    command.push_str(" --code <код>");
+    command
 }
 
 fn render_key_value_table(items: &[(&str, String)]) -> String {
@@ -5482,6 +5647,55 @@ fn render_mail_invite_create_event_table(
             event.start.as_deref().unwrap_or("-").to_string(),
         ),
         ("event_end", event.end.as_deref().unwrap_or("-").to_string()),
+    ])
+}
+
+fn render_mail_invite_create_event_partial_table(
+    account: &str,
+    folder: &str,
+    event_index: usize,
+    partial: &MailInviteCreateEventPartialFailure,
+) -> String {
+    render_key_value_table(&[
+        ("status", "partial".to_string()),
+        ("account", account.to_string()),
+        ("folder", folder.to_string()),
+        ("message_id", partial.attachment.message_uid.to_string()),
+        (
+            "attachment_index",
+            partial.attachment.attachment_index.to_string(),
+        ),
+        ("invite_event_index", event_index.to_string()),
+        (
+            "invite_uid",
+            partial
+                .selected_invite
+                .uid
+                .as_deref()
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        (
+            "invite_summary",
+            partial
+                .selected_invite
+                .summary
+                .as_deref()
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        ("calendar_id", partial.create_request.calendar.clone()),
+        ("failed_stage", partial.failed_stage.clone()),
+        ("error_code", partial.error.code.to_string()),
+        ("error_message", partial.error.message.clone()),
+        (
+            "retry_calendar_step_command",
+            partial.recovery.retry_calendar_step.command.clone(),
+        ),
+        (
+            "inspect_invite_command",
+            partial.recovery.inspect_invite.command.clone(),
+        ),
     ])
 }
 

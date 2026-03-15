@@ -41,6 +41,10 @@ fn write_activity_file(config_dir: &std::path::Path, content: &str) {
     fs::write(config_dir.join("activity.toml"), content).expect("activity file written");
 }
 
+fn read_oauth_sessions_file(config_dir: &std::path::Path) -> String {
+    fs::read_to_string(config_dir.join("oauth_sessions.toml")).expect("oauth sessions file written")
+}
+
 fn expected_claude_desktop_config_path(home: &std::path::Path) -> std::path::PathBuf {
     if cfg!(target_os = "macos") {
         home.join("Library/Application Support/Claude/claude_desktop_config.json")
@@ -2098,6 +2102,158 @@ fn simple_login_uses_builtin_client_and_connects_mail_and_disk() {
     assert!(accounts.contains("[accounts.mock.disk]"));
     assert!(accounts.contains("credential_ref = \"store:mail\""));
     assert!(accounts.contains("credential_ref = \"store:disk\""));
+}
+
+#[test]
+fn login_without_code_returns_pending_session_for_agents() {
+    let temp = tempdir().expect("tempdir");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        None,
+        None,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["login"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "auth.login");
+    assert_eq!(value["status"], "pending");
+    assert_eq!(value["services"][0], "mail");
+    assert_eq!(value["services"][1], "disk");
+    assert_eq!(value["session_reused"], false);
+    assert!(
+        value["authorization"]["authorization_url"]
+            .as_str()
+            .expect("authorization url")
+            .contains("/authorize?")
+    );
+    assert!(
+        value["resume_command"]
+            .as_str()
+            .expect("resume command")
+            .contains("yacli login --account 'mock' --code <код>")
+    );
+
+    let pending = read_oauth_sessions_file(temp.path());
+    assert!(pending.contains("account = \"mock\""));
+    assert!(pending.contains("\"mail\""));
+    assert!(pending.contains("\"disk\""));
+}
+
+#[test]
+fn login_with_code_reuses_pending_session_and_clears_it() {
+    let temp = tempdir().expect("tempdir");
+    let mut oauth = Server::new();
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        None,
+        None,
+    );
+
+    let pending_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_OAUTH_BASE_URL", oauth.url())
+        .args(["login"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let pending_value: Value = serde_json::from_slice(&pending_output).expect("valid json");
+    assert_eq!(pending_value["status"], "pending");
+
+    let pending = read_oauth_sessions_file(temp.path());
+    let verifier = pending
+        .lines()
+        .find(|line| line.trim_start().starts_with("code_verifier = "))
+        .and_then(|line| line.split('"').nth(1))
+        .expect("saved code verifier")
+        .to_string();
+
+    let _token = oauth
+        .mock("POST", "/token")
+        .match_body(Matcher::Exact(format!(
+            "grant_type=authorization_code&code=confirm-123&client_id={}&code_verifier={}",
+            "babbe3ab2e254d5abee427890e2a5a8f",
+            verifier
+        )))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "access_token": "access-123",
+  "token_type": "bearer",
+  "expires_in": 3600,
+  "scope": "mail:imap_full mail:smtp cloud_api:disk.app_folder cloud_api:disk.info cloud_api:disk.read cloud_api:disk.write"
+}"#,
+        )
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_OAUTH_BASE_URL", oauth.url())
+        .args(["login", "--code", "confirm-123"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "auth.login");
+    assert_eq!(value["services"][0], "mail");
+    assert_eq!(value["services"][1], "disk");
+    assert!(!temp.path().join("oauth_sessions.toml").exists());
+}
+
+#[test]
+fn setup_surfaces_pending_mail_disk_login_for_agents() {
+    let config_dir = tempdir().expect("config tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .args(["setup", "me@yandex.ru", "--skip-mcp-install"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "setup");
+    let steps = value["steps"].as_array().expect("steps array");
+    let login_step = steps
+        .iter()
+        .find(|step| step["id"] == "mail_disk_login")
+        .expect("mail login step");
+    assert_eq!(login_step["status"], "pending");
+    assert_eq!(login_step["output"]["operation"], "auth.login");
+    assert_eq!(login_step["output"]["status"], "pending");
+    assert!(
+        value["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .iter()
+            .any(|item| item
+                .as_str()
+                .unwrap_or_default()
+                .contains("yacli login --account <аккаунт> --code <код>"))
+    );
+    assert!(config_dir.path().join("oauth_sessions.toml").exists());
 }
 
 #[test]

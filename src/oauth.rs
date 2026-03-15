@@ -63,8 +63,8 @@ pub struct AuthorizationRequest {
 #[derive(Clone, Debug)]
 pub struct AuthorizationSession {
     pub request: AuthorizationRequest,
-    client_id: String,
-    code_verifier: String,
+    pub(crate) client_id: String,
+    pub(crate) code_verifier: String,
 }
 
 #[derive(Clone, Debug)]

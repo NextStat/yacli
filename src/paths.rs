@@ -23,3 +23,7 @@ pub fn credentials_path() -> Result<PathBuf> {
 pub fn activity_log_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("activity.toml"))
 }
+
+pub fn oauth_sessions_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("oauth_sessions.toml"))
+}

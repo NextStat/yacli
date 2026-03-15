@@ -131,6 +131,17 @@ yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude
 | **Поставить MCP в Claude / Codex / Gemini** | `yacli mcp install --client <client>` |
 | **Поднять локальный HTTP MCP** | `yacli mcp --transport http --listen 127.0.0.1:8787` |
 
+Для агентских и headless-сценариев `yacli login` теперь работает в два шага без ломкого `stdin`-диалога:
+
+```bash
+yacli login
+# => status=pending, authorization_url, resume_command
+
+yacli login --code <код>
+```
+
+`yacli` сохраняет pending PKCE session в локальном config dir и переиспользует её при втором вызове, поэтому код подтверждения больше не ломается из-за нового `code_verifier`.
+
 <details>
 <summary><strong>Как получить пароль приложения для Календаря</strong></summary>
 

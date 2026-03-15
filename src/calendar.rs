@@ -82,7 +82,7 @@ pub struct CalendarEventsRequest {
     pub limit: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CalendarCreateRequest {
     pub calendar: String,
     pub summary: String,
@@ -251,6 +251,28 @@ pub fn delete_calendar_event(
 ) -> Result<(CalendarCollection, CalendarEvent)> {
     let client = CaldavClient::new(base_url, account, app_password)?;
     client.delete_event(calendar_ref, uid)
+}
+
+pub fn calendar_create_command(request: &CalendarCreateRequest, dry_run: bool) -> String {
+    let mut command = format!(
+        "yacli calendar create {} {} {}",
+        shell_quote(&request.summary),
+        shell_quote(&request.start),
+        shell_quote(&request.end)
+    );
+    if request.calendar != "default" {
+        command.push_str(&format!(" --calendar {}", shell_quote(&request.calendar)));
+    }
+    if let Some(location) = request.location.as_deref() {
+        command.push_str(&format!(" --location {}", shell_quote(location)));
+    }
+    if let Some(description) = request.description.as_deref() {
+        command.push_str(&format!(" --description {}", shell_quote(description)));
+    }
+    if dry_run {
+        command.push_str(" --dry-run");
+    }
+    command
 }
 
 pub fn parse_calendar_invites(calendar_data: &str) -> Result<Vec<CalendarInvite>> {
@@ -1240,6 +1262,19 @@ fn escape_xml_text(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '.' | ':' | '@'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn parse_time_boundary(value: &str, flag_name: &str) -> Result<DateTime<Utc>> {
