@@ -58,6 +58,16 @@ struct InstallItem {
     skills_count: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientReadiness {
+    pub client: &'static str,
+    pub status: &'static str,
+    pub mechanism: &'static str,
+    pub verified: bool,
+    pub detail: String,
+    pub recommended_command: String,
+}
+
 pub fn execute_install(
     format: OutputFormat,
     selected: Vec<McpClientArg>,
@@ -65,12 +75,13 @@ pub fn execute_install(
     url: Option<String>,
 ) -> Result<RenderedOutput> {
     let registration = canonical_registration(transport, url)?;
+    let allow_missing_client = !selected.is_empty();
     let clients = resolve_clients(selected);
     let mut items = Vec::with_capacity(clients.len());
     let mut had_failure = false;
 
     for client in clients {
-        let mut item = match install_client(client, &registration) {
+        let mut item = match install_client(client, &registration, allow_missing_client) {
             Ok(item) => item,
             Err(err) => {
                 had_failure = true;
@@ -131,6 +142,14 @@ pub fn execute_install(
     })
 }
 
+pub fn mcp_client_readiness() -> Result<Vec<ClientReadiness>> {
+    let clients = resolve_clients(Vec::new());
+    clients
+        .into_iter()
+        .map(probe_client_readiness)
+        .collect::<Result<Vec<_>>>()
+}
+
 fn install_client_skills(client: InstallClient, item: &mut InstallItem) {
     if !item.detected || item.status == "skipped" {
         return;
@@ -155,6 +174,45 @@ fn install_client_skills(client: InstallClient, item: &mut InstallItem) {
             item.skills_path = Some(skills_dir.display().to_string());
             item.skills_count = Some(0);
         }
+    }
+}
+
+fn probe_client_readiness(client: InstallClient) -> Result<ClientReadiness> {
+    let command = format!("yacli mcp install --client {}", client.label());
+    match client {
+        InstallClient::Claude => probe_native_available_readiness(client, "claude", command),
+        InstallClient::Codex => probe_native_available_readiness(client, "codex", command),
+        InstallClient::Gemini => probe_native_available_readiness(client, "gemini", command),
+        InstallClient::Antigravity => {
+            probe_native_available_readiness(client, "antigravity", command)
+        }
+        InstallClient::ClaudeDesktop => probe_json_file_readiness(
+            client,
+            &claude_desktop_config_path()?,
+            &[],
+            "mcpServers",
+            command,
+        ),
+        InstallClient::Cursor => {
+            probe_json_file_readiness(client, &cursor_config_path()?, &[], "mcpServers", command)
+        }
+        InstallClient::Windsurf => probe_json_file_readiness(
+            client,
+            &windsurf_config_path()?,
+            &windsurf_legacy_config_paths()?,
+            "mcpServers",
+            command,
+        ),
+        InstallClient::Warp => {
+            probe_json_file_readiness(client, &warp_config_path()?, &[], "mcpServers", command)
+        }
+        InstallClient::Zed => probe_json_file_readiness(
+            client,
+            &zed_settings_path()?,
+            &[],
+            "context_servers",
+            command,
+        ),
     }
 }
 
@@ -185,7 +243,72 @@ fn resolve_clients(selected: Vec<McpClientArg>) -> Vec<InstallClient> {
     clients.into_iter().collect()
 }
 
-fn install_client(client: InstallClient, registration: &ServerRegistration) -> Result<InstallItem> {
+fn probe_native_available_readiness(
+    client: InstallClient,
+    executable: &str,
+    recommended_command: String,
+) -> Result<ClientReadiness> {
+    let status = if resolve_executable(executable).is_some() {
+        "available_unverifiable"
+    } else {
+        "unavailable"
+    };
+    Ok(ClientReadiness {
+        client: client.label(),
+        status,
+        mechanism: client.mechanism(),
+        verified: false,
+        detail: if status == "available_unverifiable" {
+            format!(
+                "{executable} is available on PATH, but this client does not expose a deterministic MCP registration probe"
+            )
+        } else {
+            format!("{executable} is not available on PATH")
+        },
+        recommended_command,
+    })
+}
+
+fn probe_json_file_readiness(
+    client: InstallClient,
+    path: &Path,
+    fallback_paths: &[PathBuf],
+    top_level_key: &str,
+    recommended_command: String,
+) -> Result<ClientReadiness> {
+    let detected = client_detected(client);
+    let has_registration = json_config_has_server(path, fallback_paths, top_level_key)?;
+    Ok(ClientReadiness {
+        client: client.label(),
+        status: if has_registration {
+            "installed"
+        } else if detected {
+            "not_installed"
+        } else {
+            "unavailable"
+        },
+        mechanism: client.mechanism(),
+        verified: true,
+        detail: if has_registration {
+            format!("{} already contains `{SERVER_NAME}`", path.display())
+        } else if detected {
+            format!(
+                "{} is installed locally, but `{SERVER_NAME}` is missing from {}",
+                client.label(),
+                path.display()
+            )
+        } else {
+            format!("{} is not installed locally", client.label())
+        },
+        recommended_command,
+    })
+}
+
+fn install_client(
+    client: InstallClient,
+    registration: &ServerRegistration,
+    allow_missing_client: bool,
+) -> Result<InstallItem> {
     if registration.transport == McpTransportArg::Http && !client.supports_http_transport() {
         return Ok(skipped_item(
             client,
@@ -209,6 +332,7 @@ fn install_client(client: InstallClient, registration: &ServerRegistration) -> R
             &[],
             "mcpServers",
             registration,
+            allow_missing_client,
         ),
         InstallClient::Codex => install_native_get_add(
             client,
@@ -230,6 +354,7 @@ fn install_client(client: InstallClient, registration: &ServerRegistration) -> R
             &[],
             "mcpServers",
             registration,
+            allow_missing_client,
         ),
         InstallClient::Windsurf => install_json_file(
             client,
@@ -237,6 +362,7 @@ fn install_client(client: InstallClient, registration: &ServerRegistration) -> R
             &windsurf_legacy_config_paths()?,
             "mcpServers",
             registration,
+            allow_missing_client,
         ),
         InstallClient::Warp => install_json_file(
             client,
@@ -244,6 +370,7 @@ fn install_client(client: InstallClient, registration: &ServerRegistration) -> R
             &[],
             "mcpServers",
             registration,
+            allow_missing_client,
         ),
         InstallClient::Zed => install_json_file(
             client,
@@ -251,6 +378,7 @@ fn install_client(client: InstallClient, registration: &ServerRegistration) -> R
             &[],
             "context_servers",
             registration,
+            allow_missing_client,
         ),
     }
 }
@@ -397,8 +525,9 @@ fn install_json_file(
     fallback_paths: &[PathBuf],
     top_level_key: &str,
     registration: &ServerRegistration,
+    allow_missing_client: bool,
 ) -> Result<InstallItem> {
-    if !client_detected(client) {
+    if !allow_missing_client && !client_detected(client) {
         return Ok(skipped_item(
             client,
             format!("{} is not installed locally", client.label()),
@@ -482,6 +611,24 @@ fn load_json_object(path: &Path) -> Result<(Value, bool)> {
         YacliError::Serialization(format!("invalid JSON in {}: {err}", path.display()))
     })?;
     Ok((value, true))
+}
+
+fn json_config_has_server(
+    path: &Path,
+    fallback_paths: &[PathBuf],
+    top_level_key: &str,
+) -> Result<bool> {
+    let source_path =
+        existing_config_path(path, fallback_paths).unwrap_or_else(|| path.to_path_buf());
+    let (root, existed) = load_json_object(&source_path)?;
+    if !existed {
+        return Ok(false);
+    }
+    Ok(root
+        .as_object()
+        .and_then(|object| object.get(top_level_key))
+        .and_then(Value::as_object)
+        .is_some_and(|container| container.contains_key(SERVER_NAME)))
 }
 
 fn ensure_object<'a>(

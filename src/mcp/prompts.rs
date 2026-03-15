@@ -220,6 +220,70 @@ const SEND_FILE_BY_MAIL_ARGUMENTS: &[PromptArgument] = &[
     },
 ];
 
+const SEND_LINK_BY_MAIL_ARGUMENTS: &[PromptArgument] = &[
+    PromptArgument {
+        name: "to",
+        description: "Email получателя.",
+        required: true,
+    },
+    PromptArgument {
+        name: "subject",
+        description: "Тема письма.",
+        required: true,
+    },
+    PromptArgument {
+        name: "source_path",
+        description: "Путь к локальному файлу, который нужно загрузить на Диск.",
+        required: true,
+    },
+    PromptArgument {
+        name: "disk_path",
+        description: "Путь `disk:/...`, куда нужно загрузить файл перед отправкой ссылки.",
+        required: true,
+    },
+    PromptArgument {
+        name: "body",
+        description: "Текст письма.",
+        required: false,
+    },
+    PromptArgument {
+        name: "account",
+        description: "Optional yacli account alias.",
+        required: false,
+    },
+];
+
+const PUBLISH_FILE_LINK_ARGUMENTS: &[PromptArgument] = &[
+    PromptArgument {
+        name: "source_path",
+        description: "Путь к локальному файлу, который нужно загрузить на Диск.",
+        required: true,
+    },
+    PromptArgument {
+        name: "disk_path",
+        description: "Путь `disk:/...`, куда нужно загрузить и затем опубликовать файл.",
+        required: true,
+    },
+    PromptArgument {
+        name: "account",
+        description: "Optional yacli account alias.",
+        required: false,
+    },
+];
+
+const REVOKE_PUBLIC_LINK_ARGUMENTS: &[PromptArgument] = &[
+    PromptArgument {
+        name: "path",
+        description: "Путь `disk:/...`, у которого нужно отозвать публичную ссылку.",
+        required: true,
+    },
+    PromptArgument {
+        name: "account",
+        description: "Optional yacli account alias.",
+        required: false,
+    },
+];
+
 const INVITE_TO_CALENDAR_ARGUMENTS: &[PromptArgument] = &[
     PromptArgument {
         name: "query",
@@ -297,6 +361,24 @@ const PROMPTS: &[PromptDefinition] = &[
         title: "Отправить файл с диска по почте",
         description: "Подготовить письмо и отправить локальный файл как email-вложение.",
         arguments: SEND_FILE_BY_MAIL_ARGUMENTS,
+    },
+    PromptDefinition {
+        name: "send-link-by-mail",
+        title: "Загрузить файл и отправить ссылку по почте",
+        description: "Загрузить локальный файл на Диск, опубликовать ссылку и отправить её письмом.",
+        arguments: SEND_LINK_BY_MAIL_ARGUMENTS,
+    },
+    PromptDefinition {
+        name: "publish-file-link",
+        title: "Загрузить файл и получить публичную ссылку",
+        description: "Загрузить локальный файл на Диск, опубликовать его и вернуть public URL / public key.",
+        arguments: PUBLISH_FILE_LINK_ARGUMENTS,
+    },
+    PromptDefinition {
+        name: "revoke-public-link",
+        title: "Отозвать публичную ссылку на Диске",
+        description: "Снять public URL / public key у приватного файла или папки на Яндекс Диске.",
+        arguments: REVOKE_PUBLIC_LINK_ARGUMENTS,
     },
     PromptDefinition {
         name: "invite-to-calendar",
@@ -434,6 +516,9 @@ fn prompt_messages(name: &str, arguments: &Value) -> Result<Vec<Value>> {
         "reply-with-context" => render_reply_with_context_prompt(arguments)?,
         "attachment-to-disk" => render_attachment_to_disk_prompt(arguments)?,
         "send-file-by-mail" => render_send_file_by_mail_prompt(arguments)?,
+        "send-link-by-mail" => render_send_link_by_mail_prompt(arguments)?,
+        "publish-file-link" => render_publish_file_link_prompt(arguments)?,
+        "revoke-public-link" => render_revoke_public_link_prompt(arguments)?,
         "invite-to-calendar" => render_invite_to_calendar_prompt(arguments)?,
         _ => {
             return Err(YacliError::Validation(format!(
@@ -484,7 +569,10 @@ fn complete_prompt_reference(
                 .map(str::to_string)
                 .collect()
         }
-        ("disk", "path") => disk_path_suggestions(),
+        ("disk", "path")
+        | ("send-link-by-mail", "disk_path")
+        | ("publish-file-link", "disk_path")
+        | ("revoke-public-link", "path") => disk_path_suggestions(),
         ("reply-with-context", "uid") => context_arguments
             .and_then(|arguments| arguments.get("uid"))
             .and_then(Value::as_str)
@@ -821,6 +909,72 @@ fn render_send_file_by_mail_prompt(arguments: &Value) -> Result<String> {
     ))
 }
 
+fn render_send_link_by_mail_prompt(arguments: &Value) -> Result<String> {
+    let to = required_string(arguments, "to")?;
+    let subject = required_string(arguments, "subject")?;
+    let source_path = required_string(arguments, "source_path")?;
+    let disk_path = required_string(arguments, "disk_path")?;
+    let body = optional_string(arguments, "body").unwrap_or("Отправляю ссылку на файл.");
+    let account = optional_string(arguments, "account").unwrap_or("current");
+
+    Ok(format!(
+        "Помоги отправить большой локальный файл по почте через ссылку Яндекс Диска и MCP-сервер yacli.\n\
+Получатель: {to}\n\
+Тема: {subject}\n\
+Локальный файл: {source_path}\n\
+Путь на Диске: {disk_path}\n\
+Аккаунт: {account}\n\
+\n\
+Используй такой workflow:\n\
+1. Проверь, что `{source_path}` указывает на локальный файл.\n\
+2. Загрузить файл, опубликовать ссылку и отправить письмо можно одной командой `yacli.mail.send_link`.\n\
+3. Если пользователь не дал текст письма, используй минимальный вежливый body.\n\
+4. В финальном ответе кратко зафиксируй получателя, тему, путь на Диске и публичную ссылку.\n\
+\n\
+Текст письма по умолчанию: {body}\n\
+\n\
+Если upload прошёл, а отправка письма потом упала, не скрывай partial success: явно верни `public_url`, чтобы пользователь не потерял ссылку."
+    ))
+}
+
+fn render_publish_file_link_prompt(arguments: &Value) -> Result<String> {
+    let source_path = required_string(arguments, "source_path")?;
+    let disk_path = required_string(arguments, "disk_path")?;
+    let account = optional_string(arguments, "account");
+
+    Ok(format!(
+        "Нужно загрузить локальный файл на Яндекс Диск и сразу получить публичную ссылку.\n\
+\n\
+Локальный файл: {source_path}\n\
+Путь на Диске: {disk_path}\n\
+Аккаунт: {}\n\
+\n\
+Используй `yacli.disk.upload_link` для полного flow `upload -> publish -> public_url/public_key`.\n\
+Если нужен только preview без реальных изменений, сначала вызови tool с `dry_run: true`.\n\
+\n\
+Canonical skill resource: resource://yacli/skill/yacli-publish-file-link",
+        account.unwrap_or("<current>")
+    ))
+}
+
+fn render_revoke_public_link_prompt(arguments: &Value) -> Result<String> {
+    let path = required_string(arguments, "path")?;
+    let account = optional_string(arguments, "account").unwrap_or("current");
+
+    Ok(format!(
+        "Помоги отозвать публичную ссылку у ресурса Яндекс Диска через MCP-сервер yacli.\n\
+Путь на Диске: {path}\n\
+Аккаунт: {account}\n\
+\n\
+Используй такой workflow:\n\
+1. При необходимости уточни аккаунт и проверь, что речь идёт о приватном ресурсе на Диске.\n\
+2. Отзови публичную ссылку одной командой `yacli.disk.unpublish`.\n\
+3. В финальном ответе кратко зафиксируй путь ресурса и какую `public_url` / `public_key` удалось снять.\n\
+\n\
+Если ресурс уже не был публичным, не выдавай это за успешный revoke молча: явно покажи, что публичной ссылки уже нет."
+    ))
+}
+
 fn render_invite_to_calendar_prompt(arguments: &Value) -> Result<String> {
     let query = required_string(arguments, "query")?;
     let account = optional_string(arguments, "account").unwrap_or("current");
@@ -868,7 +1022,7 @@ mod tests {
     #[test]
     fn prompt_definitions_expose_all_embedded_prompts() {
         let prompts = prompt_definitions();
-        assert_eq!(prompts.len(), 10);
+        assert_eq!(prompts.len(), 13);
         assert!(prompts.iter().any(|prompt| prompt["name"] == "shared"));
         assert!(prompts.iter().any(|prompt| prompt["name"] == "mail"));
         assert!(prompts.iter().any(|prompt| prompt["name"] == "calendar"));
@@ -897,6 +1051,21 @@ mod tests {
             prompts
                 .iter()
                 .any(|prompt| prompt["name"] == "send-file-by-mail")
+        );
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "send-link-by-mail")
+        );
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "publish-file-link")
+        );
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "revoke-public-link")
         );
         assert!(
             prompts
@@ -998,6 +1167,66 @@ mod tests {
         assert!(text.contains("Получатель: person@example.com"));
         assert!(text.contains("`yacli.mail.send`"));
         assert!(text.contains("resource://yacli/skill/yacli-send-file-by-mail"));
+    }
+
+    #[test]
+    fn send_link_by_mail_prompt_mentions_send_link_tool() {
+        let prompt = get_prompt(json!({
+            "name": "send-link-by-mail",
+            "arguments": {
+                "to": "person@example.com",
+                "subject": "Материалы",
+                "source_path": "./archive.zip",
+                "disk_path": "disk:/docs/archive.zip"
+            }
+        }))
+        .expect("prompt");
+
+        let text = prompt["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(text.contains("Локальный файл: ./archive.zip"));
+        assert!(text.contains("Путь на Диске: disk:/docs/archive.zip"));
+        assert!(text.contains("`yacli.mail.send_link`"));
+        assert!(text.contains("resource://yacli/skill/yacli-send-link-by-mail"));
+    }
+
+    #[test]
+    fn publish_file_link_prompt_mentions_upload_link_tool() {
+        let prompt = get_prompt(json!({
+            "name": "publish-file-link",
+            "arguments": {
+                "source_path": "./archive.zip",
+                "disk_path": "disk:/docs/archive.zip"
+            }
+        }))
+        .expect("prompt");
+
+        let text = prompt["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(text.contains("Локальный файл: ./archive.zip"));
+        assert!(text.contains("Путь на Диске: disk:/docs/archive.zip"));
+        assert!(text.contains("`yacli.disk.upload_link`"));
+        assert!(text.contains("resource://yacli/skill/yacli-publish-file-link"));
+    }
+
+    #[test]
+    fn revoke_public_link_prompt_mentions_unpublish_tool() {
+        let prompt = get_prompt(json!({
+            "name": "revoke-public-link",
+            "arguments": {
+                "path": "disk:/docs/archive.zip"
+            }
+        }))
+        .expect("prompt");
+
+        let text = prompt["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(text.contains("Путь на Диске: disk:/docs/archive.zip"));
+        assert!(text.contains("`yacli.disk.unpublish`"));
+        assert!(text.contains("resource://yacli/skill/yacli-revoke-public-link"));
     }
 
     #[test]

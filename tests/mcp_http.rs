@@ -27,43 +27,54 @@ impl TestHttpServer {
     }
 
     fn spawn_with_args_envs(args: &[&str], envs: &[(&str, &str)]) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let addr = listener.local_addr().expect("local addr").to_string();
-        drop(listener);
+        let mut last_stderr = String::new();
+        for _attempt in 0..10 {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            let addr = listener.local_addr().expect("local addr").to_string();
+            drop(listener);
 
-        let mut command = Command::new(cargo_bin("yacli"));
-        command
-            .args(["mcp", "--transport", "http", "--listen", &addr])
-            .env("YACLI_SECRET_BACKEND", "file")
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        for (key, value) in envs {
-            command.env(key, value);
-        }
-        let mut child = command.spawn().expect("spawn yacli mcp http");
+            let mut command = Command::new(cargo_bin("yacli"));
+            command
+                .args(["mcp", "--transport", "http", "--listen", &addr])
+                .env("YACLI_SECRET_BACKEND", "file")
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped());
+            for (key, value) in envs {
+                command.env(key, value);
+            }
+            let mut child = command.spawn().expect("spawn yacli mcp http");
 
-        for _ in 0..200 {
-            if let Some(status) = child.try_wait().expect("poll child status") {
-                let mut stderr = String::new();
-                if let Some(mut pipe) = child.stderr.take() {
-                    let _ = pipe.read_to_string(&mut stderr);
+            for _ in 0..800 {
+                if let Some(status) = child.try_wait().expect("poll child status") {
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = child.stderr.take() {
+                        let _ = pipe.read_to_string(&mut stderr);
+                    }
+                    if stderr.contains("Address already in use") {
+                        break;
+                    }
+                    panic!("HTTP MCP server exited early with {status}: {stderr}");
                 }
-                panic!("HTTP MCP server exited early with {status}: {stderr}");
+                if http_transport_ready(&addr) {
+                    return Self { child, addr };
+                }
+                thread::sleep(Duration::from_millis(50));
             }
-            if http_transport_ready(&addr) {
-                return Self { child, addr };
+
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
             }
-            thread::sleep(Duration::from_millis(50));
+            let _ = child.kill();
+            let _ = child.wait();
+            last_stderr = stderr.clone();
+            if !stderr.contains("Address already in use") && !stderr.is_empty() {
+                panic!("HTTP MCP server did not start at {addr}. stderr: {stderr}");
+            }
         }
 
-        let mut stderr = String::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            let _ = pipe.read_to_string(&mut stderr);
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-        panic!("HTTP MCP server did not start at {addr}. stderr: {stderr}");
+        panic!("HTTP MCP server did not become ready after retries. last stderr: {last_stderr}");
     }
 
     fn url(&self) -> String {
@@ -383,6 +394,21 @@ fn mcp_http_initialize_returns_session_header_and_supports_follow_up_requests() 
         prompts
             .iter()
             .any(|prompt| prompt["name"] == "send-file-by-mail")
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "send-link-by-mail")
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "publish-file-link")
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt["name"] == "revoke-public-link")
     );
     assert!(
         prompts
@@ -785,6 +811,11 @@ client_id = "client-123"
         .as_array()
         .expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.send"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.mail.send_link")
+    );
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.reply"));
     assert!(
         tools
@@ -854,6 +885,22 @@ client_id = "client-123"
         send_tool["inputSchema"]["properties"]["attachments"]["type"],
         "array"
     );
+    assert_eq!(
+        send_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
+    let send_link_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.send_link")
+        .expect("send-link tool");
+    assert_eq!(
+        send_link_tool["inputSchema"]["required"],
+        json!(["to", "subject", "source_path", "disk_path"])
+    );
+    assert_eq!(
+        send_link_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
     let invite_tool = tools
         .iter()
         .find(|tool| tool["name"] == "yacli.mail.invite.inspect")
@@ -866,6 +913,348 @@ client_id = "client-123"
     assert_eq!(
         invite_create_tool["inputSchema"]["required"],
         json!(["uid"])
+    );
+    let calendar_create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.calendar.create")
+        .expect("calendar create tool");
+    assert_eq!(
+        calendar_create_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
+}
+
+#[test]
+fn mcp_http_mail_send_dry_run_reviews_message_without_network() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let attachment_path = temp.path().join("invoice.txt");
+    std::fs::write(&attachment_path, "invoice body").expect("attachment");
+    write_mock_mail_account(temp.path());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("config dir"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    assert!(initialize.status().is_success());
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let send = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.send",
+                "arguments": {
+                    "account": "mock",
+                    "to": "person@example.com",
+                    "subject": "Hello",
+                    "text": "Body",
+                    "attachments": [attachment_path.display().to_string()],
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(send.status().is_success());
+    let payload: Value = send.json().expect("tools/call json");
+    let structured = &payload["result"]["structuredContent"];
+    assert_eq!(structured["dry_run"], true);
+    assert_eq!(structured["review"]["attachment_count"], 1);
+    assert_eq!(
+        structured["review"]["attachments"][0]["filename"],
+        "invoice.txt"
+    );
+    assert_eq!(structured["review"]["sent"]["body_kind"], "multipart_mixed");
+}
+
+#[test]
+fn mcp_http_mail_send_link_dry_run_reviews_upload_publish_and_mail_without_network() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_path = temp.path().join("archive.zip");
+    std::fs::write(&source_path, "archive body").expect("source");
+    write_accounts_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+credential_ref = "store:mail"
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "https://cloud-api.yandex.net"
+credential_ref = "store:disk"
+"#,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("config dir"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.send_link",
+                "arguments": {
+                    "account": "mock",
+                    "to": "person@example.com",
+                    "subject": "Материалы",
+                    "text": "Отправляю ссылку",
+                    "source_path": source_path.display().to_string(),
+                    "disk_path": "disk:/docs/archive.zip",
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    let structured = &payload["result"]["structuredContent"];
+    assert_eq!(structured["dry_run"], true);
+    assert_eq!(
+        structured["review"]["upload"]["remote_path"],
+        "disk:/docs/archive.zip"
+    );
+    assert_eq!(
+        structured["review"]["link_placeholder"],
+        "<публичная ссылка на файл>"
+    );
+    assert_eq!(
+        structured["review"]["mail_review"]["sent"]["subject"],
+        "Материалы"
+    );
+}
+
+#[test]
+fn mcp_http_mail_send_dry_run_recommends_send_link_for_oversized_attachment() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let attachment_path = temp.path().join("archive.zip");
+    std::fs::write(&attachment_path, vec![b'x'; 20 * 1024 * 1024]).expect("attachment");
+    write_accounts_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+credential_ref = "store:mail"
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "https://cloud-api.yandex.net"
+"#,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("config dir"),
+    )]);
+    let client = client();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    assert!(initialize.status().is_success());
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let send = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.mail.send",
+                "arguments": {
+                    "account": "mock",
+                    "to": "person@example.com",
+                    "subject": "Большой архив",
+                    "text": "Материалы во вложении",
+                    "attachments": [attachment_path.display().to_string()],
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(send.status().is_success());
+    let payload: Value = send.json().expect("tools/call json");
+    let structured = &payload["result"]["structuredContent"];
+    assert_eq!(
+        structured["review"]["delivery_posture"],
+        "send_link_recommended"
+    );
+    assert_eq!(
+        structured["review"]["remediation"]["workflow"],
+        "send-link-by-mail"
+    );
+    assert_eq!(
+        structured["review"]["remediation"]["suggested_disk_path"],
+        "disk:/uploads/archive.zip"
     );
 }
 
@@ -1501,6 +1890,169 @@ END:VCALENDAR]]></c:calendar-data>
 }
 
 #[test]
+fn mcp_http_calendar_create_dry_run_reviews_event_without_network_write() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut caldav = Server::new();
+
+    write_mock_calendar_account(temp.path(), &caldav.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.calendar]
+kind = "app_password"
+secret = "calendar-secret"
+"#,
+    );
+
+    let auth = basic_auth_header("me@yandex.ru", "calendar-secret");
+
+    let _principal = caldav
+        .mock("PROPFIND", "/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "0")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:current-user-principal>
+          <d:href>/principals/users/me@yandex.ru/</d:href>
+        </d:current-user-principal>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let _home = caldav
+        .mock("PROPFIND", "/principals/users/me@yandex.ru/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "0")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/principals/users/me@yandex.ru/</d:href>
+    <d:propstat>
+      <d:prop>
+        <c:calendar-home-set>
+          <d:href>/calendars/me@yandex.ru/</d:href>
+        </c:calendar-home-set>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let _collections = caldav
+        .mock("PROPFIND", "/calendars/me@yandex.ru/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "1")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/me@yandex.ru/default/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:displayname>Личный</d:displayname>
+        <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": [APP_RESOURCE_MIME_TYPE]
+                        }
+                    }
+                },
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let create = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.calendar.create",
+                "arguments": {
+                    "account": "mock",
+                    "summary": "Синк команды",
+                    "start": "2026-03-12T09:00:00Z",
+                    "end": "2026-03-12T10:00:00Z",
+                    "location": "Meet",
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let create_payload: Value = create.json().expect("create json");
+    assert_eq!(
+        create_payload["result"]["structuredContent"]["calendar"]["id"],
+        "default"
+    );
+    assert_eq!(
+        create_payload["result"]["structuredContent"]["dry_run"],
+        true
+    );
+    assert_eq!(
+        create_payload["result"]["structuredContent"]["review"]["summary"],
+        "Синк команды"
+    );
+    assert_eq!(
+        create_payload["result"]["structuredContent"]["review"]["status"],
+        "CONFIRMED"
+    );
+}
+
+#[test]
 fn mcp_http_exposes_disk_write_tools_and_executes_mkdir_upload() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut disk = Server::new();
@@ -1665,6 +2217,38 @@ client_id = "client-123"
         .expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.disk.mkdir"));
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.disk.upload"));
+    let disk_upload_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.disk.upload")
+        .expect("disk upload tool");
+    assert_eq!(
+        disk_upload_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
+    let disk_publish_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.disk.publish")
+        .expect("disk publish tool");
+    assert_eq!(
+        disk_publish_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
+    let disk_unpublish_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.disk.unpublish")
+        .expect("disk unpublish tool");
+    assert_eq!(
+        disk_unpublish_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
+    let disk_upload_link_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.disk.upload_link")
+        .expect("disk upload-link tool");
+    assert_eq!(
+        disk_upload_link_tool["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
 
     let mkdir = post_json(
         &client,
@@ -1717,6 +2301,949 @@ client_id = "client-123"
     assert_eq!(
         upload_payload["result"]["structuredContent"]["upload"]["bytes_written"],
         10
+    );
+
+    let activity_catalog = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/activity"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(activity_catalog.status().is_success());
+    let activity_catalog_payload: Value = activity_catalog.json().expect("activity catalog json");
+    let activity_catalog_contents = activity_catalog_payload["result"]["contents"]
+        .as_array()
+        .expect("activity catalog contents");
+    let activity_catalog_json: Value = serde_json::from_str(
+        activity_catalog_contents[0]["text"]
+            .as_str()
+            .expect("activity catalog text"),
+    )
+    .expect("activity catalog payload");
+    let activity_items = activity_catalog_json["items"]
+        .as_array()
+        .expect("activity items");
+    assert_eq!(activity_items.len(), 2);
+    assert_eq!(activity_items[0]["operation"], "disk.upload");
+    assert_eq!(activity_items[0]["source"], "mcp");
+    assert_eq!(activity_items[1]["operation"], "disk.mkdir");
+    assert_eq!(activity_items[1]["source"], "mcp");
+
+    let activity_id = activity_items[0]["id"].as_str().expect("activity id");
+    let activity_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "resources/read",
+            "params": {
+                "uri": format!("resource://yacli/activity/{activity_id}")
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(activity_resource.status().is_success());
+    let activity_payload: Value = activity_resource.json().expect("activity detail json");
+    let activity_contents = activity_payload["result"]["contents"]
+        .as_array()
+        .expect("activity detail contents");
+    let activity_json: Value = serde_json::from_str(
+        activity_contents[0]["text"]
+            .as_str()
+            .expect("activity detail text"),
+    )
+    .expect("activity detail payload");
+    assert_eq!(activity_json["id"], activity_id);
+    assert_eq!(activity_json["operation"], "disk.upload");
+    assert_eq!(activity_json["source"], "mcp");
+    assert!(
+        activity_json["replay_command"]
+            .as_str()
+            .expect("replay command")
+            .contains("--dry-run")
+    );
+}
+
+#[test]
+fn mcp_http_exposes_disk_download_tool_and_downloads_private_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut provider = Server::new();
+    let body = b"%PDF-1.4\nprivate pdf\n";
+    let output_path = temp.path().join("downloads").join("guide.pdf");
+
+    write_accounts_file(
+        temp.path(),
+        &format!(
+            r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "{}"
+credential_ref = "store:disk"
+"#,
+            provider.url()
+        ),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.read"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata = provider
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/guide.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "name": "guide.pdf",
+  "path": "disk:/docs/guide.pdf",
+  "type": "file",
+  "size": {},
+  "mime_type": "application/pdf",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}}"#,
+            body.len()
+        ))
+        .create();
+
+    let _ticket = provider
+        .mock("GET", "/v1/disk/resources/download")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/guide.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "href": "{}/download/private-guide.pdf",
+  "method": "GET"
+}}"#,
+            provider.url()
+        ))
+        .create();
+
+    let _download = provider
+        .mock("GET", "/download/private-guide.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body(body.as_slice())
+        .create();
+
+    let config_dir = temp.path().to_str().expect("utf8 temp path").to_string();
+    let server = TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir)]);
+    let client = reqwest::blocking::Client::new();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let tools_list = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+        Some(&session_id),
+        None,
+    );
+    let tools_payload: Value = tools_list.json().expect("tools/list json");
+    let tools = tools_payload["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.disk.download")
+    );
+
+    let download = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.download",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/guide.pdf",
+                    "output_path": output_path.to_str().expect("utf8 path")
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let download_payload: Value = download.json().expect("download json");
+    assert_eq!(
+        download_payload["result"]["structuredContent"]["resource"]["resource_type"],
+        "file"
+    );
+    assert_eq!(
+        download_payload["result"]["structuredContent"]["download"]["bytes_written"],
+        body.len()
+    );
+    assert_eq!(
+        std::fs::read(&output_path).expect("downloaded file"),
+        body.as_slice()
+    );
+}
+
+#[test]
+fn mcp_http_exposes_disk_publish_tool_and_returns_public_link() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut provider = Server::new();
+
+    write_mock_disk_account(temp.path(), &provider.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _publish = provider
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata = provider
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .create();
+
+    let config_dir = temp.path().to_str().expect("utf8 temp path").to_string();
+    let server = TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir)]);
+    let client = reqwest::blocking::Client::new();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let tools_list = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+        Some(&session_id),
+        None,
+    );
+    let tools_payload: Value = tools_list.json().expect("tools/list json");
+    let tools = tools_payload["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.disk.publish")
+    );
+
+    let publish = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.publish",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/report.pdf"
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let publish_payload: Value = publish.json().expect("publish json");
+    assert_eq!(
+        publish_payload["result"]["structuredContent"]["resource"]["public_url"],
+        "https://disk.yandex.ru/i/public-report"
+    );
+}
+
+#[test]
+fn mcp_http_exposes_disk_unpublish_tool_and_revokes_public_link() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut provider = Server::new();
+
+    write_mock_disk_account(temp.path(), &provider.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata_before = provider
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let _unpublish = provider
+        .mock("PUT", "/v1/disk/resources/unpublish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata_after = provider
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 20
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let config_dir = temp.path().to_str().expect("utf8 temp path").to_string();
+    let server = TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir)]);
+    let client = reqwest::blocking::Client::new();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let tools_list = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+        Some(&session_id),
+        None,
+    );
+    let tools_payload: Value = tools_list.json().expect("tools/list json");
+    let tools = tools_payload["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.disk.unpublish")
+    );
+
+    let unpublish = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.unpublish",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/report.pdf"
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let unpublish_payload: Value = unpublish.json().expect("unpublish json");
+    assert_eq!(
+        unpublish_payload["result"]["structuredContent"]["result"]["was_public"],
+        true
+    );
+    assert_eq!(
+        unpublish_payload["result"]["structuredContent"]["result"]["revoked_public_url"],
+        "https://disk.yandex.ru/i/public-report"
+    );
+}
+
+#[test]
+fn mcp_http_disk_publish_dry_run_reviews_public_link_without_network_write() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut provider = Server::new();
+
+    write_mock_disk_account(temp.path(), &provider.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata = provider
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let config_dir = temp.path().to_str().expect("utf8 temp path").to_string();
+    let server = TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir)]);
+    let client = reqwest::blocking::Client::new();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let publish = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.publish",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/report.pdf",
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let payload: Value = publish.json().expect("publish json");
+    assert_eq!(payload["result"]["structuredContent"]["dry_run"], true);
+    assert_eq!(
+        payload["result"]["structuredContent"]["review"]["current_public_url"],
+        "https://disk.yandex.ru/i/public-report"
+    );
+}
+
+#[test]
+fn mcp_http_disk_unpublish_dry_run_reviews_public_link_without_network_write() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut provider = Server::new();
+
+    write_mock_disk_account(temp.path(), &provider.url());
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata = provider
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let config_dir = temp.path().to_str().expect("utf8 temp path").to_string();
+    let server = TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir)]);
+    let client = reqwest::blocking::Client::new();
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "http-test", "version": "1.0.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let unpublish = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.unpublish",
+                "arguments": {
+                    "account": "mock",
+                    "path": "disk:/docs/report.pdf",
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let payload: Value = unpublish.json().expect("unpublish json");
+    assert_eq!(payload["result"]["structuredContent"]["dry_run"], true);
+    assert_eq!(
+        payload["result"]["structuredContent"]["review"]["current_public_url"],
+        "https://disk.yandex.ru/i/public-report"
+    );
+}
+
+#[test]
+fn mcp_http_disk_upload_dry_run_reviews_file_without_network_write() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_path = temp.path().join("note.txt");
+    std::fs::write(&source_path, b"hello disk").expect("source file");
+
+    write_mock_disk_account(temp.path(), "https://cloud-api.yandex.net");
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": [APP_RESOURCE_MIME_TYPE]
+                        }
+                    }
+                },
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let upload = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.upload",
+                "arguments": {
+                    "account": "mock",
+                    "source": source_path.to_str().expect("utf8 path"),
+                    "path": "disk:/docs/note.txt",
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let payload: Value = upload.json().expect("upload json");
+    assert_eq!(payload["result"]["structuredContent"]["dry_run"], true);
+    assert_eq!(
+        payload["result"]["structuredContent"]["upload"]["remote_path"],
+        "disk:/docs/note.txt"
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["upload"]["bytes_written"],
+        10
+    );
+}
+
+#[test]
+fn mcp_http_disk_upload_link_dry_run_reviews_upload_and_publish_without_network_write() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_path = temp.path().join("note.txt");
+    std::fs::write(&source_path, b"hello disk").expect("source file");
+
+    write_mock_disk_account(temp.path(), "https://cloud-api.yandex.net");
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let server = TestHttpServer::spawn_with_envs(&[(
+        "YACLI_CONFIG_DIR",
+        temp.path().to_str().expect("utf8 path"),
+    )]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": [APP_RESOURCE_MIME_TYPE]
+                        }
+                    }
+                },
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("header string")
+        .to_string();
+
+    let upload = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.disk.upload_link",
+                "arguments": {
+                    "account": "mock",
+                    "source": source_path.to_str().expect("utf8 path"),
+                    "path": "disk:/docs/note.txt",
+                    "dry_run": true
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    let payload: Value = upload.json().expect("upload-link json");
+    assert_eq!(payload["result"]["structuredContent"]["dry_run"], true);
+    assert_eq!(
+        payload["result"]["structuredContent"]["review"]["upload"]["remote_path"],
+        "disk:/docs/note.txt"
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["review"]["publish_path"],
+        "disk:/docs/note.txt"
     );
 }
 
@@ -2123,6 +3650,7 @@ fn mcp_http_accepts_batch_requests_after_initialize() {
 #[test]
 fn mcp_http_lists_resource_templates_and_reads_templated_resources() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir().expect("home tempdir");
     write_accounts_file(
         temp.path(),
         r#"
@@ -2152,7 +3680,9 @@ rest_base_url = "https://cloud-api.yandex.net"
 "#,
     );
     let config_dir = temp.path().display().to_string();
-    let server = TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir)]);
+    let home_dir = home.path().display().to_string();
+    let server =
+        TestHttpServer::spawn_with_envs(&[("YACLI_CONFIG_DIR", &config_dir), ("HOME", &home_dir)]);
     let client = client();
 
     let initialize = post_json(
@@ -2212,6 +3742,49 @@ rest_base_url = "https://cloud-api.yandex.net"
             .iter()
             .any(|template| template["uriTemplate"] == "resource://yacli/skill/{skill}")
     );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/workflow/{workflow}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/activity/{activity}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/home/{account}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/home{?goal}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/home/{account}{?goal}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/next-actions{?goal}")
+    );
+    assert!(resource_templates.iter().any(
+        |template| template["uriTemplate"] == "resource://yacli/next-actions/{account}{?goal}"
+    ));
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/onboarding{?goal}")
+    );
+    assert!(
+        resource_templates
+            .iter()
+            .any(|template| template["uriTemplate"] == "resource://yacli/doctor{?goal}")
+    );
 
     let account_resource = post_json(
         &client,
@@ -2264,7 +3837,7 @@ rest_base_url = "https://cloud-api.yandex.net"
             .expect("skills catalog text"),
     )
     .expect("skills catalog payload");
-    assert_eq!(skills_catalog_payload["count"], 10);
+    assert_eq!(skills_catalog_payload["count"], 13);
 
     let skill_resource = post_json(
         &client,
@@ -2289,6 +3862,406 @@ rest_base_url = "https://cloud-api.yandex.net"
     let skill_text = skill_contents[0]["text"].as_str().expect("skill text");
     assert!(skill_text.contains("# yacli mail"));
     assert!(skill_text.contains("yacli mail send"));
+
+    let workflow_catalog = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/workflows"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(workflow_catalog.status().is_success());
+    let workflow_catalog_payload: Value = workflow_catalog.json().expect("workflow catalog json");
+    let workflow_catalog_contents = workflow_catalog_payload["result"]["contents"]
+        .as_array()
+        .expect("workflow catalog contents");
+    let workflow_catalog_json: Value = serde_json::from_str(
+        workflow_catalog_contents[0]["text"]
+            .as_str()
+            .expect("workflow catalog text"),
+    )
+    .expect("workflow catalog payload");
+    assert!(
+        workflow_catalog_json["workflows"]
+            .as_array()
+            .expect("workflow items")
+            .iter()
+            .any(|item| item["id"] == "send-file-by-mail")
+    );
+
+    let workflow_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/workflow/attachment-to-disk"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(workflow_resource.status().is_success());
+    let workflow_payload: Value = workflow_resource.json().expect("workflow detail json");
+    let workflow_contents = workflow_payload["result"]["contents"]
+        .as_array()
+        .expect("workflow contents");
+    let workflow_json: Value = serde_json::from_str(
+        workflow_contents[0]["text"]
+            .as_str()
+            .expect("workflow text"),
+    )
+    .expect("workflow detail payload");
+    assert_eq!(workflow_json["id"], "attachment-to-disk");
+    assert_eq!(workflow_json["prompt_name"], "attachment-to-disk");
+
+    let activity_catalog = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/activity"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(activity_catalog.status().is_success());
+    let activity_catalog_payload: Value = activity_catalog.json().expect("activity catalog json");
+    let activity_catalog_contents = activity_catalog_payload["result"]["contents"]
+        .as_array()
+        .expect("activity catalog contents");
+    let activity_catalog_json: Value = serde_json::from_str(
+        activity_catalog_contents[0]["text"]
+            .as_str()
+            .expect("activity catalog text"),
+    )
+    .expect("activity catalog payload");
+    assert_eq!(activity_catalog_json["count"], 0);
+
+    let onboarding_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/onboarding"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(onboarding_resource.status().is_success());
+    let onboarding_resource_payload: Value = onboarding_resource
+        .json()
+        .expect("onboarding resource json");
+    let onboarding_contents = onboarding_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("onboarding contents");
+    let onboarding_json: Value = serde_json::from_str(
+        onboarding_contents[0]["text"]
+            .as_str()
+            .expect("onboarding text"),
+    )
+    .expect("onboarding payload");
+    assert_eq!(onboarding_json["current_account"], "personal");
+    assert!(
+        onboarding_json["checks"]
+            .as_array()
+            .expect("onboarding checks")
+            .iter()
+            .any(|item| item["id"] == "workflow_hub")
+    );
+    assert!(
+        onboarding_json["checks"]
+            .as_array()
+            .expect("onboarding checks")
+            .iter()
+            .any(|item| item["id"] == "mcp_install")
+    );
+
+    let doctor_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/doctor"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(doctor_resource.status().is_success());
+    let doctor_resource_payload: Value = doctor_resource.json().expect("doctor resource json");
+    let doctor_contents = doctor_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("doctor contents");
+    let doctor_json: Value =
+        serde_json::from_str(doctor_contents[0]["text"].as_str().expect("doctor text"))
+            .expect("doctor payload");
+    assert_eq!(doctor_json["current_account"], "personal");
+    assert!(
+        doctor_json["checks"]
+            .as_array()
+            .expect("doctor checks")
+            .iter()
+            .any(|item| item["id"] == "secret_backend")
+    );
+    assert!(
+        doctor_json["checks"]
+            .as_array()
+            .expect("doctor checks")
+            .iter()
+            .any(|item| item["id"] == "mcp_install")
+    );
+
+    let home_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/home"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(home_resource.status().is_success());
+    let home_resource_payload: Value = home_resource.json().expect("home resource json");
+    let home_contents = home_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("home contents");
+    let home_json: Value =
+        serde_json::from_str(home_contents[0]["text"].as_str().expect("home text"))
+            .expect("home payload");
+    assert_eq!(home_json["current_account"], "personal");
+    assert_eq!(home_json["workflow_count"], 8);
+    assert_eq!(home_json["onboarding"]["current_account"], "personal");
+    assert_eq!(home_json["doctor"]["current_account"], "personal");
+
+    let templated_home_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/home/personal"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(templated_home_resource.status().is_success());
+    let templated_home_payload: Value = templated_home_resource
+        .json()
+        .expect("templated home resource json");
+    let templated_home_contents = templated_home_payload["result"]["contents"]
+        .as_array()
+        .expect("templated home contents");
+    let templated_home_json: Value = serde_json::from_str(
+        templated_home_contents[0]["text"]
+            .as_str()
+            .expect("templated home text"),
+    )
+    .expect("templated home payload");
+    assert_eq!(templated_home_json["current_account"], "personal");
+    assert_eq!(templated_home_json["doctor"]["current_account"], "personal");
+
+    let next_actions_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/next-actions"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(next_actions_resource.status().is_success());
+    let next_actions_resource_payload: Value = next_actions_resource
+        .json()
+        .expect("next actions resource json");
+    let next_actions_contents = next_actions_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("next actions contents");
+    let next_actions_json: Value = serde_json::from_str(
+        next_actions_contents[0]["text"]
+            .as_str()
+            .expect("next actions text"),
+    )
+    .expect("next actions payload");
+    assert!(
+        next_actions_json["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|item| item["id"] == "mcp_install")
+    );
+
+    let goal_home_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/home/personal?goal=%D0%BE%D1%82%D0%BF%D1%80%D0%B0%D0%B2%D1%8C%20%D1%84%D0%B0%D0%B9%D0%BB%20%D0%BF%D0%BE%20%D0%BF%D0%BE%D1%87%D1%82%D0%B5"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(goal_home_resource.status().is_success());
+    let goal_home_resource_payload: Value =
+        goal_home_resource.json().expect("goal home resource json");
+    let goal_home_contents = goal_home_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("goal home contents");
+    let goal_home_json: Value = serde_json::from_str(
+        goal_home_contents[0]["text"]
+            .as_str()
+            .expect("goal home text"),
+    )
+    .expect("goal home payload");
+    assert_eq!(goal_home_json["goal"], "отправь файл по почте");
+    assert_eq!(
+        goal_home_json["goal_route"]["best_match"]["workflow"]["id"],
+        "send-file-by-mail"
+    );
+
+    let goal_next_actions_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 15,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/next-actions?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(goal_next_actions_resource.status().is_success());
+    let goal_next_actions_resource_payload: Value = goal_next_actions_resource
+        .json()
+        .expect("goal next actions resource json");
+    let goal_next_actions_contents = goal_next_actions_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("goal next actions contents");
+    let goal_next_actions_json: Value = serde_json::from_str(
+        goal_next_actions_contents[0]["text"]
+            .as_str()
+            .expect("goal next actions text"),
+    )
+    .expect("goal next actions payload");
+    assert_eq!(goal_next_actions_json["goal"], "найди приглашение");
+    assert_eq!(
+        goal_next_actions_json["goal_route"]["best_match"]["workflow"]["id"],
+        "invite-to-calendar"
+    );
+    assert_eq!(goal_next_actions_json["actions"][0]["source"], "goal");
+
+    let goal_onboarding_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 16,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/onboarding?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(goal_onboarding_resource.status().is_success());
+    let goal_onboarding_resource_payload: Value = goal_onboarding_resource
+        .json()
+        .expect("goal onboarding resource json");
+    let goal_onboarding_contents = goal_onboarding_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("goal onboarding contents");
+    let goal_onboarding_json: Value = serde_json::from_str(
+        goal_onboarding_contents[0]["text"]
+            .as_str()
+            .expect("goal onboarding text"),
+    )
+    .expect("goal onboarding payload");
+    assert_eq!(goal_onboarding_json["goal"], "найди приглашение");
+    assert_eq!(
+        goal_onboarding_json["goal_route"]["best_match"]["workflow"]["id"],
+        "invite-to-calendar"
+    );
+
+    let goal_doctor_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 17,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/doctor?goal=%D0%BD%D0%B0%D0%B9%D0%B4%D0%B8%20%D0%BF%D1%80%D0%B8%D0%B3%D0%BB%D0%B0%D1%88%D0%B5%D0%BD%D0%B8%D0%B5"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(goal_doctor_resource.status().is_success());
+    let goal_doctor_resource_payload: Value = goal_doctor_resource
+        .json()
+        .expect("goal doctor resource json");
+    let goal_doctor_contents = goal_doctor_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("goal doctor contents");
+    let goal_doctor_json: Value = serde_json::from_str(
+        goal_doctor_contents[0]["text"]
+            .as_str()
+            .expect("goal doctor text"),
+    )
+    .expect("goal doctor payload");
+    assert_eq!(goal_doctor_json["goal"], "найди приглашение");
+    assert_eq!(
+        goal_doctor_json["goal_route"]["remediation"]["status"],
+        "needs_setup"
+    );
+    assert!(
+        goal_doctor_json["focus_checks"]
+            .as_array()
+            .expect("goal doctor focus checks")
+            .iter()
+            .any(|item| item["id"] == "mail" || item["id"] == "calendar")
+    );
 }
 
 #[test]
@@ -2411,4 +4384,192 @@ rest_base_url = "https://cloud-api.yandex.net"
         notification["params"]["uri"],
         "resource://yacli/account/personal"
     );
+}
+
+#[test]
+fn mcp_http_goal_route_tool_matches_invite_workflow_for_russian_goal() {
+    let server = TestHttpServer::spawn();
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": [APP_RESOURCE_MIME_TYPE]
+                        }
+                    }
+                },
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    assert!(initialize.status().is_success());
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.goal.route",
+                "arguments": {
+                    "goal": "найди приглашение в письме и добавь встречу в календарь team"
+                }
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    assert_eq!(
+        payload["result"]["structuredContent"]["best_match"]["workflow"]["id"],
+        "invite-to-calendar"
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["hints"]["calendar"],
+        "team"
+    );
+    assert_eq!(
+        payload["result"]["structuredContent"]["best_match"]["route"]["tool_arguments"]["calendar"],
+        "team"
+    );
+    assert!(payload["result"]["structuredContent"]["remediation"].is_object());
+}
+
+#[test]
+fn mcp_http_doctor_apply_safe_tool_installs_detected_claude_desktop() {
+    let config_dir = tempfile::tempdir().expect("config tempdir");
+    let home_dir = tempfile::tempdir().expect("home tempdir");
+    let expected_config = if cfg!(target_os = "macos") {
+        home_dir
+            .path()
+            .join("Library/Application Support/Claude/claude_desktop_config.json")
+    } else if cfg!(target_os = "windows") {
+        home_dir
+            .path()
+            .join("AppData/Roaming/Claude/claude_desktop_config.json")
+    } else {
+        home_dir
+            .path()
+            .join(".config/Claude/claude_desktop_config.json")
+    };
+    std::fs::create_dir_all(expected_config.parent().expect("parent")).expect("create parent");
+
+    let server = TestHttpServer::spawn_with_envs(&[
+        (
+            "YACLI_CONFIG_DIR",
+            config_dir.path().to_str().expect("config dir"),
+        ),
+        ("HOME", home_dir.path().to_str().expect("home dir")),
+    ]);
+    let client = client();
+
+    let initialize = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": [APP_RESOURCE_MIME_TYPE]
+                        }
+                    }
+                },
+                "clientInfo": { "name": "http-test", "version": "0.1.0" }
+            }
+        }),
+        None,
+        None,
+    );
+    assert!(initialize.status().is_success());
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .expect("session header")
+        .to_str()
+        .expect("session id")
+        .to_string();
+
+    let response = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "yacli.doctor.apply_safe",
+                "arguments": {}
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(response.status().is_success());
+    let payload: Value = response.json().expect("tools/call json");
+    assert_eq!(payload["result"]["structuredContent"]["status"], "partial");
+    assert!(
+        payload["result"]["structuredContent"]["doctor_after"]["mcp_clients"]
+            .as_array()
+            .expect("mcp clients")
+            .iter()
+            .any(|item| item["client"] == "claude-desktop" && item["status"] == "installed")
+    );
+    let activity_resource = post_json(
+        &client,
+        &server.url(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "resources/read",
+            "params": {
+                "uri": "resource://yacli/activity"
+            }
+        }),
+        Some(&session_id),
+        None,
+    );
+    assert!(activity_resource.status().is_success());
+    let activity_resource_payload: Value = activity_resource.json().expect("activity resource");
+    let activity_contents = activity_resource_payload["result"]["contents"]
+        .as_array()
+        .expect("activity contents");
+    let activity_json: Value = serde_json::from_str(
+        activity_contents[0]["text"]
+            .as_str()
+            .expect("activity text"),
+    )
+    .expect("activity payload");
+    assert_eq!(activity_json["items"][0]["operation"], "doctor.apply_safe");
+    assert_eq!(activity_json["items"][0]["source"], "mcp");
+    assert_eq!(
+        activity_json["items"][0]["replay_command"],
+        "yacli doctor --apply-safe"
+    );
+    assert!(expected_config.exists());
 }

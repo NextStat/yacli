@@ -20,6 +20,7 @@ use crate::error::{Result, YacliError};
 
 const IMAP_TIMEOUT_SECS: u64 = 20;
 const SMTP_TIMEOUT_SECS: u64 = 20;
+const SMTP_SAFE_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct MailFolder {
@@ -125,6 +126,37 @@ pub struct SentMail {
     pub subject: String,
     pub message_id: String,
     pub body_kind: String,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct MailAttachmentReview {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
+    pub inline: bool,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct MailSendReview {
+    pub sent: SentMail,
+    pub attachment_count: usize,
+    pub message_bytes: u64,
+    pub delivery_posture: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<MailAttachmentReview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<MailSendRemediation>,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct MailSendRemediation {
+    pub workflow: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_disk_path: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -400,6 +432,7 @@ pub fn send_mail_message(
     request: MailSendRequest,
 ) -> Result<SentMail> {
     let prepared = prepare_mail_submission(auth, request)?;
+    ensure_smtp_safe_submission(&prepared)?;
     let mut session = SmtpSession::connect(smtp_host, smtp_port)?;
     session.read_greeting(smtp_host)?;
     session.ehlo("yacli.nextstat.dev")?;
@@ -420,6 +453,36 @@ pub fn send_mail_message(
     )?;
     let _ = session.quit();
     Ok(prepared.sent)
+}
+
+pub fn review_mail_submission(
+    auth: MailSessionAuth,
+    request: MailSendRequest,
+) -> Result<MailSendReview> {
+    let prepared = prepare_mail_submission(auth, request)?;
+    let remediation = oversized_mail_remediation(&prepared);
+    Ok(MailSendReview {
+        attachment_count: prepared.attachments.len(),
+        message_bytes: prepared.message.len() as u64,
+        delivery_posture: if remediation.is_some() {
+            "send_link_recommended".to_string()
+        } else {
+            "direct_mail".to_string()
+        },
+        attachments: prepared
+            .attachments
+            .iter()
+            .map(|attachment| MailAttachmentReview {
+                filename: attachment.filename.clone(),
+                mime_type: attachment.mime_type.clone(),
+                content_id: attachment.content_id.clone(),
+                inline: attachment.inline,
+                bytes: attachment.content.len() as u64,
+            })
+            .collect(),
+        remediation,
+        sent: prepared.sent,
+    })
 }
 
 pub fn load_mail_attachments(paths: &[PathBuf]) -> Result<Vec<MailAttachmentPayload>> {
@@ -634,6 +697,7 @@ enum MailSmtpAuth {
 #[derive(Debug)]
 struct PreparedMailSubmission {
     auth: MailSmtpAuth,
+    attachments: Vec<MailAttachmentPayload>,
     envelope_from: String,
     envelope_recipients: Vec<String>,
     message: String,
@@ -1329,6 +1393,11 @@ fn prepare_mail_submission(
     let attachments = request.attachments;
     let body = normalize_outgoing_body(request.text, request.html, "mail send")?;
     let message_id = generate_message_id();
+    let body_kind = if attachments.is_empty() {
+        body.body_kind.clone()
+    } else {
+        "multipart_mixed".to_string()
+    };
     let message = build_outgoing_message(OutgoingMessage {
         from: &from,
         to: &to,
@@ -1349,6 +1418,7 @@ fn prepare_mail_submission(
 
     Ok(PreparedMailSubmission {
         auth,
+        attachments,
         envelope_from: from.clone(),
         envelope_recipients,
         message,
@@ -1359,13 +1429,50 @@ fn prepare_mail_submission(
             bcc_count: bcc.len(),
             subject,
             message_id,
-            body_kind: if attachments.is_empty() {
-                body.body_kind
-            } else {
-                "multipart_mixed".to_string()
-            },
+            body_kind,
         },
     })
+}
+
+fn oversized_mail_remediation(prepared: &PreparedMailSubmission) -> Option<MailSendRemediation> {
+    if prepared.attachments.is_empty() || prepared.message.len() <= SMTP_SAFE_MESSAGE_BYTES {
+        return None;
+    }
+
+    let suggested_disk_path = if prepared.attachments.len() == 1 {
+        prepared.attachments[0]
+            .filename
+            .as_deref()
+            .map(|filename| format!("disk:/uploads/{filename}"))
+    } else {
+        None
+    };
+
+    Some(MailSendRemediation {
+        workflow: "send-link-by-mail".to_string(),
+        reason: format!(
+            "Подготовленное письмо весит {} байт и превышает безопасный SMTP-порог {} байт; лучше загрузить файл на Диск и отправить ссылку.",
+            prepared.message.len(),
+            SMTP_SAFE_MESSAGE_BYTES
+        ),
+        suggested_disk_path,
+    })
+}
+
+fn ensure_smtp_safe_submission(prepared: &PreparedMailSubmission) -> Result<()> {
+    if let Some(remediation) = oversized_mail_remediation(prepared) {
+        let suggested_path = remediation
+            .suggested_disk_path
+            .as_deref()
+            .map(|path| format!(" Suggested disk path: `{path}`."))
+            .unwrap_or_default();
+        return Err(YacliError::UnsupportedOperation(format!(
+            "{} Используйте workflow `{}` вместо прямой SMTP-отправки больших вложений.{}",
+            remediation.reason, remediation.workflow, suggested_path
+        )));
+    }
+
+    Ok(())
 }
 
 fn normalize_forward_request(request: MailForwardRequest) -> Result<NormalizedForwardRequest> {
@@ -2733,14 +2840,15 @@ mod tests {
     use super::{
         FetchMetadata, MailAttachmentExportRequest, MailAttachmentPart, MailAttachmentPayload,
         MailAttachmentSelector, MailAttachmentSummary, MailMessage, MailSendRequest,
-        MailSessionAuth, MailThreadHeaders, OutgoingMessage, SmtpSession, build_forward_body,
-        build_message_summary, build_outgoing_message, build_read_message, build_reply_target,
-        build_xoauth2_payload, decode_modified_utf7, encode_modified_utf7,
+        MailSessionAuth, MailThreadHeaders, OutgoingMessage, SMTP_SAFE_MESSAGE_BYTES, SmtpSession,
+        build_forward_body, build_message_summary, build_outgoing_message, build_read_message,
+        build_reply_target, build_xoauth2_payload, decode_modified_utf7, encode_modified_utf7,
         export_attachment_from_message, extract_message_content, inspect_invite_from_message,
         load_mail_attachments, normalize_forward_subject, normalize_reply_subject,
         normalize_search_query, parse_fetch_metadata, parse_imap_token, parse_list_line,
-        parse_search_uids, prepare_mail_submission, quote_imap_string,
-        validate_mail_attachment_export_request, validate_mail_attachment_read_request,
+        parse_search_uids, prepare_mail_submission, quote_imap_string, review_mail_submission,
+        send_mail_message, validate_mail_attachment_export_request,
+        validate_mail_attachment_read_request,
     };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -3297,6 +3405,117 @@ mod tests {
         );
         assert!(prepared.message.contains("Content-ID: <cid-report>"));
         assert!(prepared.message.contains(&STANDARD.encode(b"%PDF-1.4")));
+    }
+
+    #[test]
+    fn review_mail_submission_reports_attachment_review_without_sending() {
+        let review = review_mail_submission(
+            MailSessionAuth::OauthXoauth2 {
+                account: "me@yandex.ru".to_string(),
+                access_token: "token-123".to_string(),
+            },
+            MailSendRequest {
+                to: vec!["person@example.com".to_string()],
+                cc: vec!["team@example.com".to_string()],
+                bcc: vec!["audit@example.com".to_string()],
+                subject: "Forward".to_string(),
+                text: Some("Body".to_string()),
+                html: None,
+                attachments: vec![MailAttachmentPayload {
+                    filename: Some("invoice.pdf".to_string()),
+                    mime_type: "application/pdf".to_string(),
+                    content_id: Some("cid-report".to_string()),
+                    inline: false,
+                    content: b"%PDF-1.4".to_vec(),
+                }],
+                thread_headers: None,
+            },
+        )
+        .expect("review");
+
+        assert_eq!(review.sent.to, vec!["person@example.com"]);
+        assert_eq!(review.sent.cc, vec!["team@example.com"]);
+        assert_eq!(review.sent.bcc_count, 1);
+        assert_eq!(review.sent.body_kind, "multipart_mixed");
+        assert_eq!(review.delivery_posture, "direct_mail");
+        assert_eq!(review.attachment_count, 1);
+        assert!(review.message_bytes > 0);
+        assert!(review.remediation.is_none());
+        assert_eq!(
+            review.attachments[0].filename.as_deref(),
+            Some("invoice.pdf")
+        );
+        assert_eq!(review.attachments[0].bytes, 8);
+    }
+
+    #[test]
+    fn review_mail_submission_recommends_send_link_for_oversized_attachment() {
+        let review = review_mail_submission(
+            MailSessionAuth::OauthXoauth2 {
+                account: "me@yandex.ru".to_string(),
+                access_token: "token-123".to_string(),
+            },
+            MailSendRequest {
+                to: vec!["person@example.com".to_string()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Большой архив".to_string(),
+                text: Some("Материалы во вложении".to_string()),
+                html: None,
+                attachments: vec![MailAttachmentPayload {
+                    filename: Some("archive.zip".to_string()),
+                    mime_type: "application/zip".to_string(),
+                    content_id: None,
+                    inline: false,
+                    content: vec![b'x'; 20 * 1024 * 1024],
+                }],
+                thread_headers: None,
+            },
+        )
+        .expect("review");
+
+        assert_eq!(review.delivery_posture, "send_link_recommended");
+        assert!(review.message_bytes as usize > SMTP_SAFE_MESSAGE_BYTES);
+        let remediation = review.remediation.expect("remediation");
+        assert_eq!(remediation.workflow, "send-link-by-mail");
+        assert_eq!(
+            remediation.suggested_disk_path.as_deref(),
+            Some("disk:/uploads/archive.zip")
+        );
+    }
+
+    #[test]
+    fn send_mail_message_rejects_oversized_attachment_before_smtp_connect() {
+        let error = send_mail_message(
+            "127.0.0.1",
+            9,
+            MailSessionAuth::OauthXoauth2 {
+                account: "me@yandex.ru".to_string(),
+                access_token: "token-123".to_string(),
+            },
+            MailSendRequest {
+                to: vec!["person@example.com".to_string()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Большой архив".to_string(),
+                text: Some("Материалы во вложении".to_string()),
+                html: None,
+                attachments: vec![MailAttachmentPayload {
+                    filename: Some("archive.zip".to_string()),
+                    mime_type: "application/zip".to_string(),
+                    content_id: None,
+                    inline: false,
+                    content: vec![b'x'; 20 * 1024 * 1024],
+                }],
+                thread_headers: None,
+            },
+        )
+        .expect_err("oversized message should be blocked before smtp");
+
+        assert!(
+            error.to_string().contains("send-link-by-mail"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

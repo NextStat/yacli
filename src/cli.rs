@@ -109,8 +109,93 @@ pub enum Command {
         #[arg(value_name = "ПСЕВДОНИМ")]
         name: Option<String>,
     },
+    /// Провести первичную настройку аккаунта и MCP за один проход.
+    Setup {
+        #[arg(value_name = "EMAIL")]
+        email: Option<String>,
+        #[arg(long, value_name = "ПСЕВДОНИМ")]
+        name: Option<String>,
+        #[arg(long, value_name = "ПАРОЛЬ")]
+        calendar_app_password: Option<String>,
+        #[arg(long, value_name = "ПЕРЕМЕННАЯ")]
+        calendar_env_var: Option<String>,
+        #[arg(long = "client", value_enum, value_name = "КЛИЕНТ")]
+        client: Vec<McpClientArg>,
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = McpTransportArg::Stdio,
+            value_name = "ТРАНСПОРТ",
+            help = "Какой транспорт регистрировать при setup"
+        )]
+        mcp_transport: McpTransportArg,
+        #[arg(
+            long,
+            value_name = "URL",
+            help = "URL MCP HTTP сервера, если выбран HTTP transport"
+        )]
+        mcp_url: Option<String>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Не выполнять OAuth login для Почты и Диска"
+        )]
+        skip_login: bool,
+        #[arg(long, default_value_t = false, help = "Не выполнять `mcp install`")]
+        skip_mcp_install: bool,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только собрать план onboarding без реальных изменений"
+        )]
+        plan_only: bool,
+    },
+    /// Показать единый home screen по аккаунту, onboarding, workflows и activity.
+    Home {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, value_name = "ЦЕЛЬ")]
+        goal: Option<String>,
+    },
+    /// Проверить продуктовый health-check: конфиг, секреты, сервисы и readiness workflows.
+    Doctor {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, value_name = "ЦЕЛЬ")]
+        goal: Option<String>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Применить только безопасные локальные remediation-шаги без новых пользовательских данных"
+        )]
+        apply_safe: bool,
+    },
+    /// Показать 3-5 следующих действий с наибольшим продуктовым эффектом.
+    Next {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, value_name = "ЦЕЛЬ")]
+        goal: Option<String>,
+    },
+    /// Маршрутизировать естественную цель в лучший workflow, prompt и MCP tool-path.
+    Goal {
+        #[arg(value_name = "ЗАПРОС")]
+        query: String,
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+    },
     /// Показать все настроенные аккаунты.
     Accounts,
+    /// Показать журнал последних действий и replay-команды.
+    Activity {
+        #[command(subcommand)]
+        action: ActivityCommand,
+    },
+    /// Показать готовые кросс-сервисные workflow yacli.
+    Workflow {
+        #[command(subcommand)]
+        action: WorkflowCommand,
+    },
     /// Сделать аккаунт текущим.
     Use {
         #[arg(value_name = "ALIAS")]
@@ -242,6 +327,31 @@ pub enum McpCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum WorkflowCommand {
+    /// Показать все встроенные workflow.
+    List,
+    /// Показать один workflow с шагами CLI и MCP.
+    Show {
+        #[arg(value_name = "WORKFLOW")]
+        id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ActivityCommand {
+    /// Показать последние действия.
+    List {
+        #[arg(long, default_value_t = 20, value_name = "ЧИСЛО")]
+        limit: usize,
+    },
+    /// Показать одно действие и replay-команду.
+    Show {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum AccountCommand {
     Add {
         name: String,
@@ -330,6 +440,66 @@ pub enum DiskCommand {
         path: String,
         #[arg(long, default_value_t = false)]
         overwrite: bool,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить и показать, что будет загружено, без реального upload"
+        )]
+        dry_run: bool,
+    },
+    /// Загрузить локальный файл на Диск и сразу получить публичную ссылку.
+    UploadLink {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(long, value_name = "ФАЙЛ")]
+        source: PathBuf,
+        #[arg(long, value_name = "ПУТЬ")]
+        path: String,
+        #[arg(long, default_value_t = false)]
+        overwrite: bool,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить и показать, что будет загружено и опубликовано, без реального upload/publish"
+        )]
+        dry_run: bool,
+    },
+    /// Скачать файл из приватного Диска.
+    Download {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(value_name = "ПУТЬ")]
+        path: String,
+        #[arg(long, value_name = "ФАЙЛ")]
+        output: PathBuf,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+    /// Опубликовать приватный файл или папку и получить публичную ссылку.
+    Publish {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(value_name = "ПУТЬ")]
+        path: String,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить и показать, что будет опубликовано, без реального publish"
+        )]
+        dry_run: bool,
+    },
+    /// Отозвать публичную ссылку у приватного файла или папки.
+    Unpublish {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(value_name = "ПУТЬ")]
+        path: String,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить и показать, что будет отозвано, без реального unpublish"
+        )]
+        dry_run: bool,
     },
     /// Показать содержимое папки в приватном Диске.
     List {
@@ -467,6 +637,41 @@ pub enum MailCommand {
         html: Option<String>,
         #[arg(long = "attach", value_name = "ФАЙЛ")]
         attachments: Vec<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить и показать, что будет отправлено, без реальной отправки"
+        )]
+        dry_run: bool,
+    },
+    /// Загрузить файл на Диск, опубликовать ссылку и отправить её письмом.
+    SendLink {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(value_name = "EMAIL")]
+        to: String,
+        #[arg(value_name = "ТЕМА")]
+        subject: String,
+        #[arg(value_name = "ТЕКСТ")]
+        body: Option<String>,
+        #[arg(long, value_name = "EMAIL")]
+        cc: Vec<String>,
+        #[arg(long, value_name = "EMAIL")]
+        bcc: Vec<String>,
+        #[arg(long, value_name = "HTML")]
+        html: Option<String>,
+        #[arg(long, value_name = "ФАЙЛ")]
+        source: PathBuf,
+        #[arg(long, value_name = "ПУТЬ")]
+        path: String,
+        #[arg(long, default_value_t = false)]
+        overwrite: bool,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить upload/publish/send flow без реальных write-действий"
+        )]
+        dry_run: bool,
     },
     /// Работа с вложениями писем.
     Attachment {
@@ -577,6 +782,12 @@ pub enum CalendarCommand {
         description: Option<String>,
         #[arg(long, value_name = "МЕСТО")]
         location: Option<String>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить и показать, что будет создано, без записи в календарь"
+        )]
+        dry_run: bool,
     },
     /// Удалить событие по ID.
     Delete {

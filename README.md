@@ -105,10 +105,7 @@ yacli update --check
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NextStat/yacli/main/scripts/install.sh | sh
-yacli add me@yandex.ru
-yacli login
-yacli login calendar --app-password <пароль>
-yacli mcp install --client claude
+yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude
 ```
 
 После этого у вас сразу будут:
@@ -117,11 +114,17 @@ yacli mcp install --client claude
 - MCP server для Claude, Codex, Gemini и других клиентов;
 - prompts, embedded skills, resources и dashboard для MCP Apps;
 - готовые кросс-сервисные сценарии без клея из скриптов.
+- live onboarding checklist в Unified Home, чтобы добить недостающие шаги без гадания.
+- terminal home screen через `yacli home`, чтобы увидеть onboarding, workflows и последние действия в одном месте.
+- product health-check через `yacli doctor` и `resource://yacli/doctor`, чтобы быстро понять, что ещё мешает readiness.
+- safe remediation через `yacli doctor --apply-safe` и кнопку `Apply safe fixes` в Unified Home, чтобы автоматически закрыть безопасные локальные фиксы.
+- ranked next actions через `yacli next` и `resource://yacli/next-actions`, чтобы сразу видеть самые выгодные следующие шаги.
 
 ### С чего начать
 
 | Если вам нужно | Что делать |
 | --- | --- |
+| **Пройти setup одним проходом** | `yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude` |
 | **Быстро подключить Почту и Диск** | `yacli add` → `yacli login` |
 | **Подключить Календарь** | получить пароль приложения Яндекс ID → `yacli login calendar --app-password <пароль>` |
 | **Поставить MCP в Claude / Codex / Gemini** | `yacli mcp install --client <client>` |
@@ -142,13 +145,17 @@ export YACLI_CALENDAR_APP_PASSWORD='<пароль>'
 yacli login calendar --env-var YACLI_CALENDAR_APP_PASSWORD
 ```
 
-OAuth-токены и пароли приложений хранятся в системном keyring/keychain. Для headless окружений: `export YACLI_SECRET_BACKEND=file`.
+В релизных сборках OAuth-токены и пароли приложений хранятся в системном keyring/keychain. В debug/test-сборках по умолчанию используется `file` backend, чтобы локальная разработка и `cargo test` не спамили keychain prompt-ами. Для явного override: `export YACLI_SECRET_BACKEND=keyring` или `export YACLI_SECRET_BACKEND=file`.
 
 </details>
 
 ### Проверьте, что всё работает
 
 ```bash
+yacli home
+yacli doctor
+yacli doctor --apply-safe
+yacli next
 yacli status
 yacli mail list
 yacli calendar calendars
@@ -190,6 +197,11 @@ yacli mail reply 1353 "Принято, спасибо"
 yacli mail forward 1353 person@example.com "Посмотрите, пожалуйста"
 yacli mail send person@example.com "Синк" "Привет"
 yacli mail send person@example.com "Счёт" "Во вложении файл" --attach ./invoice.pdf
+yacli mail send person@example.com "Счёт" "Во вложении файл" --attach ./invoice.pdf --dry-run
+yacli mail send-link person@example.com "Материалы" "Отправляю ссылку" --source ./archive.zip --path disk:/docs/archive/archive.zip
+yacli mail send-link person@example.com "Материалы" "Отправляю ссылку" --source ./archive.zip --path disk:/docs/archive/archive.zip --dry-run
+yacli disk upload-link --source ./archive.zip --path disk:/docs/archive/archive.zip
+yacli disk upload-link --source ./archive.zip --path disk:/docs/archive/archive.zip --dry-run
 ```
 
 Вложения и приглашения:
@@ -204,6 +216,10 @@ yacli mail invite create-event 1353 --index 1
 - `--folder "Имя папки"` для работы не с INBOX.
 - `--html`, `--cc`, `--bcc` для HTML и копий.
 - `--attach` можно указать несколько раз.
+- `--dry-run` показывает review отправки без реального SMTP-вызова.
+- Если собранное письмо уже слишком тяжёлое для безопасной SMTP-отправки, `mail send --dry-run` честно рекомендует workflow `send-link-by-mail`, а реальный `mail send` блокируется до сетевого шага с той же подсказкой.
+- `mail send-link` — правильный flow для больших файлов: upload на Диск, publish ссылки и письмо со ссылкой в одном шаге.
+- `disk upload-link` — правильный flow, когда нужно просто получить публичную ссылку без отправки письма.
 
 <details>
 <summary>Ещё примеры</summary>
@@ -216,6 +232,7 @@ yacli mail invite inspect 1353 --name invite.ics
 yacli mail invite create-event 1353 --name invite.ics --calendar team --event-index 2
 yacli mail send person@example.com "Счет" "Отправляю счет" --cc boss@example.com
 yacli mail send person@example.com "Счет" "Отправляю счет" --attach ./invoice.pdf --attach ./spec.docx
+yacli mail send-link person@example.com "Материалы" "Отправляю ссылку" --source ./archive.zip --path disk:/docs/archive/archive.zip
 ```
 
 </details>
@@ -227,11 +244,13 @@ yacli calendar calendars
 yacli calendar events
 yacli calendar events 2026-03-14 2026-03-20 --limit 20
 yacli calendar create "Синк команды" 2026-03-14T09:00:00Z 2026-03-14T10:00:00Z
+yacli calendar create "Синк команды" 2026-03-14T09:00:00Z 2026-03-14T10:00:00Z --dry-run
 yacli calendar delete <id>
 ```
 
 - Без дат `events` показывает ближайшие 30 дней.
 - `--calendar <id>` для работы не с default-календарём.
+- `calendar create --dry-run` показывает review события без реального CalDAV PUT.
 
 ### Диск
 
@@ -241,7 +260,39 @@ yacli disk list
 yacli disk list disk:/docs --limit 50
 yacli disk mkdir disk:/docs/archive
 yacli disk upload ./report.pdf disk:/docs/archive/report.pdf
+yacli disk upload ./report.pdf disk:/docs/archive/report.pdf --dry-run
+yacli disk upload-link --source ./report.pdf --path disk:/docs/archive/report.pdf
+yacli disk upload-link --source ./report.pdf --path disk:/docs/archive/report.pdf --dry-run
+yacli disk download disk:/docs/archive/report.pdf --output ./report.pdf
+yacli disk publish disk:/docs/archive/report.pdf
+yacli disk publish disk:/docs/archive/report.pdf --dry-run
+yacli disk unpublish disk:/docs/archive/report.pdf
+yacli disk unpublish disk:/docs/archive/report.pdf --dry-run
 ```
+
+- `disk upload --dry-run` показывает review файла и remote path без запроса upload ticket и без реальной загрузки.
+- `disk upload-link` закрывает human flow `локальный файл -> Диск -> публичная ссылка` в одном шаге; `--dry-run` показывает review без upload/publish.
+- `disk download` скачивает приватный файл с того же robust transfer contract: progress, retry, stats и activity replay.
+- `disk publish --dry-run` показывает, что именно будет опубликовано и уже есть ли у ресурса `public_url` / `public_key`, без реального publish.
+- `disk publish` публикует приватный ресурс и возвращает `public_url` / `public_key`, чтобы большой файл можно было не слать вложением, а отдать ссылкой.
+- `disk unpublish --dry-run` показывает, какая публичная ссылка будет снята, без реального revoke.
+- `disk unpublish` отзывает публичную ссылку и возвращает, какая `public_url` / `public_key` были сняты.
+- Реальные upload/download transfer на Диск по умолчанию ждут завершения без общего short timeout на тело запроса; при необходимости жёсткий потолок можно задать через `YACLI_DISK_UPLOAD_TIMEOUT_SECS` и `YACLI_DISK_DOWNLOAD_TIMEOUT_SECS`.
+- В CLI table-mode большие upload/download показывают живой progress и throughput в stderr, не ломая JSON/MCP contract.
+- При transient сетевых сбоях transfer автоматически делает несколько безопасных retry-попыток: download стартует заново, upload получает новый upload ticket и повторяет отправку целиком.
+- `disk public download` теперь умеет resumable download через `.part` + HTTP `Range`, если download endpoint поддерживает partial content; итоговый payload показывает `resumed_from_bytes`, `attempts` и `elapsed_ms`.
+
+### Журнал действий
+
+```bash
+yacli activity list
+yacli activity list --limit 20
+yacli activity show <id>
+```
+
+- В журнал попадают только успешные реальные write-операции.
+- `--dry-run` в журнал не записывается.
+- У каждой записи есть `replay_command`, который можно повторить или передать агенту.
 
 ### Публичный Диск
 
@@ -258,6 +309,9 @@ yacli disk public download --public-key https://disk.yandex.ru/i/WhGpLnQWR9efCA 
 | `reply-with-context` | Почта + календарь | «Ответь на письмо с учётом моего расписания» |
 | `attachment-to-disk` | Почта → файл | «Найди письмо и сохрани вложение в файл» |
 | `send-file-by-mail` | Файл → почта | «Отправь файл с диска по почте» |
+| `send-link-by-mail` | Файл → Диск → почта | «Загрузи большой файл на Диск и отправь ссылку по почте» |
+| `publish-file-link` | Файл → Диск | «Загрузи файл на Диск и дай публичную ссылку» |
+| `revoke-public-link` | Диск | «Отзови публичную ссылку у файла на Диске» |
 | `invite-to-calendar` | Почта → календарь | «Найди приглашение и добавь встречу в календарь» |
 
 ```bash
@@ -269,6 +323,15 @@ yacli calendar events
 yacli mail read 1353
 yacli calendar events 2026-03-14 2026-03-16
 yacli mail reply 1353 "Подтверждаю, это окно подходит"
+
+# большой файл -> ссылка -> письмо
+yacli mail send-link person@example.com "Материалы" "Отправляю ссылку" --source ./archive.zip --path disk:/docs/archive/archive.zip
+
+# локальный файл -> публичная ссылка
+yacli disk upload-link --source ./archive.zip --path disk:/docs/archive/archive.zip
+
+# отозвать публичную ссылку
+yacli disk unpublish disk:/docs/archive/archive.zip
 
 # сохранить вложение
 yacli mail attachment export 1353 --name invoice.pdf --output ./invoice.pdf
@@ -348,7 +411,7 @@ yacli mcp install --client gemini          # Gemini CLI
 yacli mcp install --client cursor          # Cursor
 ```
 
-Регистрирует MCP server и раскладывает 10 embedded skills в клиентские каталоги.
+Регистрирует MCP server и раскладывает 13 embedded skills в клиентские каталоги.
 
 Поддерживаемые клиенты: Claude Code, Claude Desktop / Cowork, Codex, Gemini CLI, Cursor, Zed, Windsurf, Antigravity, Warp.
 
@@ -358,7 +421,7 @@ yacli mcp install --client cursor          # Cursor
 | --- | --- |
 | `tools` | mail, calendar, disk, account, auth, update, roots |
 | `resources` | account/auth, skills catalog, templated resources |
-| `prompts` | shared, mail, calendar, disk, daily-briefing, find-and-read, reply-with-context, attachment-to-disk, send-file-by-mail, invite-to-calendar |
+| `prompts` | shared, mail, calendar, disk, daily-briefing, find-and-read, reply-with-context, attachment-to-disk, send-file-by-mail, send-link-by-mail, publish-file-link, revoke-public-link, invite-to-calendar |
 | `apps` | `ui://yacli/dashboard` — browser, tool runner, resource inspector, update check |
 | `completions` | accounts, folders, calendars, skills, dashboard args |
 
@@ -464,9 +527,24 @@ Disk:
 
 MCP Apps доступны через `ui://yacli/dashboard`:
 
+- Unified Home — стартовый экран с snapshot, workflows, activity и быстрыми переходами
+- Canonical home resources — `resource://yacli/home`, `resource://yacli/home/{account}` и goal-aware варианты с `?goal=...` дают один и тот же summary surface в CLI, MCP и Apps
+- Ranked next actions — `yacli next` и `resource://yacli/next-actions` теперь умеют и goal-aware приоритизацию через `--goal` / `?goal=...`
+- Goal Router — `yacli goal "..."` и `yacli.goal.route` маршрутизируют естественную цель в лучший workflow, prompt и MCP tool-path
+- Goal-driven remediation — route сразу показывает, чего не хватает в setup/readiness и какой командой это добить
+- Goal Router в Apps — routed goal можно сразу довести до `Preview action`, `Apply routed action` и `Share goal replay`
+- Live onboarding checklist — показывает, что ещё не подключено, и какие команды добьют setup
+- Live doctor health-check — показывает config/secret backend/service readiness, статус MCP-клиентов и suggested commands
+- Apply safe fixes — запускает `yacli.doctor.apply_safe`, применяет только безопасные локальные remediation-шаги и сразу refresh-ит Home / Doctor / Next Actions
 - Round-trip deep links — dashboard пересобирает canonical URI при смене view
 - Unified searchable browser по tools, prompts, resources, templates и skills
+- Workflow Hub и Activity Log с replay-командами
 - Universal tool runner — выбор tool, `inputSchema`, редактор JSON args, вызов из hosted app
+- Action Review в Apps runtime — `Preview action` и `Apply reviewed action` для `mail send`, `calendar create`, `disk upload`
+- Workflow autofill — runner открывается на каноническом tool для workflow и сразу подставляет account, server-driven workflow defaults, правильные MCP arg names и goal/remediation hints/tool arguments вроде email, local path, disk path и calendar
+- Workflow capabilities — workflow payload теперь канонически несёт `primary_tool`, `primary_operation`, `supports_review` и `primary_tool_arguments`, так что Workflow Hub, Goal Router и Activity handoff не держатся на UI-эвристиках
+- Review-driven remediation handoff — если `mail send` review рекомендует `send-link-by-mail`, dashboard умеет сразу открыть suggested flow и предзаполнить runner
+- Workflow-level handoff — из Workflow Hub можно сразу перейти в preview/apply и в replay последних действий
 - Resource inspector для account/auth и skills catalog
 - Capability-aware host profile — показывает, что host умеет, и рекомендует workflow
 - Persistent view state в browser storage

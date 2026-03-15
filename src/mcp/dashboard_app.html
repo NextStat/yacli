@@ -605,10 +605,16 @@
                 <button id="action-account-current" class="secondary" data-tool="yacli.account.current">Current account</button>
                 <button id="action-auth-status" class="secondary" data-tool="yacli.auth.status">Auth status</button>
                 <button id="action-update-check" class="secondary" data-tool="yacli.update.check">Check updates</button>
+                <button id="action-preview-selected-tool" class="secondary">Preview action</button>
+                <button id="action-apply-reviewed-tool" class="secondary">Apply reviewed action</button>
+                <button id="action-open-tool-remediation" class="secondary">Open suggested flow</button>
                 <button id="action-run-selected-tool" class="secondary">Run selected tool</button>
               </div>
               <div class="json-frame">
                 <pre id="tool-schema-json">No tool selected yet.</pre>
+              </div>
+              <div class="json-frame">
+                <pre id="tool-review-json">No action review yet.</pre>
               </div>
             </div>
           </article>
@@ -650,22 +656,172 @@
         </section>
 
         <section class="workspace">
-          <article class="card" id="panel-browser">
+          <article class="card" id="panel-home">
+            <div class="panel-header">
+              <div>
+                <h2>Unified Home</h2>
+                <p class="panel-note">
+                  One стартовый экран для snapshot, workflows, activity и быстрых переходов по продукту.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div class="actions">
+                <button id="action-home-refresh" class="secondary">Refresh home</button>
+                <button id="action-home-refresh-onboarding" class="secondary">Refresh onboarding</button>
+                <button id="action-home-share-onboarding" class="secondary">Share onboarding</button>
+                <button id="action-home-refresh-doctor" class="secondary">Refresh doctor</button>
+                <button id="action-home-share-doctor" class="secondary">Share doctor</button>
+                <button id="action-home-apply-safe-fixes" class="secondary">Apply safe fixes</button>
+                <button id="action-home-refresh-next-actions" class="secondary">Refresh next actions</button>
+                <button id="action-home-share-next-actions" class="secondary">Share next actions</button>
+                <button id="action-home-open-workflows" class="secondary">Open Workflow Hub</button>
+                <button id="action-home-open-activity" class="secondary">Open Activity Log</button>
+                <button id="action-home-open-account" class="secondary">Open account resource</button>
+              </div>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="home-summary-json">Home summary is warming up.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="onboarding-json">Onboarding checklist is warming up.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="doctor-json">Doctor health-check is warming up.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="next-actions-json">Next actions are warming up.</pre>
+            </div>
+          </article>
+
+          <article class="card" id="panel-workflows">
+            <div class="panel-header">
+              <div>
+                <h2>Workflow Hub</h2>
+                <p class="panel-note">
+                  Canonical cross-service workflows with direct handoff into prompts, skills, and tools.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div>
+                <label class="field-label" for="workflow-name-input">Workflow</label>
+                <input id="workflow-name-input" name="workflow" placeholder="invite-to-calendar" autocomplete="off">
+              </div>
+              <div class="actions">
+                <button id="action-list-workflows" class="secondary">List workflows</button>
+                <button id="action-read-workflow" class="secondary">Open selected workflow</button>
+                <button id="action-open-workflow-prompt" class="secondary">Open workflow prompt</button>
+                <button id="action-open-workflow-skill" class="secondary">Open workflow skill</button>
+                <button id="action-open-workflow-runner" class="secondary">Open workflow runner</button>
+                <button id="action-preview-workflow" class="secondary">Preview workflow action</button>
+                <button id="action-apply-workflow" class="secondary">Apply workflow action</button>
+                <button id="action-share-workflow-replay" class="secondary">Share workflow replay</button>
+              </div>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="workflow-list-json">No workflows listed yet.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="workflow-json">No workflow opened yet.</pre>
+            </div>
+          </article>
+
+          <article class="card" id="panel-goal">
+            <div class="panel-header">
+              <div>
+                <h2>Goal Router</h2>
+                <p class="panel-note">
+                  Convert a natural-language goal into the best workflow, prompt and MCP tool-path.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div>
+                <label class="field-label" for="goal-input">Goal</label>
+                <input id="goal-input" name="goal" placeholder="найди приглашение и добавь встречу в календарь" autocomplete="off">
+              </div>
+              <div class="actions">
+                <button id="action-route-goal" class="secondary">Route goal</button>
+                <button id="action-open-goal-workflow" class="secondary">Open recommended workflow</button>
+                <button id="action-open-goal-prompt" class="secondary">Open recommended prompt</button>
+                <button id="action-open-goal-onboarding" class="secondary">Open goal onboarding</button>
+                <button id="action-open-goal-doctor" class="secondary">Open goal doctor</button>
+                <button id="action-apply-goal-safe-fixes" class="secondary">Apply safe fixes</button>
+                <button id="action-preview-goal" class="secondary">Preview routed action</button>
+                <button id="action-apply-goal" class="secondary">Apply routed action</button>
+                <button id="action-share-goal-remediation" class="secondary">Share goal remediation</button>
+                <button id="action-share-goal-replay" class="secondary">Share goal replay</button>
+                <button id="action-share-goal-route" class="secondary">Share goal route</button>
+              </div>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="goal-json">No goal routed yet.</pre>
+            </div>
+          </article>
+
+          <article class="card" id="panel-activity">
+            <div class="panel-header">
+              <div>
+                <h2>Activity Log</h2>
+                <p class="panel-note">
+                  Recent successful write-actions with replay commands for CLI and MCP.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <div>
+                <label class="field-label" for="activity-id-input">Activity ID</label>
+                <input id="activity-id-input" name="activity" placeholder="act_20260314T104600Z_ab12cd34" autocomplete="off">
+              </div>
+              <div class="actions">
+                <button id="action-list-activity" class="secondary">List activity</button>
+                <button id="action-read-activity" class="secondary">Open selected action</button>
+                <button id="action-share-activity-replay" class="secondary">Share replay</button>
+              </div>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="activity-list-json">No activity loaded yet.</pre>
+            </div>
+            <div class="json-frame" style="margin-top: 14px;">
+              <pre id="activity-json">No activity detail opened yet.</pre>
+            </div>
+          </article>
+
+          <article class="card" id="panel-runtime">
+            <div class="panel-header">
+              <div>
+                <h2>Runtime state</h2>
+                <p class="panel-note">
+                  Cached app state that survives reopen and tracks resource + prompt activity.
+                </p>
+              </div>
+            </div>
+            <div class="json-frame">
+              <pre id="runtime-state-json">No persisted runtime state yet.</pre>
+            </div>
+          </article>
+        </section>
+
+        <section class="workspace">
+          <article class="card" id="panel-browser" style="grid-column: 1 / -1;">
             <div class="panel-header">
               <div>
                 <h2>Searchable browser</h2>
                 <p class="panel-note">
-                  Unified search across yacli tools, prompts, resources, templates, and embedded skills.
+                  Unified search across yacli tools, workflows, prompts, resources, templates, and embedded skills.
                 </p>
               </div>
             </div>
             <div class="controls">
               <div class="browser-toolbar">
-                <input id="browser-query-input" name="browser-query" placeholder="search mail, skills, prompts, disk" autocomplete="off">
+                <input id="browser-query-input" name="browser-query" placeholder="search workflow, mail, skills, prompts, disk" autocomplete="off">
                 <select id="browser-filter-select" name="browser-filter">
                   <option value="all">All surfaces</option>
                   <option value="tool">Tools</option>
+                  <option value="workflow">Workflows</option>
                   <option value="prompt">Prompts</option>
+                  <option value="activity">Activity</option>
                   <option value="resource">Resources</option>
                   <option value="template">Templates</option>
                   <option value="skill">Skills</option>
@@ -681,20 +837,6 @@
                   <span>Waiting for host handshake and catalog fetch.</span>
                 </div>
               </div>
-            </div>
-          </article>
-
-          <article class="card" id="panel-events">
-            <div class="panel-header">
-              <div>
-                <h2>Runtime state</h2>
-                <p class="panel-note">
-                  Cached app state that survives reopen and tracks resource + prompt activity.
-                </p>
-              </div>
-            </div>
-            <div class="json-frame">
-              <pre id="runtime-state-json">No persisted runtime state yet.</pre>
             </div>
           </article>
         </section>
@@ -829,6 +971,7 @@
         const APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
         const APP_PROTOCOL_VERSION = "2025-11-25";
         const APP_INFO = { name: "yacli-dashboard", version: "__YACLI_VERSION__" };
+        const DASHBOARD_TOOL_GOAL_ROUTE = "yacli.goal.route";
         const APP_BOOTSTRAP = __YACLI_BOOTSTRAP__;
         const APP_VIEW_STATE_STORAGE_KEY = "yacli.mcp.dashboard.view-state.v1";
         const APP_RUNTIME_STATE_STORAGE_KEY = "yacli.mcp.dashboard.runtime-state.v1";
@@ -851,6 +994,18 @@
             preferredTool:
               typeof source.preferredTool === "string" && source.preferredTool.length > 0
                 ? source.preferredTool
+                : "",
+            preferredWorkflow:
+              typeof source.preferredWorkflow === "string" && source.preferredWorkflow.length > 0
+                ? source.preferredWorkflow
+                : "",
+            preferredGoal:
+              typeof source.preferredGoal === "string" && source.preferredGoal.length > 0
+                ? source.preferredGoal
+                : "",
+            preferredActivity:
+              typeof source.preferredActivity === "string" && source.preferredActivity.length > 0
+                ? source.preferredActivity
                 : "",
             preferredSkill:
               typeof source.preferredSkill === "string" && source.preferredSkill.length > 0
@@ -887,6 +1042,9 @@
             preferredSection: explicit.preferredSection || stored.preferredSection,
             preferredResource: explicit.preferredResource || stored.preferredResource,
             preferredTool: explicit.preferredTool || stored.preferredTool,
+            preferredWorkflow: explicit.preferredWorkflow || stored.preferredWorkflow,
+            preferredGoal: explicit.preferredGoal || stored.preferredGoal,
+            preferredActivity: explicit.preferredActivity || stored.preferredActivity,
             preferredSkill: explicit.preferredSkill || stored.preferredSkill,
             preferredPrompt: explicit.preferredPrompt || stored.preferredPrompt,
             resourceUri: explicit.resourceUri || stored.resourceUri || APP_RESOURCE_URI,
@@ -922,6 +1080,16 @@
                 ? source.lastToolName
                 : null,
             lastToolResult: source.lastToolResult != null ? source.lastToolResult : null,
+            reviewedToolName:
+              typeof source.reviewedToolName === "string" && source.reviewedToolName.length > 0
+                ? source.reviewedToolName
+                : null,
+            reviewedToolArgs:
+              source.reviewedToolArgs != null && typeof source.reviewedToolArgs === "object"
+                ? source.reviewedToolArgs
+                : null,
+            reviewPayload: source.reviewPayload != null ? source.reviewPayload : null,
+            goalRoutePayload: source.goalRoutePayload != null ? source.goalRoutePayload : null,
             promptListPayload: source.promptListPayload != null ? source.promptListPayload : null,
             promptPayload: source.promptPayload != null ? source.promptPayload : null,
             resourceCatalogPayload:
@@ -933,10 +1101,23 @@
             resourcePayload: source.resourcePayload != null ? source.resourcePayload : null,
             resourceTemplatesPayload:
               source.resourceTemplatesPayload != null ? source.resourceTemplatesPayload : null,
+            homePayload: source.homePayload != null ? source.homePayload : null,
+            nextActionsPayload:
+              source.nextActionsPayload != null ? source.nextActionsPayload : null,
+            onboardingPayload:
+              source.onboardingPayload != null ? source.onboardingPayload : null,
+            doctorPayload:
+              source.doctorPayload != null ? source.doctorPayload : null,
             skillsCatalogPayload:
               source.skillsCatalogPayload != null ? source.skillsCatalogPayload : null,
+            activityCatalogPayload:
+              source.activityCatalogPayload != null ? source.activityCatalogPayload : null,
+            activityPayload: source.activityPayload != null ? source.activityPayload : null,
             toolCatalogPayload:
               source.toolCatalogPayload != null ? source.toolCatalogPayload : null,
+            workflowCatalogPayload:
+              source.workflowCatalogPayload != null ? source.workflowCatalogPayload : null,
+            workflowPayload: source.workflowPayload != null ? source.workflowPayload : null,
           };
         }
 
@@ -967,6 +1148,11 @@
           lastToolName: null,
           lastToolInput: null,
           lastToolResult: null,
+          reviewedToolName: null,
+          reviewedToolArgs: null,
+          reviewPayload: null,
+          activityCatalogPayload: null,
+          activityPayload: null,
           lastSize: null,
           promptArgumentsText: "",
           promptListPayload: null,
@@ -974,13 +1160,24 @@
           resourceCatalogPayload: null,
           resourcePayload: null,
           resourceTemplatesPayload: null,
+          homePayload: null,
+          nextActionsPayload: null,
+          onboardingPayload: null,
+          doctorPayload: null,
+          goalRoutePayload: null,
           skillsCatalogPayload: null,
           toolArgumentsText: "",
           toolCatalogPayload: null,
+          workflowCatalogPayload: null,
+          workflowPayload: null,
         };
 
         const SECTION_TO_PANEL_ID = {
+          home: "panel-home",
+          goal: "panel-goal",
           tools: "panel-tools",
+          workflows: "panel-workflows",
+          activity: "panel-activity",
           prompts: "panel-prompts",
           resources: "panel-resources",
           auth: "panel-auth",
@@ -992,19 +1189,57 @@
 
         const elements = {
           accountInput: document.getElementById("account-input"),
+          actionHomeRefresh: document.getElementById("action-home-refresh"),
+          actionHomeRefreshOnboarding: document.getElementById("action-home-refresh-onboarding"),
+          actionHomeShareOnboarding: document.getElementById("action-home-share-onboarding"),
+          actionHomeRefreshDoctor: document.getElementById("action-home-refresh-doctor"),
+          actionHomeShareDoctor: document.getElementById("action-home-share-doctor"),
+          actionHomeApplySafeFixes: document.getElementById("action-home-apply-safe-fixes"),
+          actionHomeRefreshNextActions: document.getElementById("action-home-refresh-next-actions"),
+          actionHomeShareNextActions: document.getElementById("action-home-share-next-actions"),
+          actionHomeOpenWorkflows: document.getElementById("action-home-open-workflows"),
+          actionHomeOpenActivity: document.getElementById("action-home-open-activity"),
+          actionHomeOpenAccount: document.getElementById("action-home-open-account"),
+          actionRouteGoal: document.getElementById("action-route-goal"),
+          actionOpenGoalWorkflow: document.getElementById("action-open-goal-workflow"),
+          actionOpenGoalPrompt: document.getElementById("action-open-goal-prompt"),
+          actionOpenGoalOnboarding: document.getElementById("action-open-goal-onboarding"),
+          actionOpenGoalDoctor: document.getElementById("action-open-goal-doctor"),
+          actionPreviewGoal: document.getElementById("action-preview-goal"),
+          actionApplyGoal: document.getElementById("action-apply-goal"),
+          actionShareGoalRemediation: document.getElementById("action-share-goal-remediation"),
+          actionShareGoalReplay: document.getElementById("action-share-goal-replay"),
+          actionShareGoalRoute: document.getElementById("action-share-goal-route"),
           actionRefreshBrowser: document.getElementById("action-refresh-browser"),
           actionOpenAuthServer: document.getElementById("action-open-auth-server"),
           actionOpenDocs: document.getElementById("action-open-docs"),
           actionOpenResourceMetadata: document.getElementById("action-open-resource-metadata"),
+          actionPreviewSelectedTool: document.getElementById("action-preview-selected-tool"),
           actionReadAccountResource: document.getElementById("action-read-account-resource"),
           actionReadAuthResource: document.getElementById("action-read-auth-resource"),
+          actionListActivity: document.getElementById("action-list-activity"),
           actionListPrompts: document.getElementById("action-list-prompts"),
+          actionReadActivity: document.getElementById("action-read-activity"),
           actionReadSkillResource: document.getElementById("action-read-skill-resource"),
           actionReadSkillsCatalog: document.getElementById("action-read-skills-catalog"),
           actionRenderPrompt: document.getElementById("action-render-prompt"),
+          actionApplyReviewedTool: document.getElementById("action-apply-reviewed-tool"),
+          actionOpenToolRemediation: document.getElementById("action-open-tool-remediation"),
+          actionListWorkflows: document.getElementById("action-list-workflows"),
+          actionPreviewWorkflow: document.getElementById("action-preview-workflow"),
+          actionApplyWorkflow: document.getElementById("action-apply-workflow"),
+          actionReadWorkflow: document.getElementById("action-read-workflow"),
+          actionOpenWorkflowPrompt: document.getElementById("action-open-workflow-prompt"),
+          actionOpenWorkflowSkill: document.getElementById("action-open-workflow-skill"),
+          actionOpenWorkflowRunner: document.getElementById("action-open-workflow-runner"),
+          actionShareWorkflowReplay: document.getElementById("action-share-workflow-replay"),
+          actionShareActivityReplay: document.getElementById("action-share-activity-replay"),
           actionShareAuthContext: document.getElementById("action-share-auth-context"),
           actionShareSnapshot: document.getElementById("action-share-snapshot"),
           actionToggleDisplay: document.getElementById("action-toggle-display"),
+          activityIdInput: document.getElementById("activity-id-input"),
+          activityJson: document.getElementById("activity-json"),
+          activityListJson: document.getElementById("activity-list-json"),
           authJson: document.getElementById("auth-json"),
           browserFilterSelect: document.getElementById("browser-filter-select"),
           browserQueryInput: document.getElementById("browser-query-input"),
@@ -1016,6 +1251,12 @@
           hostCapabilityGrid: document.getElementById("host-capability-grid"),
           hostProfileSummary: document.getElementById("host-profile-summary"),
           hostRecommendations: document.getElementById("host-recommendations"),
+          homeSummaryJson: document.getElementById("home-summary-json"),
+          onboardingJson: document.getElementById("onboarding-json"),
+          doctorJson: document.getElementById("doctor-json"),
+          nextActionsJson: document.getElementById("next-actions-json"),
+          goalInput: document.getElementById("goal-input"),
+          goalJson: document.getElementById("goal-json"),
           lastTool: document.getElementById("last-tool"),
           currentViewSummary: document.getElementById("current-view-summary"),
           currentViewUri: document.getElementById("current-view-uri"),
@@ -1036,9 +1277,13 @@
           toolArgsInput: document.getElementById("tool-args-input"),
           toolInputJson: document.getElementById("tool-input-json"),
           toolNameInput: document.getElementById("tool-name-input"),
+          toolReviewJson: document.getElementById("tool-review-json"),
           toolResultJson: document.getElementById("tool-result-json"),
           toolSchemaJson: document.getElementById("tool-schema-json"),
           transportHint: document.getElementById("transport-hint"),
+          workflowJson: document.getElementById("workflow-json"),
+          workflowListJson: document.getElementById("workflow-list-json"),
+          workflowNameInput: document.getElementById("workflow-name-input"),
         };
 
         const toolButtons = Array.from(document.querySelectorAll("[data-tool]"));
@@ -1128,6 +1373,31 @@
           }
           if (
             state.bootstrap &&
+            typeof state.bootstrap.preferredWorkflow === "string" &&
+            state.bootstrap.preferredWorkflow.length > 0 &&
+            state.bootstrap.preferredSection === "workflows"
+          ) {
+            params.set("workflow", state.bootstrap.preferredWorkflow);
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredGoal === "string" &&
+            state.bootstrap.preferredGoal.length > 0 &&
+            (state.bootstrap.preferredSection === "goal" ||
+              state.bootstrap.preferredSection === "home")
+          ) {
+            params.set("goal", state.bootstrap.preferredGoal);
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredActivity === "string" &&
+            state.bootstrap.preferredActivity.length > 0 &&
+            state.bootstrap.preferredSection === "activity"
+          ) {
+            params.set("activity", state.bootstrap.preferredActivity);
+          }
+          if (
+            state.bootstrap &&
             typeof state.bootstrap.preferredPrompt === "string" &&
             state.bootstrap.preferredPrompt.length > 0 &&
             state.bootstrap.preferredSection === "prompts"
@@ -1162,6 +1432,9 @@
                 preferredSection: state.bootstrap.preferredSection || "",
                 preferredResource: state.bootstrap.preferredResource || "",
                 preferredTool: state.bootstrap.preferredTool || "",
+                preferredWorkflow: state.bootstrap.preferredWorkflow || "",
+                preferredGoal: state.bootstrap.preferredGoal || "",
+                preferredActivity: state.bootstrap.preferredActivity || "",
                 preferredSkill: state.bootstrap.preferredSkill || "",
                 preferredPrompt: state.bootstrap.preferredPrompt || "",
                 resourceUri: state.bootstrap.resourceUri || APP_RESOURCE_URI,
@@ -1185,6 +1458,16 @@
                 lastToolInput: state.lastToolInput,
                 lastToolName: state.lastToolName,
                 lastToolResult: state.lastToolResult,
+                reviewedToolName: state.reviewedToolName,
+                reviewedToolArgs: state.reviewedToolArgs,
+                reviewPayload: state.reviewPayload,
+                goalRoutePayload: state.goalRoutePayload,
+                homePayload: state.homePayload,
+                nextActionsPayload: state.nextActionsPayload,
+                onboardingPayload: state.onboardingPayload,
+                doctorPayload: state.doctorPayload,
+                activityCatalogPayload: state.activityCatalogPayload,
+                activityPayload: state.activityPayload,
                 promptArgumentsText: elements.promptArgsInput.value,
                 promptListPayload: state.promptListPayload,
                 promptPayload: state.promptPayload,
@@ -1194,6 +1477,8 @@
                 skillsCatalogPayload: state.skillsCatalogPayload,
                 toolArgumentsText: elements.toolArgsInput.value,
                 toolCatalogPayload: state.toolCatalogPayload,
+                workflowCatalogPayload: state.workflowCatalogPayload,
+                workflowPayload: state.workflowPayload,
               }),
             );
           } catch (_error) {
@@ -1211,6 +1496,16 @@
           state.lastToolInput = persisted.lastToolInput;
           state.lastToolName = persisted.lastToolName;
           state.lastToolResult = persisted.lastToolResult;
+          state.reviewedToolName = persisted.reviewedToolName;
+          state.reviewedToolArgs = persisted.reviewedToolArgs;
+          state.reviewPayload = persisted.reviewPayload;
+          state.goalRoutePayload = persisted.goalRoutePayload;
+          state.homePayload = persisted.homePayload;
+          state.nextActionsPayload = persisted.nextActionsPayload;
+          state.onboardingPayload = persisted.onboardingPayload;
+          state.doctorPayload = persisted.doctorPayload;
+          state.activityCatalogPayload = persisted.activityCatalogPayload;
+          state.activityPayload = persisted.activityPayload;
           state.promptArgumentsText = persisted.promptArgumentsText;
           state.promptListPayload = persisted.promptListPayload;
           state.promptPayload = persisted.promptPayload;
@@ -1220,13 +1515,20 @@
           state.skillsCatalogPayload = persisted.skillsCatalogPayload;
           state.toolArgumentsText = persisted.toolArgumentsText;
           state.toolCatalogPayload = persisted.toolCatalogPayload;
+          state.workflowCatalogPayload = persisted.workflowCatalogPayload;
+          state.workflowPayload = persisted.workflowPayload;
 
           if (
             state.dashboardSnapshot ||
+            state.goalRoutePayload ||
+            state.homePayload ||
+            state.nextActionsPayload ||
             state.lastToolResult ||
             state.promptPayload ||
             state.resourcePayload ||
-            state.authChallenge
+            state.authChallenge ||
+            state.activityPayload ||
+            state.workflowPayload
           ) {
             logEvent("runtime restored", "dashboard restored cached runtime state");
           }
@@ -1239,6 +1541,7 @@
           document.body.dataset.displayMode = state.displayMode || "inline";
           document.body.dataset.theme = state.theme || "light";
           renderCurrentViewUri();
+          renderHomeSummary();
           renderHostProfile();
           syncHostActionAvailability();
         }
@@ -1408,6 +1711,18 @@
           savePersistedRuntimeState();
         }
 
+        function renderToolReview(payload) {
+          if (arguments.length > 0) {
+            state.reviewPayload = payload;
+          }
+          const value = state.reviewPayload || "No action review yet.";
+          elements.toolReviewJson.textContent =
+            typeof value === "string" ? value : safeStringify(value);
+          savePersistedRuntimeState();
+          renderRuntimeState();
+          syncHostActionAvailability();
+        }
+
         function renderPromptList(payload) {
           if (arguments.length > 0) {
             state.promptListPayload = payload;
@@ -1434,6 +1749,67 @@
                 : safeStringify(state.promptPayload);
           savePersistedRuntimeState();
           renderRuntimeState();
+        }
+
+        function renderWorkflowCatalog(payload) {
+          if (arguments.length > 0) {
+            state.workflowCatalogPayload = payload;
+          }
+          elements.workflowListJson.textContent =
+            state.workflowCatalogPayload == null
+              ? "No workflows listed yet."
+              : typeof state.workflowCatalogPayload === "string"
+                ? state.workflowCatalogPayload
+                : safeStringify(state.workflowCatalogPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+        }
+
+        function renderWorkflow(payload) {
+          if (arguments.length > 0) {
+            state.workflowPayload = payload;
+          }
+          elements.workflowJson.textContent =
+            state.workflowPayload == null
+              ? "No workflow opened yet."
+              : typeof state.workflowPayload === "string"
+                ? state.workflowPayload
+                : safeStringify(state.workflowPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+        }
+
+        function renderActivityCatalog(payload) {
+          if (arguments.length > 0) {
+            state.activityCatalogPayload = payload;
+          }
+          elements.activityListJson.textContent =
+            state.activityCatalogPayload == null
+              ? "No activity loaded yet."
+              : typeof state.activityCatalogPayload === "string"
+                ? state.activityCatalogPayload
+                : safeStringify(state.activityCatalogPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+        }
+
+        function renderActivity(payload) {
+          if (arguments.length > 0) {
+            state.activityPayload = payload;
+          }
+          elements.activityJson.textContent =
+            state.activityPayload == null
+              ? "No activity detail opened yet."
+              : typeof state.activityPayload === "string"
+                ? state.activityPayload
+                : safeStringify(state.activityPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+          syncHostActionAvailability();
         }
 
         function renderResourceTemplates(payload) {
@@ -1472,10 +1848,23 @@
             currentToolName:
               elements.toolNameInput ? elements.toolNameInput.value : "",
             lastToolName: state.lastToolName,
+            reviewedToolName: state.reviewedToolName,
             promptArgumentsText: elements.promptArgsInput ? elements.promptArgsInput.value : "",
             preferredPrompt:
               state.bootstrap && typeof state.bootstrap === "object"
                 ? state.bootstrap.preferredPrompt || ""
+                : "",
+            preferredWorkflow:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredWorkflow || ""
+                : "",
+            preferredGoal:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredGoal || ""
+                : "",
+            preferredActivity:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredActivity || ""
                 : "",
             preferredResource:
               state.bootstrap && typeof state.bootstrap === "object"
@@ -1508,8 +1897,335 @@
                 Array.isArray(state.toolCatalogPayload.tools)
                   ? state.toolCatalogPayload.tools.length
                   : 0,
+              workflows:
+                Array.isArray(workflowCatalogItems()) ? workflowCatalogItems().length : 0,
+              activity:
+                Array.isArray(activityCatalogItems()) ? activityCatalogItems().length : 0,
             },
           });
+        }
+
+        function renderHomeSummary() {
+          const detail = homePayload();
+          const snapshot = state.dashboardSnapshot && typeof state.dashboardSnapshot === "object"
+            ? state.dashboardSnapshot
+            : null;
+          const accountCount =
+            snapshot && typeof snapshot.accountCount === "number"
+              ? snapshot.accountCount
+              : 0;
+          const currentAccount =
+            detail && typeof detail.current_account === "string"
+              ? detail.current_account
+              : snapshot && typeof snapshot.currentAccount === "string"
+                ? snapshot.currentAccount
+              : elements.accountInput.value.trim() || "none";
+          const latestActivity =
+            detail && detail.latest_activity && typeof detail.latest_activity === "object"
+              ? detail.latest_activity
+              : activityCatalogItems()[0] || null;
+          const latestWorkflow =
+            detail &&
+            Array.isArray(detail.highlighted_workflows) &&
+            detail.highlighted_workflows.length > 0
+              ? detail.highlighted_workflows[0]
+              : workflowCatalogItems()[0] || null;
+          elements.homeSummaryJson.textContent = safeStringify({
+            currentAccount: currentAccount,
+            accountCount: accountCount,
+            workflows:
+              detail && typeof detail.workflow_count === "number"
+                ? detail.workflow_count
+                : activitySafeCount(workflowCatalogItems()),
+            activity:
+              detail && typeof detail.recent_activity_count === "number"
+                ? detail.recent_activity_count
+                : activitySafeCount(activityCatalogItems()),
+            latestWorkflow: latestWorkflow
+              ? {
+                  id: latestWorkflow.id || "",
+                  title: latestWorkflow.title || latestWorkflow.id || "",
+                  prompt: latestWorkflow.prompt_name || "",
+                }
+              : null,
+            latestActivity: latestActivity
+              ? {
+                  id: latestActivity.id || "",
+                  operation: latestActivity.operation || "",
+                  summary: latestActivity.summary || "",
+                  replay: latestActivity.replay_command || "",
+                }
+              : null,
+            onboardingStatus:
+              detail &&
+              detail.onboarding &&
+              typeof detail.onboarding.status === "string"
+                ? detail.onboarding.status
+                : onboardingPayload() && typeof onboardingPayload().status === "string"
+                  ? onboardingPayload().status
+                : "unknown",
+            doctorStatus:
+              detail &&
+              detail.doctor &&
+              typeof detail.doctor.status === "string"
+                ? detail.doctor.status
+                : doctorPayload() && typeof doctorPayload().status === "string"
+                  ? doctorPayload().status
+                : "unknown",
+            nextActions:
+              detail &&
+              detail.next_actions &&
+              Array.isArray(detail.next_actions.actions)
+                ? detail.next_actions.actions.length
+                : nextActionsPayload() && Array.isArray(nextActionsPayload().actions)
+                  ? nextActionsPayload().actions.length
+                  : 0,
+            goal:
+              detail && typeof detail.goal === "string"
+                ? detail.goal
+                : state.bootstrap && typeof state.bootstrap === "object"
+                  ? state.bootstrap.preferredGoal || ""
+                  : "",
+            goalStatus:
+              detail &&
+              detail.goal_route &&
+              typeof detail.goal_route.status === "string"
+                ? detail.goal_route.status
+                : goalRouteDetailPayload() && typeof goalRouteDetailPayload().status === "string"
+                  ? goalRouteDetailPayload().status
+                  : "inactive",
+            goalRemediation:
+              detail &&
+              detail.goal_route &&
+              detail.goal_route.remediation &&
+              typeof detail.goal_route.remediation.status === "string"
+                ? detail.goal_route.remediation.status
+                : goalRouteDetailPayload() &&
+                    goalRouteDetailPayload().remediation &&
+                    typeof goalRouteDetailPayload().remediation.status === "string"
+                  ? goalRouteDetailPayload().remediation.status
+                  : "inactive",
+            status:
+              detail && typeof detail.status === "string" ? detail.status : "unknown",
+            suggestedCommands:
+              detail && Array.isArray(detail.suggested_commands)
+                ? detail.suggested_commands
+                : [],
+            hostProfile: hostProfileName(),
+            preferredSection:
+              state.bootstrap && typeof state.bootstrap === "object"
+                ? state.bootstrap.preferredSection || ""
+                : "",
+          });
+        }
+
+        function goalRouteDetailPayload() {
+          const payload = resourceJsonPayload(state.goalRoutePayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function bestGoalRecommendation() {
+          const payload = goalRouteDetailPayload();
+          if (!payload) {
+            return null;
+          }
+          if (payload.best_match && typeof payload.best_match === "object" && payload.best_match.workflow) {
+            return payload.best_match;
+          }
+          const recommendations = Array.isArray(payload.recommendations)
+            ? payload.recommendations
+            : [];
+          return recommendations.length > 0 ? recommendations[0] : null;
+        }
+
+        function goalToolNames() {
+          const recommendation = bestGoalRecommendation();
+          return recommendation &&
+            recommendation.workflow &&
+            Array.isArray(recommendation.workflow.mcp_tools)
+            ? recommendation.workflow.mcp_tools
+            : [];
+        }
+
+        function goalPrimaryOperation() {
+          const recommendation = bestGoalRecommendation();
+          return recommendation &&
+            recommendation.workflow &&
+            typeof recommendation.workflow.primary_operation === "string"
+            ? recommendation.workflow.primary_operation
+            : "";
+        }
+
+        function goalSupportsReview() {
+          const recommendation = bestGoalRecommendation();
+          if (
+            recommendation &&
+            recommendation.workflow &&
+            typeof recommendation.workflow.supports_review === "boolean"
+          ) {
+            return recommendation.workflow.supports_review;
+          }
+          const toolName =
+            recommendation &&
+            recommendation.route &&
+            typeof recommendation.route.best_tool === "string"
+              ? recommendation.route.best_tool
+              : "";
+          return Boolean(toolName && toolSupportsDryRun(toolName));
+        }
+
+        function goalDryRunToolName() {
+          const recommendation = bestGoalRecommendation();
+          const primaryTool =
+            recommendation &&
+            recommendation.route &&
+            typeof recommendation.route.best_tool === "string"
+              ? recommendation.route.best_tool
+              : "";
+          if (goalSupportsReview() && primaryTool && toolSupportsDryRun(primaryTool)) {
+            return primaryTool;
+          }
+          return goalToolNames().find(function (toolName) {
+            return toolSupportsDryRun(toolName);
+          }) || null;
+        }
+
+        function latestGoalActivity() {
+          const primaryOperation = goalPrimaryOperation();
+          const operations = primaryOperation
+            ? [primaryOperation]
+            : goalToolNames().map(toolNameToOperation);
+          if (operations.length === 0) {
+            return null;
+          }
+          return (
+            activityCatalogItems().find(function (entry) {
+              return operations.includes(String(entry.operation || ""));
+            }) || null
+          );
+        }
+
+        function goalRouteToolArguments(recommendation, toolName) {
+          const route =
+            recommendation &&
+            recommendation.route &&
+            typeof recommendation.route === "object"
+              ? recommendation.route
+              : null;
+          if (!route || route.best_tool !== toolName) {
+            return null;
+          }
+          return route.tool_arguments && typeof route.tool_arguments === "object"
+            ? route.tool_arguments
+            : null;
+        }
+
+        function renderGoalRoute(payload) {
+          if (arguments.length > 0) {
+            state.goalRoutePayload = payload;
+          }
+          elements.goalJson.textContent =
+            state.goalRoutePayload == null
+              ? "No goal routed yet."
+              : typeof state.goalRoutePayload === "string"
+                ? state.goalRoutePayload
+                : safeStringify(state.goalRoutePayload);
+          savePersistedRuntimeState();
+          renderRuntimeState();
+        }
+
+        function activitySafeCount(items) {
+          return Array.isArray(items) ? items.length : 0;
+        }
+
+        function homePayload() {
+          const payload = resourceJsonPayload(state.homePayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function onboardingPayload() {
+          const payload = resourceJsonPayload(state.onboardingPayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function nextActionsPayload() {
+          const payload = resourceJsonPayload(state.nextActionsPayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function doctorPayload() {
+          const payload = resourceJsonPayload(state.doctorPayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function renderOnboarding(payload) {
+          if (arguments.length > 0) {
+            state.onboardingPayload = payload;
+          }
+          elements.onboardingJson.textContent =
+            state.onboardingPayload == null
+              ? "Onboarding checklist is warming up."
+              : typeof state.onboardingPayload === "string"
+                ? state.onboardingPayload
+                : safeStringify(state.onboardingPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+        }
+
+        function renderHome(payload) {
+          if (arguments.length > 0) {
+            state.homePayload = payload;
+          }
+          elements.homeSummaryJson.textContent =
+            state.homePayload == null
+              ? "Home summary is warming up."
+              : typeof state.homePayload === "string"
+                ? state.homePayload
+                : safeStringify(state.homePayload);
+          const detail = homePayload();
+          if (detail && detail.onboarding && typeof detail.onboarding === "object") {
+            renderOnboarding(detail.onboarding);
+          }
+          if (detail && detail.next_actions && typeof detail.next_actions === "object") {
+            renderNextActions(detail.next_actions);
+          }
+          if (detail && detail.doctor && typeof detail.doctor === "object") {
+            renderDoctor(detail.doctor);
+          }
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+        }
+
+        function renderDoctor(payload) {
+          if (arguments.length > 0) {
+            state.doctorPayload = payload;
+          }
+          elements.doctorJson.textContent =
+            state.doctorPayload == null
+              ? "Doctor health-check is warming up."
+              : typeof state.doctorPayload === "string"
+                ? state.doctorPayload
+                : safeStringify(state.doctorPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
+        }
+
+        function renderNextActions(payload) {
+          if (arguments.length > 0) {
+            state.nextActionsPayload = payload;
+          }
+          elements.nextActionsJson.textContent =
+            state.nextActionsPayload == null
+              ? "Next actions are warming up."
+              : typeof state.nextActionsPayload === "string"
+                ? state.nextActionsPayload
+                : safeStringify(state.nextActionsPayload);
+          savePersistedRuntimeState();
+          renderHomeSummary();
+          renderRuntimeState();
         }
 
         function renderAuth(payload) {
@@ -1526,13 +2242,14 @@
         }
 
         function resourceJsonPayload(payload) {
-          if (
-            !payload ||
-            typeof payload !== "object" ||
-            !Array.isArray(payload.contents) ||
-            payload.contents.length === 0
-          ) {
+          if (!payload || typeof payload !== "object") {
             return null;
+          }
+          if (!Array.isArray(payload.contents)) {
+            return payload;
+          }
+          if (payload.contents.length === 0) {
+            return payload;
           }
           const text =
             payload.contents[0] &&
@@ -1552,6 +2269,200 @@
         function skillCatalogItems() {
           const payload = resourceJsonPayload(state.skillsCatalogPayload);
           return payload && Array.isArray(payload.items) ? payload.items : [];
+        }
+
+        function workflowCatalogItems() {
+          const payload = resourceJsonPayload(state.workflowCatalogPayload);
+          return payload && Array.isArray(payload.workflows) ? payload.workflows : [];
+        }
+
+        function activityCatalogItems() {
+          const payload = resourceJsonPayload(state.activityCatalogPayload);
+          return payload && Array.isArray(payload.items) ? payload.items : [];
+        }
+
+        function workflowDetailPayload() {
+          const payload = resourceJsonPayload(state.workflowPayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function activityDetailPayload() {
+          const payload = resourceJsonPayload(state.activityPayload);
+          return payload && typeof payload === "object" ? payload : null;
+        }
+
+        function workflowToolNames() {
+          const detail = workflowDetailPayload();
+          return detail && Array.isArray(detail.mcp_tools) ? detail.mcp_tools : [];
+        }
+
+        function workflowPrimaryToolName(detail) {
+          const source = detail && typeof detail === "object" ? detail : workflowDetailPayload();
+          const explicitPrimaryTool =
+            source && typeof source.primary_tool === "string" ? source.primary_tool : "";
+          if (explicitPrimaryTool) {
+            return explicitPrimaryTool;
+          }
+          const workflowId = source && typeof source.id === "string" ? source.id : "";
+          const toolNames =
+            source && Array.isArray(source.mcp_tools) ? source.mcp_tools : workflowToolNames();
+          if (!Array.isArray(toolNames) || toolNames.length === 0) {
+            return "";
+          }
+
+          switch (workflowId) {
+            case "daily-briefing":
+              return "yacli.mail.list";
+            case "reply-with-context":
+              return "yacli.mail.reply";
+            case "attachment-to-disk":
+              return "yacli.mail.attachment.export";
+            case "send-file-by-mail":
+              return "yacli.mail.send";
+            case "send-link-by-mail":
+              return "yacli.mail.send_link";
+            case "publish-file-link":
+              return "yacli.disk.upload_link";
+            case "revoke-public-link":
+              return "yacli.disk.unpublish";
+            case "invite-to-calendar":
+              return "yacli.mail.invite.create_event";
+            default:
+              return toolNames[0] || "";
+          }
+        }
+
+        function workflowPrimaryToolArguments(detail) {
+          const source = detail && typeof detail === "object" ? detail : workflowDetailPayload();
+          const args =
+            source &&
+            source.primary_tool_arguments &&
+            typeof source.primary_tool_arguments === "object" &&
+            !Array.isArray(source.primary_tool_arguments)
+              ? source.primary_tool_arguments
+              : null;
+          return args ? JSON.parse(JSON.stringify(args)) : {};
+        }
+
+        function workflowPrimaryOperation(detail) {
+          const source = detail && typeof detail === "object" ? detail : workflowDetailPayload();
+          return source && typeof source.primary_operation === "string"
+            ? source.primary_operation
+            : "";
+        }
+
+        function workflowSupportsReview(detail) {
+          const source = detail && typeof detail === "object" ? detail : workflowDetailPayload();
+          if (source && typeof source.supports_review === "boolean") {
+            return source.supports_review;
+          }
+          const primaryTool = workflowPrimaryToolName(source);
+          return Boolean(primaryTool && toolSupportsDryRun(primaryTool));
+        }
+
+        function workflowDryRunToolName() {
+          const detail = workflowDetailPayload();
+          if (workflowSupportsReview(detail)) {
+            const primaryTool = workflowPrimaryToolName(detail);
+            if (primaryTool && toolSupportsDryRun(primaryTool)) {
+              return primaryTool;
+            }
+          }
+          return workflowToolNames().find(function (toolName) {
+            return toolSupportsDryRun(toolName);
+          }) || null;
+        }
+
+        function toolNameToOperation(toolName) {
+          return String(toolName || "").replace(/^yacli\./, "");
+        }
+
+        function latestWorkflowActivity() {
+          const detail = workflowDetailPayload();
+          const primaryOperation = workflowPrimaryOperation(detail);
+          const operations = primaryOperation
+            ? [primaryOperation]
+            : workflowToolNames().map(toolNameToOperation);
+          if (operations.length === 0) {
+            return null;
+          }
+          return (
+            activityCatalogItems().find(function (entry) {
+              return operations.includes(String(entry.operation || ""));
+            }) || null
+          );
+        }
+
+        function fallbackGoalTextHints() {
+          const recommendation = bestGoalRecommendation();
+          const source =
+            goalQuery() ||
+            (recommendation && typeof recommendation.query === "string"
+              ? recommendation.query
+              : "");
+          const emailMatch = source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+          const diskMatch = source.match(/disk:[^\s"'`]+/i);
+          const localMatch = source.match(/(?:\.{1,2}\/|~\/|\/)[^\s"'`]+/);
+          const quotedMatch =
+            source.match(/"([^"]+)"/) ||
+            source.match(/«([^»]+)»/) ||
+            source.match(/“([^”]+)”/);
+          const calendarMatch =
+            source.match(/(?:календар[ьяею]|calendar)\s+([A-Z0-9._-]+)/i) ||
+            source.match(/([A-Z0-9._-]+)\s+(?:календар[ьяею]|calendar)/i);
+          return {
+            sourceText: source,
+            email: emailMatch ? emailMatch[0] : "",
+            diskPath: diskMatch ? diskMatch[0] : "",
+            localPath: localMatch ? localMatch[0] : "",
+            quotedText: quotedMatch ? quotedMatch[1] : "",
+            calendar: calendarMatch ? calendarMatch[1] : "",
+          };
+        }
+
+        function goalTextHints() {
+          const payload = state.goalRoutePayload;
+          if (
+            payload &&
+            typeof payload === "object" &&
+            payload.hints &&
+            typeof payload.hints === "object"
+          ) {
+            return {
+              sourceText:
+                goalQuery() ||
+                (typeof payload.query === "string" ? payload.query : ""),
+              email:
+                typeof payload.hints.email === "string" ? payload.hints.email : "",
+              diskPath:
+                typeof payload.hints.disk_path === "string" ? payload.hints.disk_path : "",
+              localPath:
+                typeof payload.hints.local_path === "string" ? payload.hints.local_path : "",
+              quotedText:
+                typeof payload.hints.quoted_text === "string" ? payload.hints.quoted_text : "",
+              calendar:
+                typeof payload.hints.calendar === "string" ? payload.hints.calendar : "",
+            };
+          }
+          return fallbackGoalTextHints();
+        }
+
+        function pathBasename(path) {
+          const value = String(path || "").trim();
+          if (!value) {
+            return "";
+          }
+          const normalized = value.replace(/^disk:/i, "");
+          const parts = normalized.split(/[\\/]/).filter(Boolean);
+          return parts.length > 0 ? parts[parts.length - 1] : "";
+        }
+
+        function inferredDiskPathFromSourcePath(localPath, fallbackName) {
+          const basename = pathBasename(localPath) || String(fallbackName || "").trim();
+          if (!basename) {
+            return "";
+          }
+          return "disk:/uploads/" + basename;
         }
 
         function toolDefinitionByName(name) {
@@ -1586,6 +2497,54 @@
           return args;
         }
 
+        function toolSupportsDryRun(toolName) {
+          const definition = toolDefinitionByName(toolName);
+          const properties =
+            definition &&
+            definition.inputSchema &&
+            definition.inputSchema.properties &&
+            typeof definition.inputSchema.properties === "object"
+              ? definition.inputSchema.properties
+              : null;
+          return Boolean(
+            properties && Object.prototype.hasOwnProperty.call(properties, "dry_run"),
+          );
+        }
+
+        function workflowName() {
+          const value = elements.workflowNameInput.value.trim();
+          if (value) {
+            return value;
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredWorkflow === "string" &&
+            state.bootstrap.preferredWorkflow.length > 0
+          ) {
+            return state.bootstrap.preferredWorkflow;
+          }
+          const catalog = workflowCatalogItems();
+          return catalog.length > 0 && typeof catalog[0].id === "string"
+            ? catalog[0].id
+            : "daily-briefing";
+        }
+
+        function activityId() {
+          const value = elements.activityIdInput.value.trim();
+          if (value) {
+            return value;
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap.preferredActivity === "string" &&
+            state.bootstrap.preferredActivity.length > 0
+          ) {
+            return state.bootstrap.preferredActivity;
+          }
+          const catalog = activityCatalogItems();
+          return catalog.length > 0 && typeof catalog[0].id === "string" ? catalog[0].id : "";
+        }
+
         function renderSelectedToolSchema() {
           const toolName = elements.toolNameInput.value.trim();
           if (!toolName) {
@@ -1609,6 +2568,11 @@
             description: definition.description || "",
             inputSchema: definition.inputSchema || {},
           });
+          if (!toolSupportsDryRun(toolName)) {
+            state.reviewedToolName = null;
+            state.reviewedToolArgs = null;
+            renderToolReview("No action review yet.");
+          }
           savePersistedRuntimeState();
           renderRuntimeState();
         }
@@ -1686,6 +2650,45 @@
             });
           });
 
+          workflowCatalogItems().forEach(function (workflow) {
+            items.push({
+              kind: "workflow",
+              name: workflow.id || "unknown-workflow",
+              title: workflow.title || workflow.id || "unknown-workflow",
+              subtitle: workflow.connects || "Workflow Hub",
+              description: workflow.summary || "",
+              matchText: [
+                workflow.id,
+                workflow.title,
+                workflow.summary,
+                workflow.connects,
+                workflow.request_example,
+                workflow.prompt_name,
+                workflow.skill_name,
+                Array.isArray(workflow.mcp_tools) ? workflow.mcp_tools.join(" ") : "",
+                Array.isArray(workflow.cli_steps) ? workflow.cli_steps.join(" ") : "",
+              ].join(" "),
+            });
+          });
+
+          activityCatalogItems().forEach(function (activity) {
+            items.push({
+              kind: "activity",
+              name: activity.id || "unknown-activity",
+              title: activity.summary || activity.id || "unknown-activity",
+              subtitle: activity.operation || "Activity Log",
+              description: activity.replay_command || "",
+              matchText: [
+                activity.id,
+                activity.operation,
+                activity.account,
+                activity.source,
+                activity.summary,
+                activity.replay_command,
+              ].join(" "),
+            });
+          });
+
           const resources =
             state.resourceCatalogPayload && Array.isArray(state.resourceCatalogPayload.resources)
               ? state.resourceCatalogPayload.resources
@@ -1750,6 +2753,10 @@
           switch (item.kind) {
             case "tool":
               return "Open runner";
+            case "workflow":
+              return "Open workflow";
+            case "activity":
+              return "Open action";
             case "prompt":
               return "Render prompt";
             case "resource":
@@ -1852,6 +2859,18 @@
               selectTool(item.name, false);
               focusPanel("panel-tools");
               break;
+            case "workflow":
+              elements.workflowNameInput.value = item.name;
+              state.bootstrap.preferredWorkflow = item.name;
+              focusPanel("panel-workflows");
+              await readWorkflowResource();
+              break;
+            case "activity":
+              elements.activityIdInput.value = item.name;
+              state.bootstrap.preferredActivity = item.name;
+              focusPanel("panel-activity");
+              await readActivityResource();
+              break;
             case "prompt":
               elements.promptNameInput.value = item.name;
               state.bootstrap.preferredPrompt = item.name;
@@ -1859,6 +2878,16 @@
               await renderSelectedPrompt();
               break;
             case "resource":
+              if (item.name === "resource://yacli/workflows") {
+                focusPanel("panel-workflows");
+                await listWorkflows();
+                return;
+              }
+              if (item.name === "resource://yacli/activity") {
+                focusPanel("panel-activity");
+                await listActivity();
+                return;
+              }
               if (item.name === "resource://yacli/skills") {
                 focusPanel("panel-resources");
                 readSkillsCatalog();
@@ -1880,6 +2909,12 @@
                 readAuthResource();
               } else if (item.name === "resource://yacli/skill/{skill}") {
                 readSkillResource();
+              } else if (item.name === "resource://yacli/workflow/{workflow}") {
+                focusPanel("panel-workflows");
+                listWorkflows();
+              } else if (item.name === "resource://yacli/activity/{activity}") {
+                focusPanel("panel-activity");
+                listActivity();
               } else {
                 logEvent("browser", item.name);
               }
@@ -2052,6 +3087,49 @@
             !hostSupportsModelContext() ||
             !authChallenge ||
             disposed;
+          elements.actionShareActivityReplay.disabled =
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !activityDetailPayload() ||
+            !activityDetailPayload().replay_command ||
+            disposed;
+          elements.actionHomeShareOnboarding.disabled =
+            disposed ||
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !onboardingPayload();
+          elements.actionHomeShareDoctor.disabled =
+            disposed ||
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !doctorPayload();
+          elements.actionHomeApplySafeFixes.disabled = disposed || !doctorPayload();
+          elements.actionHomeShareNextActions.disabled =
+            disposed ||
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !nextActionsPayload();
+          elements.actionPreviewWorkflow.disabled =
+            disposed || !workflowDryRunToolName();
+          elements.actionApplyWorkflow.disabled =
+            disposed ||
+            !state.reviewedToolName ||
+            !workflowToolNames().includes(state.reviewedToolName);
+          elements.actionShareWorkflowReplay.disabled =
+            disposed ||
+            !hostSupportsMessages() ||
+            !hostSupportsModelContext() ||
+            !latestWorkflowActivity();
+          const selectedToolName = elements.toolNameInput ? elements.toolNameInput.value.trim() : "";
+          elements.actionPreviewSelectedTool.disabled =
+            disposed || !selectedToolName || !toolSupportsDryRun(selectedToolName);
+          elements.actionApplyReviewedTool.disabled =
+            disposed ||
+            !state.reviewedToolName ||
+            !state.reviewedToolArgs ||
+            !state.reviewPayload;
+          elements.actionOpenToolRemediation.disabled =
+            disposed || !remediationWorkflowName();
           elements.actionRunSelectedTool.disabled = disposed;
           elements.actionToggleDisplay.disabled = !alternateMode || disposed;
           elements.actionToggleDisplay.textContent =
@@ -2162,7 +3240,7 @@
               setStatus("error", "Tool args are invalid");
               logEvent("tool args error", detail);
               renderToolResult({ error: detail, name: selectedTool });
-              return;
+              return { error: detail, name: selectedTool };
             }
           }
           selectTool(selectedTool, true);
@@ -2202,6 +3280,7 @@
                 : selectedTool + " completed",
             );
             logEvent("tool result", selectedTool + " completed");
+            return result;
           } catch (error) {
             const detail = error && error.message ? error.message : String(error);
             state.lastToolResult = error || { error: detail };
@@ -2210,10 +3289,345 @@
             renderAuth(state.authChallenge);
             setStatus("error", "Tool call failed");
             logEvent("tool error", detail);
+            return error || { error: detail };
           } finally {
             setButtonsDisabled(false);
             syncHostActionAvailability();
           }
+        }
+
+        function reviewedToolArguments() {
+          if (!state.reviewedToolArgs || typeof state.reviewedToolArgs !== "object") {
+            return null;
+          }
+          const args = Object.assign({}, state.reviewedToolArgs);
+          delete args.dry_run;
+          return args;
+        }
+
+        function reviewPreviewPayload() {
+          if (!state.reviewPayload || typeof state.reviewPayload !== "object") {
+            return null;
+          }
+          if (
+            state.reviewPayload.preview &&
+            typeof state.reviewPayload.preview === "object"
+          ) {
+            return state.reviewPayload.preview;
+          }
+          return null;
+        }
+
+        function reviewRemediation() {
+          const preview = reviewPreviewPayload();
+          if (!preview || typeof preview !== "object") {
+            return null;
+          }
+          if (
+            preview.review &&
+            typeof preview.review === "object" &&
+            preview.review.remediation &&
+            typeof preview.review.remediation === "object"
+          ) {
+            return preview.review.remediation;
+          }
+          if (preview.remediation && typeof preview.remediation === "object") {
+            return preview.remediation;
+          }
+          return null;
+        }
+
+        function remediationWorkflowName() {
+          const remediation = reviewRemediation();
+          return remediation && typeof remediation.workflow === "string"
+            ? remediation.workflow
+            : "";
+        }
+
+        function remediationPrefillSendLinkArgs() {
+          const remediation = reviewRemediation();
+          const reviewedArgs = reviewedToolArguments();
+          if (
+            !remediation ||
+            remediation.workflow !== "send-link-by-mail" ||
+            state.reviewedToolName !== "yacli.mail.send" ||
+            !reviewedArgs ||
+            !Array.isArray(reviewedArgs.attachments) ||
+            reviewedArgs.attachments.length !== 1 ||
+            typeof remediation.suggested_disk_path !== "string" ||
+            remediation.suggested_disk_path.length === 0
+          ) {
+            return null;
+          }
+
+          return {
+            account:
+              typeof reviewedArgs.account === "string" && reviewedArgs.account.length > 0
+                ? reviewedArgs.account
+                : elements.accountInput.value.trim(),
+            to: reviewedArgs.to,
+            cc: Array.isArray(reviewedArgs.cc) ? reviewedArgs.cc : [],
+            bcc: Array.isArray(reviewedArgs.bcc) ? reviewedArgs.bcc : [],
+            subject: reviewedArgs.subject,
+            text:
+              typeof reviewedArgs.text === "string" && reviewedArgs.text.length > 0
+                ? reviewedArgs.text
+                : null,
+            html:
+              typeof reviewedArgs.html === "string" && reviewedArgs.html.length > 0
+                ? reviewedArgs.html
+                : null,
+            source_path: reviewedArgs.attachments[0],
+            disk_path: remediation.suggested_disk_path,
+            overwrite: false,
+          };
+        }
+
+        function workflowAutofillArguments(workflowDetail, toolName) {
+          const detail =
+            workflowDetail && typeof workflowDetail === "object"
+              ? workflowDetail
+              : workflowDetailPayload();
+          const workflowId = detail && typeof detail.id === "string" ? detail.id : "";
+          const tool = toolName || workflowPrimaryToolName(detail);
+          const defaults = defaultToolArguments(tool);
+          const primaryTool = workflowPrimaryToolName(detail);
+          const canonicalArgs =
+            tool === primaryTool ? workflowPrimaryToolArguments(detail) : {};
+          const account = elements.accountInput.value.trim();
+          const hints = goalTextHints();
+          const remediation = reviewRemediation();
+          const latestActivity = latestWorkflowActivity();
+          const quotedTitle = hints.quotedText || "";
+          const localFilename = pathBasename(hints.localPath);
+          const diskFilename = pathBasename(hints.diskPath);
+          const inferredFilename = localFilename || diskFilename || "archive.zip";
+          const args = Object.assign({}, defaults, canonicalArgs);
+          if (account) {
+            args.account = account;
+          }
+
+          switch (workflowId) {
+            case "daily-briefing":
+              break;
+            case "reply-with-context":
+              if (tool === "yacli.mail.reply") {
+                args.text = hints.quotedText || args.text || "Подтверждаю, это окно подходит";
+              }
+              break;
+            case "attachment-to-disk":
+              if (tool === "yacli.mail.attachment.export") {
+                args.name =
+                  quotedTitle && /\.[A-Za-z0-9]+$/.test(quotedTitle)
+                    ? quotedTitle
+                    : diskFilename || localFilename || args.name || "invoice.pdf";
+                args.output_path = "./" + pathBasename(args.name);
+              }
+              break;
+            case "send-file-by-mail":
+              if (tool === "yacli.mail.send") {
+                args.to = hints.email || args.to || "person@example.com";
+                args.subject = quotedTitle || args.subject || "Счёт";
+                args.text = args.text || "Во вложении файл";
+                if (hints.localPath) {
+                  args.attachments = [hints.localPath];
+                } else if (!Array.isArray(args.attachments) || args.attachments.length === 0) {
+                  args.attachments = ["./invoice.pdf"];
+                }
+              }
+              break;
+            case "send-link-by-mail":
+              if (tool === "yacli.mail.send_link") {
+                args.to = hints.email || args.to || "person@example.com";
+                args.subject = quotedTitle || args.subject || "Материалы";
+                args.text = args.text || "Отправляю ссылку";
+                args.source_path = hints.localPath || args.source_path || "./" + inferredFilename;
+                args.disk_path =
+                  (remediation && remediation.suggested_disk_path) ||
+                  hints.diskPath ||
+                  args.disk_path ||
+                  inferredDiskPathFromSourcePath(args.source_path, inferredFilename) ||
+                  "disk:/docs/archive/archive.zip";
+                args.overwrite = false;
+              }
+              break;
+            case "publish-file-link":
+              if (tool === "yacli.disk.upload_link") {
+                args.source = hints.localPath || args.source || "./" + inferredFilename;
+                args.path =
+                  hints.diskPath ||
+                  args.path ||
+                  inferredDiskPathFromSourcePath(args.source, inferredFilename) ||
+                  "disk:/docs/archive/archive.zip";
+                args.overwrite = false;
+              }
+              break;
+            case "revoke-public-link":
+              if (tool === "yacli.disk.unpublish") {
+                args.path = hints.diskPath || args.path || "disk:/docs/archive/archive.zip";
+              }
+              break;
+            case "invite-to-calendar":
+              if (tool === "yacli.mail.invite.create_event") {
+                args.calendar = hints.calendar || args.calendar || "team";
+              }
+              break;
+            default:
+              break;
+          }
+
+          if (
+            latestActivity &&
+            typeof latestActivity.replay_command === "string" &&
+            workflowId === "revoke-public-link" &&
+            !args.path
+          ) {
+            const match = latestActivity.replay_command.match(/disk:\/[^\s"'`]+/);
+            if (match) {
+              args.path = match[0];
+            }
+          }
+
+          return args;
+        }
+
+        function setWorkflowRunnerState(workflowDetail, toolName, focusRunner) {
+          const detail =
+            workflowDetail && typeof workflowDetail === "object"
+              ? workflowDetail
+              : workflowDetailPayload();
+          const selectedTool = toolName || workflowPrimaryToolName(detail);
+          if (!selectedTool) {
+            logEvent("workflow runner blocked", "workflow detail has no linked MCP tools");
+            return false;
+          }
+
+          state.bootstrap.preferredSection = "tools";
+          state.bootstrap.preferredWorkflow =
+            detail && typeof detail.id === "string"
+              ? detail.id
+              : state.bootstrap.preferredWorkflow;
+          state.bootstrap.preferredTool = selectedTool;
+          elements.toolNameInput.value = selectedTool;
+          elements.toolArgsInput.value = safeStringify(
+            workflowAutofillArguments(detail, selectedTool),
+          );
+          selectTool(selectedTool, true);
+          renderSelectedToolSchema();
+          renderRuntimeState();
+          if (focusRunner) {
+            focusPanel("panel-tools");
+          }
+          return true;
+        }
+
+        async function previewSelectedTool() {
+          const selectedTool = elements.toolNameInput.value.trim();
+          if (!selectedTool || !toolSupportsDryRun(selectedTool)) {
+            logEvent("preview blocked", "selected tool does not support dry-run review");
+            return;
+          }
+
+          let args;
+          try {
+            args = parseToolArguments();
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Tool args are invalid");
+            renderToolReview({ error: detail, name: selectedTool });
+            logEvent("preview error", detail);
+            return;
+          }
+
+          const reviewArgs = Object.assign({}, args, { dry_run: true });
+          const result = await runTool(selectedTool, reviewArgs);
+          const structured =
+            result && typeof result === "object" && result.structuredContent
+              ? result.structuredContent
+              : null;
+          if (structured && structured.dry_run === true) {
+            state.reviewedToolName = selectedTool;
+            state.reviewedToolArgs = reviewArgs;
+            renderToolReview({
+              tool: selectedTool,
+              status: "review_ready",
+              preview: structured,
+              applyArguments: reviewedToolArguments(),
+            });
+            logEvent("preview ready", selectedTool + " reviewed without write");
+            setStatus("ready", "Action review is ready");
+            return;
+          }
+
+          state.reviewedToolName = null;
+          state.reviewedToolArgs = null;
+          renderToolReview({
+            tool: selectedTool,
+            status: "review_unavailable",
+            result: result,
+          });
+        }
+
+        async function applyReviewedTool() {
+          if (!state.reviewedToolName || !state.reviewedToolArgs) {
+            logEvent("apply blocked", "no reviewed action ready to apply");
+            return;
+          }
+
+          const applyArgs = reviewedToolArguments();
+          if (!applyArgs) {
+            logEvent("apply blocked", "reviewed action arguments are unavailable");
+            return;
+          }
+
+          elements.toolNameInput.value = state.reviewedToolName;
+          elements.toolArgsInput.value = safeStringify(applyArgs);
+          renderSelectedToolSchema();
+          renderRuntimeState();
+          setStatus("running", "Applying reviewed action");
+          const result = await runTool(state.reviewedToolName, applyArgs);
+          state.reviewedToolName = null;
+          state.reviewedToolArgs = null;
+          renderToolReview({
+            tool: elements.toolNameInput.value.trim(),
+            status: "applied",
+            result: result,
+          });
+          logEvent("apply", elements.toolNameInput.value.trim() + " executed after review");
+        }
+
+        async function openToolRemediation() {
+          const workflow = remediationWorkflowName();
+          if (!workflow) {
+            logEvent("remediation blocked", "review has no suggested workflow");
+            return;
+          }
+
+          const sendLinkArgs = remediationPrefillSendLinkArgs();
+          if (sendLinkArgs) {
+            state.bootstrap.preferredSection = "tools";
+            state.bootstrap.preferredWorkflow = workflow;
+            state.bootstrap.preferredTool = "yacli.mail.send_link";
+            elements.workflowNameInput.value = workflow;
+            elements.toolNameInput.value = "yacli.mail.send_link";
+            elements.toolArgsInput.value = safeStringify(sendLinkArgs);
+            selectTool("yacli.mail.send_link", true);
+            renderSelectedToolSchema();
+            focusPanel("panel-tools");
+            renderRuntimeState();
+            logEvent("remediation", "prefilled send-link-by-mail flow from oversized mail review");
+            setStatus("ready", "Suggested flow is prefilled");
+            return;
+          }
+
+          elements.workflowNameInput.value = workflow;
+          state.bootstrap.preferredWorkflow = workflow;
+          state.bootstrap.preferredSection = "workflows";
+          focusPanel("panel-workflows");
+          await readWorkflowResource();
+          await openWorkflowRunner();
+          logEvent("remediation", "opened suggested workflow " + workflow);
+          setStatus("ready", "Suggested flow opened");
         }
 
         function setButtonsDisabled(disabled) {
@@ -2222,6 +3636,28 @@
           });
           elements.actionRunSelectedTool.disabled = disabled || disposed;
           syncHostActionAvailability();
+        }
+
+        async function updateModelContext(payload) {
+          const structuredContent =
+            payload && payload.structuredContent && typeof payload.structuredContent === "object"
+              ? payload.structuredContent
+              : undefined;
+          const text =
+            payload && typeof payload.content === "string"
+              ? payload.content
+              : "";
+          return sendRequest("ui/update-model-context", {
+            content: text
+              ? [
+                  {
+                    type: "text",
+                    text: text,
+                  },
+                ]
+              : [],
+            structuredContent: structuredContent,
+          });
         }
 
         function snapshotMarkdown(snapshot) {
@@ -2469,6 +3905,10 @@
           return value || "yacli-shared";
         }
 
+        function goalQuery() {
+          return elements.goalInput.value.trim();
+        }
+
         function applyBootstrapState() {
           if (elements.browserQueryInput) {
             elements.browserQueryInput.value = state.browserQuery || "";
@@ -2500,6 +3940,30 @@
             );
           }
 
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredWorkflow === "string" &&
+            state.bootstrap.preferredWorkflow.length > 0
+          ) {
+            elements.workflowNameInput.value = state.bootstrap.preferredWorkflow;
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredGoal === "string" &&
+            state.bootstrap.preferredGoal.length > 0
+          ) {
+            elements.goalInput.value = state.bootstrap.preferredGoal;
+          }
+          if (
+            state.bootstrap &&
+            typeof state.bootstrap === "object" &&
+            typeof state.bootstrap.preferredActivity === "string" &&
+            state.bootstrap.preferredActivity.length > 0
+          ) {
+            elements.activityIdInput.value = state.bootstrap.preferredActivity;
+          }
           if (
             state.bootstrap &&
             typeof state.bootstrap === "object" &&
@@ -2586,6 +4050,58 @@
           }
         }
 
+        async function refreshWorkflowCatalog() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderWorkflowCatalog({
+              workflows: [],
+              unsupported: true,
+            });
+            return;
+          }
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: "resource://yacli/workflows",
+            });
+            state.workflowCatalogPayload = result;
+            const items = workflowCatalogItems();
+            if (!elements.workflowNameInput.value.trim() && items.length > 0) {
+              elements.workflowNameInput.value = items[0].id || "";
+            }
+            renderWorkflowCatalog();
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderWorkflowCatalog({ error: detail, workflows: [] });
+            logEvent("workflows error", detail);
+          }
+        }
+
+        async function refreshActivityCatalog() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderActivityCatalog({
+              items: [],
+              unsupported: true,
+            });
+            return;
+          }
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: "resource://yacli/activity",
+            });
+            state.activityCatalogPayload = result;
+            const items = activityCatalogItems();
+            if (!elements.activityIdInput.value.trim() && items.length > 0) {
+              elements.activityIdInput.value = items[0].id || "";
+            }
+            renderActivityCatalog();
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderActivityCatalog({ error: detail, items: [] });
+            logEvent("activity error", detail);
+          }
+        }
+
         async function refreshResourceCatalog() {
           if (!hostSupportsServerResources() || disposed) {
             state.resourceCatalogPayload = {
@@ -2633,6 +4149,8 @@
         async function refreshBrowserCatalogs() {
           setStatus("running", "Refreshing search index");
           await refreshToolCatalog();
+          await refreshWorkflowCatalog();
+          await refreshActivityCatalog();
           try {
             await refreshPromptCatalog();
           } catch (_error) {
@@ -2644,6 +4162,298 @@
           renderBrowser();
           setStatus("ready", "Search index refreshed");
           logEvent("browser", "searchable browser catalogs refreshed");
+        }
+
+        async function refreshHome() {
+          state.bootstrap.preferredSection = "home";
+          focusPanel("panel-home");
+          setStatus("running", "Refreshing home");
+          await runTool("yacli.app.snapshot", { account: accountAlias() });
+          await refreshHomeResource();
+          await refreshWorkflowCatalog();
+          await refreshActivityCatalog();
+          renderBrowser();
+          renderHomeSummary();
+          setStatus("ready", "Home refreshed");
+          logEvent("home", "unified home refreshed");
+        }
+
+        async function refreshHomeResource() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderHome({ status: "unsupported" });
+            return;
+          }
+
+          const account = accountAlias();
+          const goal = goalQuery();
+          const uri =
+            typeof account === "string" && account.length > 0
+              ? "resource://yacli/home/" + encodeURIComponent(account)
+              : "resource://yacli/home";
+          const finalUri =
+            typeof goal === "string" && goal.length > 0
+              ? uri + "?goal=" + encodeURIComponent(goal)
+              : uri;
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: finalUri,
+            });
+            renderHome(result);
+            logEvent("home resource", "loaded canonical home payload");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderHome({ error: detail, status: "error" });
+            logEvent("home error", detail);
+          }
+        }
+
+        async function refreshOnboardingResource() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderOnboarding({ status: "unsupported", checks: [] });
+            return;
+          }
+
+          const goal = goalQuery();
+          const uri =
+            typeof goal === "string" && goal.length > 0
+              ? "resource://yacli/onboarding?goal=" + encodeURIComponent(goal)
+              : "resource://yacli/onboarding";
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: uri,
+            });
+            renderOnboarding(result);
+            logEvent("onboarding", "loaded live onboarding checklist");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderOnboarding({ error: detail, checks: [] });
+            logEvent("onboarding error", detail);
+          }
+        }
+
+        async function refreshNextActionsResource() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderNextActions({ status: "unsupported", actions: [] });
+            return;
+          }
+
+          const account = accountAlias();
+          const goal = goalQuery();
+          const baseUri =
+            typeof account === "string" && account.length > 0
+              ? "resource://yacli/next-actions/" + encodeURIComponent(account)
+              : "resource://yacli/next-actions";
+          const finalUri =
+            typeof goal === "string" && goal.length > 0
+              ? baseUri + "?goal=" + encodeURIComponent(goal)
+              : baseUri;
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: finalUri,
+            });
+            renderNextActions(result);
+            logEvent("next actions", "loaded ranked next steps");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderNextActions({ error: detail, actions: [] });
+            logEvent("next actions error", detail);
+          }
+        }
+
+        async function refreshDoctorResource() {
+          if (!hostSupportsServerResources() || disposed) {
+            renderDoctor({ status: "unsupported", checks: [] });
+            return;
+          }
+
+          const goal = goalQuery();
+          const uri =
+            typeof goal === "string" && goal.length > 0
+              ? "resource://yacli/doctor?goal=" + encodeURIComponent(goal)
+              : "resource://yacli/doctor";
+
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: uri,
+            });
+            renderDoctor(result);
+            logEvent("doctor", "loaded live health-check");
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderDoctor({ error: detail, checks: [] });
+            logEvent("doctor error", detail);
+          }
+        }
+
+        async function shareOnboarding() {
+          const payload = onboardingPayload();
+          if (!payload) {
+            await refreshOnboardingResource();
+          }
+          const detail = onboardingPayload();
+          if (!detail) {
+            logEvent("share onboarding blocked", "no onboarding payload available");
+            return;
+          }
+          if (!hostSupportsMessages() || !hostSupportsModelContext()) {
+            logEvent("share onboarding blocked", "host does not support context sharing");
+            return;
+          }
+          const pendingChecks = Array.isArray(detail.checks)
+            ? detail.checks
+                .filter(function (item) {
+                  return item.status !== "completed";
+                })
+                .map(function (item) {
+                  return "- " + String(item.title || item.id || "unknown") + ": " + String(item.detail || "");
+                })
+                .join("\n")
+            : "";
+          await updateModelContext({
+            kind: "markdown",
+            content:
+              "Текущее onboarding-состояние yacli:\n\n" +
+              "- status: `" + String(detail.status || "unknown") + "`\n" +
+              "- current account: `" + String(detail.current_account || "none") + "`\n" +
+              (pendingChecks ? "\nОсталось сделать:\n" + pendingChecks : "\nВсе основные шаги закрыты."),
+          });
+          logEvent("onboarding", "shared onboarding checklist with host");
+        }
+
+        async function shareDoctor() {
+          const payload = doctorPayload();
+          if (!payload) {
+            await refreshDoctorResource();
+          }
+          const detail = doctorPayload();
+          if (!detail) {
+            logEvent("share doctor blocked", "no doctor payload available");
+            return;
+          }
+          if (!hostSupportsMessages() || !hostSupportsModelContext()) {
+            logEvent("share doctor blocked", "host does not support context sharing");
+            return;
+          }
+          const pendingChecks = Array.isArray(detail.checks)
+            ? detail.checks
+                .filter(function (item) {
+                  return item.status !== "completed";
+                })
+                .map(function (item) {
+                  return "- " + String(item.title || item.id || "unknown") + ": " + String(item.detail || "");
+                })
+                .join("\n")
+            : "";
+          await updateModelContext({
+            kind: "markdown",
+            content:
+              "Текущее health-check состояние yacli:\n\n" +
+              "- status: `" + String(detail.status || "unknown") + "`\n" +
+              "- secret backend: `" + String((detail.config && detail.config.secretBackend) || "unknown") + "`\n" +
+              "- current account: `" + String(detail.current_account || "none") + "`\n" +
+              (pendingChecks ? "\nТребуют внимания:\n" + pendingChecks : "\nКритичных продуктовых проблем не найдено."),
+          });
+          logEvent("doctor", "shared health-check with host");
+        }
+
+        async function applySafeDoctorFixes() {
+          state.bootstrap.preferredSection = "home";
+          focusPanel("panel-home");
+          setStatus("running", "Applying safe fixes");
+          try {
+            const result = await callTool("yacli.doctor.apply_safe", {
+              account: elements.accountInput.value.trim() || undefined,
+              goal: goalQuery() || undefined,
+            });
+            const remediationStatus =
+              result && typeof result.status === "string" ? result.status : "unknown";
+            const appliedCount =
+              result && typeof result.applied_count === "number" ? result.applied_count : 0;
+            const needsInputCount =
+              result && typeof result.needs_input_count === "number"
+                ? result.needs_input_count
+                : 0;
+            await refreshOnboardingResource();
+            await refreshDoctorResource();
+            await refreshHomeResource();
+            await refreshNextActionsResource();
+            await refreshActivityCatalog();
+            renderBrowser();
+            setStatus("ready", "Safe fixes processed");
+            logEvent(
+              "doctor remediation",
+              "status=" +
+                remediationStatus +
+                ", applied=" +
+                String(appliedCount) +
+                ", needs_input=" +
+                String(needsInputCount)
+            );
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            setStatus("error", "Safe fixes failed");
+            logEvent("doctor remediation error", detail);
+          }
+        }
+
+        async function shareNextActions() {
+          const payload = nextActionsPayload();
+          if (!payload) {
+            await refreshNextActionsResource();
+          }
+          const detail = nextActionsPayload();
+          if (!detail) {
+            logEvent("share next actions blocked", "no next actions payload available");
+            return;
+          }
+          if (!hostSupportsMessages() || !hostSupportsModelContext()) {
+            logEvent("share next actions blocked", "host does not support context sharing");
+            return;
+          }
+          const actions = Array.isArray(detail.actions)
+            ? detail.actions
+                .slice(0, 5)
+                .map(function (item) {
+                  return (
+                    "- " +
+                    String(item.title || item.id || "step") +
+                    " -> `" +
+                    String(item.command || "") +
+                    "`"
+                  );
+                })
+                .join("\n")
+            : "";
+          await updateModelContext({
+            kind: "markdown",
+            content:
+              "Следующие лучшие шаги для yacli:\n\n" +
+              "- status: `" + String(detail.status || "unknown") + "`\n" +
+              "- summary: " + String(detail.summary || "") + "\n\n" +
+              (actions || "- Нет обязательных шагов."),
+          });
+          logEvent("next actions", "shared ranked next steps with host");
+        }
+
+        async function openHomeAccountResource() {
+          state.bootstrap.preferredSection = "home";
+          focusPanel("panel-home");
+          await readAccountResource();
+        }
+
+        async function openHomeWorkflowHub() {
+          state.bootstrap.preferredSection = "home";
+          focusPanel("panel-home");
+          await listWorkflows();
+        }
+
+        async function openHomeActivityLog() {
+          state.bootstrap.preferredSection = "home";
+          focusPanel("panel-home");
+          await listActivity();
         }
 
         async function refreshResourceTemplates() {
@@ -2723,6 +4533,69 @@
           }
         }
 
+        async function listActivity() {
+          state.bootstrap.preferredSection = "activity";
+          focusPanel("panel-activity");
+          setStatus("running", "Loading activity log");
+          await refreshActivityCatalog();
+          renderBrowser();
+          setStatus("ready", "Activity log loaded");
+          logEvent("activity", "loaded recent actions");
+        }
+
+        async function readActivityResource() {
+          const id = activityId();
+          if (!id) {
+            renderActivity({ error: "No activity ID selected." });
+            setStatus("error", "Activity ID is required");
+            logEvent("activity error", "no activity id selected");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "activity";
+          state.bootstrap.preferredActivity = id;
+          focusPanel("panel-activity");
+          setStatus("running", "Opening activity");
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: "resource://yacli/activity/" + id,
+            });
+            renderActivity(result);
+            setStatus("ready", "Activity loaded");
+            logEvent("activity", id);
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderActivity({ error: detail, activity: id });
+            setStatus("error", "Activity load failed");
+            logEvent("activity error", detail);
+          }
+        }
+
+        async function shareActivityReplay() {
+          const detail = activityDetailPayload();
+          if (!detail || !detail.replay_command) {
+            await readActivityResource();
+          }
+          const payload = activityDetailPayload();
+          if (!payload || !payload.replay_command) {
+            logEvent("share replay blocked", "activity detail has no replay command");
+            return;
+          }
+          if (!hostSupportsMessages() || !hostSupportsModelContext()) {
+            logEvent("share replay blocked", "host does not support context sharing");
+            return;
+          }
+          await updateModelContext({
+            kind: "markdown",
+            content:
+              "Последнее действие yacli:\n\n" +
+              "- operation: `" + String(payload.operation || "unknown") + "`\n" +
+              "- summary: " + String(payload.summary || "unknown") + "\n" +
+              "- replay: `" + String(payload.replay_command) + "`",
+          });
+          logEvent("activity replay", "shared replay command with host");
+        }
+
         function readAccountResource() {
           state.bootstrap.preferredResource = "account";
           state.bootstrap.preferredSkill = "";
@@ -2742,6 +4615,366 @@
           state.bootstrap.preferredSkill = "";
           focusPanel("panel-resources");
           readResource("resource://yacli/skills");
+        }
+
+        async function routeGoal() {
+          const goal = goalQuery();
+          if (!goal) {
+            renderGoalRoute({ error: "Goal is required." });
+            setStatus("error", "Goal is required");
+            logEvent("goal route blocked", "no natural-language goal provided");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "goal";
+          state.bootstrap.preferredGoal = goal;
+          focusPanel("panel-goal");
+          setStatus("running", "Routing goal");
+          try {
+            const result = await callTool(DASHBOARD_TOOL_GOAL_ROUTE, {
+              goal: goal,
+              account: elements.accountInput.value.trim() || undefined,
+            });
+            renderGoalRoute(result);
+            await refreshOnboardingResource();
+            await refreshDoctorResource();
+            await refreshHomeResource();
+            await refreshNextActionsResource();
+            setStatus("ready", "Goal routed");
+            logEvent("goal route", goal);
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderGoalRoute({ error: detail, goal: goal });
+            setStatus("error", "Goal routing failed");
+            logEvent("goal route error", detail);
+          }
+        }
+
+        async function openGoalWorkflow() {
+          const recommendation = bestGoalRecommendation();
+          if (!recommendation || !recommendation.workflow) {
+            logEvent("goal workflow blocked", "no routed workflow is available yet");
+            return;
+          }
+
+          elements.workflowNameInput.value = recommendation.workflow.id;
+          state.bootstrap.preferredWorkflow = recommendation.workflow.id;
+          state.bootstrap.preferredSection = "workflows";
+          focusPanel("panel-workflows");
+          await readWorkflowResource();
+        }
+
+        async function openGoalPrompt() {
+          const recommendation = bestGoalRecommendation();
+          const promptName =
+            recommendation &&
+            recommendation.route &&
+            typeof recommendation.route.prompt_name === "string"
+              ? recommendation.route.prompt_name
+              : "";
+          if (!promptName) {
+            logEvent("goal prompt blocked", "routed workflow has no prompt");
+            return;
+          }
+
+          elements.promptNameInput.value = promptName;
+          elements.promptArgsInput.value = JSON.stringify(
+            {
+              request: goalQuery(),
+              account: elements.accountInput.value.trim() || undefined,
+            },
+            null,
+            2
+          );
+          state.bootstrap.preferredPrompt = promptName;
+          state.bootstrap.preferredSection = "prompts";
+          focusPanel("panel-prompts");
+          await renderSelectedPrompt();
+        }
+
+        async function openGoalOnboarding() {
+          const goal = goalQuery();
+          if (!goal) {
+            logEvent("goal onboarding blocked", "no routed goal is available yet");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "home";
+          state.bootstrap.preferredGoal = goal;
+          focusPanel("panel-home");
+          await refreshOnboardingResource();
+        }
+
+        async function openGoalDoctor() {
+          const goal = goalQuery();
+          if (!goal) {
+            logEvent("goal doctor blocked", "no routed goal is available yet");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "home";
+          state.bootstrap.preferredGoal = goal;
+          focusPanel("panel-home");
+          await refreshDoctorResource();
+        }
+
+        async function shareGoalRoute() {
+          const payload = goalRouteDetailPayload();
+          if (!payload) {
+            logEvent("goal route share blocked", "route payload is unavailable");
+            return;
+          }
+          await shareContext("Goal route", "Goal route for current user request", payload);
+        }
+
+        async function shareGoalRemediation() {
+          const payload = goalRouteDetailPayload();
+          if (!payload || !payload.remediation) {
+            logEvent("goal remediation share blocked", "remediation payload is unavailable");
+            return;
+          }
+          if (!hostSupportsMessages() || !hostSupportsModelContext()) {
+            logEvent("goal remediation share blocked", "host does not support context sharing");
+            return;
+          }
+          const actions = Array.isArray(payload.remediation.actions)
+            ? payload.remediation.actions
+                .map(function (item) {
+                  return (
+                    "- " +
+                    String(item.title || item.id || "step") +
+                    " -> `" +
+                    String(item.command || "") +
+                    "`"
+                  );
+                })
+                .join("\n")
+            : "";
+          await updateModelContext({
+            kind: "markdown",
+            content:
+              "Remediation for routed yacli goal:\n\n" +
+              "- goal: " + String(payload.query || goalQuery() || "") + "\n" +
+              "- status: `" + String(payload.remediation.status || "unknown") + "`\n" +
+              "- workflow: `" +
+              String(
+                payload.best_match &&
+                  payload.best_match.workflow &&
+                  payload.best_match.workflow.id
+                  ? payload.best_match.workflow.id
+                  : "unknown",
+              ) +
+              "`\n\n" +
+              (actions || "- No remediation commands required."),
+          });
+          logEvent("goal remediation", "shared remediation commands with host");
+        }
+
+        async function previewGoalAction() {
+          const recommendation = bestGoalRecommendation();
+          if (!recommendation || !recommendation.workflow) {
+            logEvent("goal preview blocked", "no routed workflow is available yet");
+            return;
+          }
+          const toolName = goalDryRunToolName();
+          if (!toolName) {
+            logEvent("goal preview blocked", "routed workflow has no dry-run capable tool");
+            return;
+          }
+
+          state.bootstrap.preferredWorkflow = recommendation.workflow.id;
+          setWorkflowRunnerState(recommendation.workflow, toolName, true);
+          const routeArgs = goalRouteToolArguments(recommendation, toolName);
+          if (routeArgs) {
+            elements.toolArgsInput.value = safeStringify(routeArgs);
+            selectTool(toolName, true);
+            renderSelectedToolSchema();
+            renderRuntimeState();
+          }
+          await previewSelectedTool();
+        }
+
+        async function applyGoalAction() {
+          if (!state.reviewedToolName || !goalToolNames().includes(state.reviewedToolName)) {
+            const toolName = goalDryRunToolName();
+            if (!toolName) {
+              logEvent("goal apply blocked", "routed workflow has no reviewed dry-run action");
+              return;
+            }
+            setWorkflowRunnerState(bestGoalRecommendation().workflow, toolName, true);
+            const routeArgs = goalRouteToolArguments(bestGoalRecommendation(), toolName);
+            if (routeArgs) {
+              elements.toolArgsInput.value = safeStringify(routeArgs);
+              selectTool(toolName, true);
+              renderSelectedToolSchema();
+              renderRuntimeState();
+            }
+            await previewSelectedTool();
+          }
+
+          if (!state.reviewedToolName || !goalToolNames().includes(state.reviewedToolName)) {
+            logEvent("goal apply blocked", "review state is unavailable for routed workflow");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "tools";
+          focusPanel("panel-tools");
+          await applyReviewedTool();
+          await refreshActivityCatalog();
+          renderBrowser();
+        }
+
+        async function shareGoalReplay() {
+          const activity = latestGoalActivity();
+          if (!activity) {
+            logEvent("goal replay blocked", "routed workflow has no recorded successful action yet");
+            return;
+          }
+
+          elements.activityIdInput.value = activity.id || "";
+          state.bootstrap.preferredActivity = activity.id || "";
+          state.bootstrap.preferredSection = "activity";
+          focusPanel("panel-activity");
+          await readActivityResource();
+          await shareActivityReplay();
+        }
+
+        async function listWorkflows() {
+          state.bootstrap.preferredSection = "workflows";
+          focusPanel("panel-workflows");
+          setStatus("running", "Loading workflow hub");
+          await refreshWorkflowCatalog();
+          renderBrowser();
+          setStatus("ready", "Workflow hub loaded");
+          logEvent("workflow hub", "loaded canonical workflows");
+        }
+
+        async function readWorkflowResource() {
+          const workflow = workflowName();
+          state.bootstrap.preferredSection = "workflows";
+          state.bootstrap.preferredWorkflow = workflow;
+          focusPanel("panel-workflows");
+          setStatus("running", "Opening workflow");
+          try {
+            const result = await sendRequest("resources/read", {
+              uri: "resource://yacli/workflow/" + workflow,
+            });
+            renderWorkflow(result);
+            setStatus("ready", "Workflow loaded");
+            logEvent("workflow", workflow);
+          } catch (error) {
+            const detail = error && error.message ? error.message : String(error);
+            renderWorkflow({ error: detail, workflow: workflow });
+            setStatus("error", "Workflow load failed");
+            logEvent("workflow error", detail);
+          }
+        }
+
+        async function openWorkflowPrompt() {
+          if (!workflowDetailPayload() || !workflowDetailPayload().prompt_name) {
+            await readWorkflowResource();
+          }
+          const detail = workflowDetailPayload();
+          if (!detail || !detail.prompt_name) {
+            logEvent("workflow prompt blocked", "workflow detail has no linked prompt");
+            return;
+          }
+
+          elements.promptNameInput.value = detail.prompt_name;
+          state.bootstrap.preferredPrompt = detail.prompt_name;
+          state.bootstrap.preferredSection = "prompts";
+          focusPanel("panel-prompts");
+          await renderSelectedPrompt();
+        }
+
+        async function openWorkflowSkill() {
+          if (!workflowDetailPayload() || !workflowDetailPayload().skill_name) {
+            await readWorkflowResource();
+          }
+          const detail = workflowDetailPayload();
+          if (!detail || !detail.skill_name) {
+            logEvent("workflow skill blocked", "workflow detail has no linked skill");
+            return;
+          }
+
+          elements.skillInput.value = detail.skill_name;
+          state.bootstrap.preferredResource = "skill";
+          state.bootstrap.preferredSkill = detail.skill_name;
+          state.bootstrap.preferredSection = "resources";
+          focusPanel("panel-resources");
+          await readSkillResource();
+        }
+
+        async function openWorkflowRunner() {
+          if (
+            !workflowDetailPayload() ||
+            !Array.isArray(workflowDetailPayload().mcp_tools) ||
+            workflowDetailPayload().mcp_tools.length === 0
+          ) {
+            await readWorkflowResource();
+          }
+          const detail = workflowDetailPayload();
+          if (!detail || !Array.isArray(detail.mcp_tools) || detail.mcp_tools.length === 0) {
+            logEvent("workflow runner blocked", "workflow detail has no linked MCP tools");
+            return;
+          }
+
+          setWorkflowRunnerState(detail, workflowPrimaryToolName(detail), true);
+        }
+
+        async function previewWorkflowAction() {
+          if (!workflowDetailPayload()) {
+            await readWorkflowResource();
+          }
+          const toolName = workflowDryRunToolName();
+          if (!toolName) {
+            logEvent("workflow preview blocked", "workflow has no dry-run capable tool");
+            return;
+          }
+
+          setWorkflowRunnerState(workflowDetailPayload(), toolName, true);
+          await previewSelectedTool();
+        }
+
+        async function applyWorkflowAction() {
+          if (!state.reviewedToolName || !workflowToolNames().includes(state.reviewedToolName)) {
+            const toolName = workflowDryRunToolName();
+            if (!toolName) {
+              logEvent("workflow apply blocked", "workflow has no reviewed dry-run action");
+              return;
+            }
+            setWorkflowRunnerState(workflowDetailPayload(), toolName, true);
+            await previewSelectedTool();
+          }
+
+          if (!state.reviewedToolName || !workflowToolNames().includes(state.reviewedToolName)) {
+            logEvent("workflow apply blocked", "review state is unavailable for workflow");
+            return;
+          }
+
+          state.bootstrap.preferredSection = "tools";
+          focusPanel("panel-tools");
+          await applyReviewedTool();
+          await refreshActivityCatalog();
+          renderBrowser();
+        }
+
+        async function shareWorkflowReplay() {
+          if (!workflowDetailPayload()) {
+            await readWorkflowResource();
+          }
+          const activity = latestWorkflowActivity();
+          if (!activity) {
+            logEvent("workflow replay blocked", "workflow has no recorded successful action yet");
+            return;
+          }
+
+          elements.activityIdInput.value = activity.id || "";
+          state.bootstrap.preferredActivity = activity.id || "";
+          state.bootstrap.preferredSection = "activity";
+          focusPanel("panel-activity");
+          await readActivityResource();
+          await shareActivityReplay();
         }
 
         function readSkillResource() {
@@ -2820,6 +5053,7 @@
 
         async function restoreBootstrapFocus() {
           if (!state.bootstrap || typeof state.bootstrap !== "object") {
+            focusPanel("panel-home");
             if (elements.accountInput.value.trim()) {
               await readAccountResource();
             }
@@ -2834,6 +5068,14 @@
             typeof state.bootstrap.preferredResource === "string"
               ? state.bootstrap.preferredResource
               : "";
+          const preferredWorkflow =
+            typeof state.bootstrap.preferredWorkflow === "string"
+              ? state.bootstrap.preferredWorkflow
+              : "";
+          const preferredActivity =
+            typeof state.bootstrap.preferredActivity === "string"
+              ? state.bootstrap.preferredActivity
+              : "";
 
           if (preferredResource === "account") {
             await readAccountResource();
@@ -2845,6 +5087,16 @@
             await readSkillResource();
           } else if (elements.accountInput.value.trim()) {
             await readAccountResource();
+          }
+
+          if (preferredWorkflow) {
+            focusPanel("panel-workflows");
+            await readWorkflowResource();
+          }
+
+          if (preferredActivity) {
+            focusPanel("panel-activity");
+            await readActivityResource();
           }
 
           const preferredPrompt =
@@ -2859,6 +5111,12 @@
           if (preferredTool && preferredTool !== "yacli.app.snapshot") {
             focusPanel("panel-tools");
             selectTool(preferredTool, true);
+            return;
+          }
+
+          if (!preferredResource && !preferredWorkflow && !preferredActivity && !preferredPrompt) {
+            state.bootstrap.preferredSection = "home";
+            focusPanel("panel-home");
           }
         }
 
@@ -2905,6 +5163,8 @@
             logEvent("resources changed", "host reported resource template changes");
             refreshResourceCatalog()
               .then(refreshResourceTemplates)
+              .then(refreshWorkflowCatalog)
+              .then(refreshActivityCatalog)
               .then(refreshSkillsCatalog)
               .then(renderBrowser);
             return;
@@ -2987,9 +5247,18 @@
           renderHostContext();
           renderToolInput(state.lastToolInput);
           renderToolResult(state.lastToolResult);
+          renderToolReview(state.reviewPayload);
           renderAuth(state.authChallenge);
           renderPromptList(state.promptListPayload);
           renderPrompt(state.promptPayload);
+          renderWorkflowCatalog(state.workflowCatalogPayload);
+          renderWorkflow(state.workflowPayload);
+          renderGoalRoute(state.goalRoutePayload);
+          renderOnboarding(state.onboardingPayload);
+          renderDoctor(state.doctorPayload);
+          renderNextActions(state.nextActionsPayload);
+          renderActivityCatalog(state.activityCatalogPayload);
+          renderActivity(state.activityPayload);
           renderResourceTemplates(state.resourceTemplatesPayload);
           renderResource(state.resourcePayload);
           renderRuntimeState();
@@ -2998,10 +5267,16 @@
           elements.accountInput.addEventListener("input", renderCurrentViewUri);
           elements.toolNameInput.addEventListener("input", function () {
             state.bootstrap.preferredTool = elements.toolNameInput.value.trim();
+            state.reviewedToolName = null;
+            state.reviewedToolArgs = null;
+            renderToolReview("No action review yet.");
             renderSelectedToolSchema();
             renderCurrentViewUri();
           });
           elements.toolArgsInput.addEventListener("input", function () {
+            state.reviewedToolName = null;
+            state.reviewedToolArgs = null;
+            renderToolReview("No action review yet.");
             renderRuntimeState();
           });
           elements.browserQueryInput.addEventListener("input", function () {
@@ -3011,6 +5286,21 @@
           elements.browserFilterSelect.addEventListener("change", function () {
             state.browserFilter = elements.browserFilterSelect.value;
             renderBrowser();
+          });
+          elements.workflowNameInput.addEventListener("input", function () {
+            state.bootstrap.preferredWorkflow = elements.workflowNameInput.value.trim();
+            renderCurrentViewUri();
+            renderRuntimeState();
+          });
+          elements.goalInput.addEventListener("input", function () {
+            state.bootstrap.preferredGoal = elements.goalInput.value.trim();
+            renderCurrentViewUri();
+            renderRuntimeState();
+          });
+          elements.activityIdInput.addEventListener("input", function () {
+            state.bootstrap.preferredActivity = elements.activityIdInput.value.trim();
+            renderCurrentViewUri();
+            renderRuntimeState();
           });
           elements.skillInput.addEventListener("input", function () {
             if (state.bootstrap.preferredResource === "skill") {
@@ -3057,12 +5347,47 @@
             elements.actionOpenAuthServer.addEventListener("click", openAuthIssuer);
             elements.actionOpenDocs.addEventListener("click", openDocs);
             elements.actionOpenResourceMetadata.addEventListener("click", openResourceMetadata);
+            elements.actionHomeRefresh.addEventListener("click", refreshHome);
+            elements.actionHomeRefreshOnboarding.addEventListener("click", refreshOnboardingResource);
+            elements.actionHomeShareOnboarding.addEventListener("click", shareOnboarding);
+            elements.actionHomeRefreshDoctor.addEventListener("click", refreshDoctorResource);
+            elements.actionHomeShareDoctor.addEventListener("click", shareDoctor);
+            elements.actionHomeApplySafeFixes.addEventListener("click", applySafeDoctorFixes);
+            elements.actionHomeRefreshNextActions.addEventListener("click", refreshNextActionsResource);
+            elements.actionHomeShareNextActions.addEventListener("click", shareNextActions);
+            elements.actionHomeOpenWorkflows.addEventListener("click", openHomeWorkflowHub);
+            elements.actionHomeOpenActivity.addEventListener("click", openHomeActivityLog);
+            elements.actionHomeOpenAccount.addEventListener("click", openHomeAccountResource);
+            elements.actionRouteGoal.addEventListener("click", routeGoal);
+            elements.actionOpenGoalWorkflow.addEventListener("click", openGoalWorkflow);
+            elements.actionOpenGoalPrompt.addEventListener("click", openGoalPrompt);
+            elements.actionOpenGoalOnboarding.addEventListener("click", openGoalOnboarding);
+            elements.actionOpenGoalDoctor.addEventListener("click", openGoalDoctor);
+            elements.actionPreviewGoal.addEventListener("click", previewGoalAction);
+            elements.actionApplyGoal.addEventListener("click", applyGoalAction);
+            elements.actionShareGoalRemediation.addEventListener("click", shareGoalRemediation);
+            elements.actionShareGoalReplay.addEventListener("click", shareGoalReplay);
+            elements.actionShareGoalRoute.addEventListener("click", shareGoalRoute);
             elements.actionRefreshBrowser.addEventListener("click", refreshBrowserCatalogs);
+            elements.actionListActivity.addEventListener("click", listActivity);
+            elements.actionListWorkflows.addEventListener("click", listWorkflows);
+            elements.actionPreviewWorkflow.addEventListener("click", previewWorkflowAction);
+            elements.actionApplyWorkflow.addEventListener("click", applyWorkflowAction);
+            elements.actionReadActivity.addEventListener("click", readActivityResource);
+            elements.actionReadWorkflow.addEventListener("click", readWorkflowResource);
+            elements.actionOpenWorkflowPrompt.addEventListener("click", openWorkflowPrompt);
+            elements.actionOpenWorkflowSkill.addEventListener("click", openWorkflowSkill);
+            elements.actionOpenWorkflowRunner.addEventListener("click", openWorkflowRunner);
+            elements.actionShareWorkflowReplay.addEventListener("click", shareWorkflowReplay);
+            elements.actionShareActivityReplay.addEventListener("click", shareActivityReplay);
             elements.actionReadAccountResource.addEventListener("click", readAccountResource);
             elements.actionReadAuthResource.addEventListener("click", readAuthResource);
             elements.actionListPrompts.addEventListener("click", listPrompts);
             elements.actionReadSkillsCatalog.addEventListener("click", readSkillsCatalog);
             elements.actionReadSkillResource.addEventListener("click", readSkillResource);
+            elements.actionPreviewSelectedTool.addEventListener("click", previewSelectedTool);
+            elements.actionApplyReviewedTool.addEventListener("click", applyReviewedTool);
+            elements.actionOpenToolRemediation.addEventListener("click", openToolRemediation);
             elements.actionRunSelectedTool.addEventListener("click", function () {
               runTool();
             });

@@ -22,7 +22,7 @@ jobs:
       - name: Build
         run: cargo build --workspace
       - name: Smoke stable product surface
-        run: sh ./scripts/smoke-product-surface.sh target/debug/yacli
+        run: YACLI_EXPECT_SECRET_BACKEND=file sh ./scripts/smoke-product-surface.sh target/debug/yacli
       - name: Test
         run: cargo test --workspace
       - name: Clippy

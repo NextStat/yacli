@@ -1,0 +1,349 @@
+use serde::Serialize;
+use serde_json::{Value, json};
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct WorkflowDefinition {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub summary: &'static str,
+    pub connects: &'static str,
+    pub request_example: &'static str,
+    pub prompt_name: &'static str,
+    pub skill_name: &'static str,
+    pub cli_steps: &'static [&'static str],
+    pub mcp_tools: &'static [&'static str],
+}
+
+const DAILY_BRIEFING_CLI_STEPS: &[&str] = &["mail list --limit 10", "calendar events"];
+const DAILY_BRIEFING_TOOLS: &[&str] = &["yacli.mail.list", "yacli.calendar.events"];
+
+const REPLY_WITH_CONTEXT_CLI_STEPS: &[&str] = &[
+    "mail read 1353",
+    "calendar events 2026-03-14 2026-03-16",
+    "mail reply 1353 \"Подтверждаю, это окно подходит\"",
+];
+const REPLY_WITH_CONTEXT_TOOLS: &[&str] = &[
+    "yacli.mail.read",
+    "yacli.calendar.events",
+    "yacli.mail.reply",
+];
+
+const ATTACHMENT_TO_DISK_CLI_STEPS: &[&str] = &[
+    "mail search \"invoice\"",
+    "mail attachment export 1353 --name invoice.pdf --output ./invoice.pdf",
+];
+const ATTACHMENT_TO_DISK_TOOLS: &[&str] = &["yacli.mail.search", "yacli.mail.attachment.export"];
+
+const SEND_FILE_BY_MAIL_CLI_STEPS: &[&str] =
+    &["mail send person@example.com \"Счёт\" \"Во вложении файл\" --attach ./invoice.pdf"];
+const SEND_FILE_BY_MAIL_TOOLS: &[&str] = &["yacli.mail.send"];
+
+const SEND_LINK_BY_MAIL_CLI_STEPS: &[&str] = &[
+    "mail send-link person@example.com \"Материалы\" \"Отправляю ссылку\" --source ./archive.zip --path disk:/docs/archive/archive.zip",
+];
+const SEND_LINK_BY_MAIL_TOOLS: &[&str] = &["yacli.mail.send_link"];
+
+const PUBLISH_FILE_LINK_CLI_STEPS: &[&str] =
+    &["disk upload-link --source ./archive.zip --path disk:/docs/archive/archive.zip"];
+const PUBLISH_FILE_LINK_TOOLS: &[&str] = &["yacli.disk.upload_link"];
+
+const REVOKE_PUBLIC_LINK_CLI_STEPS: &[&str] = &["disk unpublish disk:/docs/archive/archive.zip"];
+const REVOKE_PUBLIC_LINK_TOOLS: &[&str] = &["yacli.disk.unpublish"];
+
+const INVITE_TO_CALENDAR_CLI_STEPS: &[&str] = &[
+    "mail search \"приглашение\"",
+    "mail invite inspect 1353 --index 1",
+    "mail invite create-event 1353 --index 1 --calendar team",
+];
+const INVITE_TO_CALENDAR_TOOLS: &[&str] = &[
+    "yacli.mail.search",
+    "yacli.mail.invite.inspect",
+    "yacli.mail.invite.create_event",
+];
+
+const WORKFLOWS: &[WorkflowDefinition] = &[
+    WorkflowDefinition {
+        id: "daily-briefing",
+        title: "Утренняя сводка",
+        summary: "Собрать краткую сводку по новым письмам и ближайшим встречам.",
+        connects: "Почта + календарь",
+        request_example: "Собери утреннюю сводку по письмам и встречам",
+        prompt_name: "daily-briefing",
+        skill_name: "yacli-daily-briefing",
+        cli_steps: DAILY_BRIEFING_CLI_STEPS,
+        mcp_tools: DAILY_BRIEFING_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "reply-with-context",
+        title: "Ответ с учётом календаря",
+        summary: "Прочитать письмо, проверить расписание и подготовить ответ с контекстом.",
+        connects: "Почта + календарь",
+        request_example: "Ответь на письмо с учётом моего расписания",
+        prompt_name: "reply-with-context",
+        skill_name: "yacli-reply-with-context",
+        cli_steps: REPLY_WITH_CONTEXT_CLI_STEPS,
+        mcp_tools: REPLY_WITH_CONTEXT_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "attachment-to-disk",
+        title: "Вложение в локальный файл",
+        summary: "Найти письмо и выгрузить нужное вложение в локальный файл.",
+        connects: "Почта → файл",
+        request_example: "Найди письмо и сохрани вложение в файл",
+        prompt_name: "attachment-to-disk",
+        skill_name: "yacli-attachment-to-disk",
+        cli_steps: ATTACHMENT_TO_DISK_CLI_STEPS,
+        mcp_tools: ATTACHMENT_TO_DISK_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "send-file-by-mail",
+        title: "Файл в письмо",
+        summary: "Взять локальный файл и отправить его как вложение по почте.",
+        connects: "Файл → почта",
+        request_example: "Отправь файл с диска по почте",
+        prompt_name: "send-file-by-mail",
+        skill_name: "yacli-send-file-by-mail",
+        cli_steps: SEND_FILE_BY_MAIL_CLI_STEPS,
+        mcp_tools: SEND_FILE_BY_MAIL_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "send-link-by-mail",
+        title: "Ссылка на большой файл в письмо",
+        summary: "Загрузить локальный файл на Диск, опубликовать ссылку и отправить её по почте.",
+        connects: "Файл → Диск → почта",
+        request_example: "Загрузи большой файл на Диск и отправь ссылку по почте",
+        prompt_name: "send-link-by-mail",
+        skill_name: "yacli-send-link-by-mail",
+        cli_steps: SEND_LINK_BY_MAIL_CLI_STEPS,
+        mcp_tools: SEND_LINK_BY_MAIL_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "publish-file-link",
+        title: "Файл в публичную ссылку",
+        summary: "Загрузить локальный файл на Диск и сразу получить public URL / public key.",
+        connects: "Файл → Диск",
+        request_example: "Загрузи файл на Диск и дай публичную ссылку",
+        prompt_name: "publish-file-link",
+        skill_name: "yacli-publish-file-link",
+        cli_steps: PUBLISH_FILE_LINK_CLI_STEPS,
+        mcp_tools: PUBLISH_FILE_LINK_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "revoke-public-link",
+        title: "Отозвать публичную ссылку",
+        summary: "Снять public URL / public key у приватного файла или папки на Диске.",
+        connects: "Диск",
+        request_example: "Отзови публичную ссылку у файла на Диске",
+        prompt_name: "revoke-public-link",
+        skill_name: "yacli-revoke-public-link",
+        cli_steps: REVOKE_PUBLIC_LINK_CLI_STEPS,
+        mcp_tools: REVOKE_PUBLIC_LINK_TOOLS,
+    },
+    WorkflowDefinition {
+        id: "invite-to-calendar",
+        title: "Приглашение в событие",
+        summary: "Найти письмо с приглашением и создать событие в календаре.",
+        connects: "Почта → календарь",
+        request_example: "Найди приглашение и добавь встречу в календарь",
+        prompt_name: "invite-to-calendar",
+        skill_name: "yacli-invite-to-calendar",
+        cli_steps: INVITE_TO_CALENDAR_CLI_STEPS,
+        mcp_tools: INVITE_TO_CALENDAR_TOOLS,
+    },
+];
+
+pub fn workflow_ids() -> Vec<&'static str> {
+    WORKFLOWS.iter().map(|workflow| workflow.id).collect()
+}
+
+pub fn workflow_definition(id: &str) -> Option<&'static WorkflowDefinition> {
+    WORKFLOWS.iter().find(|workflow| workflow.id == id)
+}
+
+pub fn workflow_primary_tool(id: &str) -> Option<&'static str> {
+    match id {
+        "daily-briefing" => Some("yacli.mail.list"),
+        "reply-with-context" => Some("yacli.mail.reply"),
+        "attachment-to-disk" => Some("yacli.mail.attachment.export"),
+        "send-file-by-mail" => Some("yacli.mail.send"),
+        "send-link-by-mail" => Some("yacli.mail.send_link"),
+        "publish-file-link" => Some("yacli.disk.upload_link"),
+        "revoke-public-link" => Some("yacli.disk.unpublish"),
+        "invite-to-calendar" => Some("yacli.mail.invite.create_event"),
+        _ => workflow_definition(id).and_then(|definition| definition.mcp_tools.first().copied()),
+    }
+}
+
+pub fn workflow_primary_operation(id: &str) -> &'static str {
+    match workflow_primary_tool(id) {
+        Some("yacli.mail.list") => "mail.list",
+        Some("yacli.mail.reply") => "mail.reply",
+        Some("yacli.mail.attachment.export") => "mail.attachment.export",
+        Some("yacli.mail.send") => "mail.send",
+        Some("yacli.mail.send_link") => "mail.send_link",
+        Some("yacli.disk.upload_link") => "disk.upload_link",
+        Some("yacli.disk.unpublish") => "disk.unpublish",
+        Some("yacli.mail.invite.create_event") => "mail.invite.create_event",
+        _ => "",
+    }
+}
+
+pub fn workflow_supports_review(id: &str) -> bool {
+    matches!(
+        workflow_primary_tool(id),
+        Some(
+            "yacli.mail.send"
+                | "yacli.mail.send_link"
+                | "yacli.disk.upload_link"
+                | "yacli.disk.unpublish"
+        )
+    )
+}
+
+pub fn workflow_primary_tool_arguments(id: &str) -> Value {
+    match id {
+        "daily-briefing" => json!({
+            "folder": "INBOX",
+            "limit": 10
+        }),
+        "reply-with-context" => json!({
+            "folder": "INBOX",
+            "uid": 1353,
+            "text": "Подтверждаю, это окно подходит"
+        }),
+        "attachment-to-disk" => json!({
+            "folder": "INBOX",
+            "uid": 1353,
+            "name": "invoice.pdf",
+            "output_path": "./invoice.pdf"
+        }),
+        "send-file-by-mail" => json!({
+            "to": "person@example.com",
+            "subject": "Счёт",
+            "text": "Во вложении файл",
+            "attachments": ["./invoice.pdf"]
+        }),
+        "send-link-by-mail" => json!({
+            "to": "person@example.com",
+            "subject": "Материалы",
+            "text": "Отправляю ссылку",
+            "source_path": "./archive.zip",
+            "disk_path": "disk:/docs/archive/archive.zip",
+            "overwrite": false
+        }),
+        "publish-file-link" => json!({
+            "source": "./archive.zip",
+            "path": "disk:/docs/archive/archive.zip",
+            "overwrite": false
+        }),
+        "revoke-public-link" => json!({
+            "path": "disk:/docs/archive/archive.zip"
+        }),
+        "invite-to-calendar" => json!({
+            "folder": "INBOX",
+            "uid": 1353,
+            "index": 1,
+            "event_index": 1,
+            "calendar": "team"
+        }),
+        _ => json!({}),
+    }
+}
+
+pub fn workflow_catalog() -> Vec<Value> {
+    WORKFLOWS.iter().map(workflow_json).collect()
+}
+
+pub fn workflow_json(definition: &WorkflowDefinition) -> Value {
+    json!({
+        "id": definition.id,
+        "title": definition.title,
+        "summary": definition.summary,
+        "connects": definition.connects,
+        "request_example": definition.request_example,
+        "prompt_name": definition.prompt_name,
+        "skill_name": definition.skill_name,
+        "primary_tool": workflow_primary_tool(definition.id).unwrap_or_default(),
+        "primary_operation": workflow_primary_operation(definition.id),
+        "supports_review": workflow_supports_review(definition.id),
+        "primary_tool_arguments": workflow_primary_tool_arguments(definition.id),
+        "cli_steps": definition.cli_steps,
+        "mcp_tools": definition.mcp_tools,
+        "prompt_resource": format!("resource://yacli/skill/{}", definition.skill_name),
+    })
+}
+
+pub fn workflow_resource_catalog() -> Value {
+    json!({
+        "workflows": workflow_catalog()
+    })
+}
+
+pub fn workflow_resource_detail(id: &str) -> Option<Value> {
+    workflow_definition(id).map(workflow_json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflow_ids_cover_all_definitions() {
+        let ids = workflow_ids();
+        assert_eq!(ids.len(), 8);
+        assert!(ids.contains(&"daily-briefing"));
+        assert!(ids.contains(&"reply-with-context"));
+        assert!(ids.contains(&"attachment-to-disk"));
+        assert!(ids.contains(&"send-file-by-mail"));
+        assert!(ids.contains(&"send-link-by-mail"));
+        assert!(ids.contains(&"publish-file-link"));
+        assert!(ids.contains(&"revoke-public-link"));
+        assert!(ids.contains(&"invite-to-calendar"));
+    }
+
+    #[test]
+    fn workflow_detail_exposes_prompt_and_skill_links() {
+        let detail = workflow_resource_detail("invite-to-calendar").expect("detail");
+        assert_eq!(detail["prompt_name"], "invite-to-calendar");
+        assert_eq!(detail["skill_name"], "yacli-invite-to-calendar");
+        assert_eq!(detail["primary_tool"], "yacli.mail.invite.create_event");
+        assert_eq!(detail["primary_operation"], "mail.invite.create_event");
+        assert_eq!(detail["supports_review"], false);
+        assert_eq!(detail["primary_tool_arguments"]["folder"], "INBOX");
+        assert_eq!(detail["primary_tool_arguments"]["calendar"], "team");
+        assert_eq!(
+            detail["prompt_resource"],
+            "resource://yacli/skill/yacli-invite-to-calendar"
+        );
+    }
+
+    #[test]
+    fn workflow_primary_tool_prefers_actionable_tool_over_first_catalog_entry() {
+        assert_eq!(
+            workflow_primary_tool("invite-to-calendar"),
+            Some("yacli.mail.invite.create_event")
+        );
+        assert_eq!(
+            workflow_primary_tool("reply-with-context"),
+            Some("yacli.mail.reply")
+        );
+    }
+
+    #[test]
+    fn workflow_primary_tool_arguments_are_canonical_for_send_link_flow() {
+        let args = workflow_primary_tool_arguments("send-link-by-mail");
+        assert_eq!(args["to"], "person@example.com");
+        assert_eq!(args["source_path"], "./archive.zip");
+        assert_eq!(args["disk_path"], "disk:/docs/archive/archive.zip");
+        assert_eq!(args["overwrite"], false);
+    }
+
+    #[test]
+    fn workflow_review_capability_tracks_primary_tool_contract() {
+        assert!(workflow_supports_review("send-link-by-mail"));
+        assert!(workflow_supports_review("publish-file-link"));
+        assert!(workflow_supports_review("revoke-public-link"));
+        assert!(!workflow_supports_review("daily-briefing"));
+        assert!(!workflow_supports_review("invite-to-calendar"));
+    }
+}

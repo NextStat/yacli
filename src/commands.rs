@@ -1,39 +1,60 @@
 use std::collections::BTreeMap;
-use std::io::{self, Write};
+use std::env;
+use std::io::{self, IsTerminal, Write};
 
 use serde::Serialize;
 use serde_json::json;
 
 use crate::account_store::{AccountStore, validate_account};
+use crate::activity_store::{ActivityEntry, ActivityStore, NewActivityEntry, record_activity};
 use crate::calendar::{
-    CalendarCollection, CalendarCreateRequest, CalendarEvent, CalendarEventWindow,
-    CalendarEventsRequest, CalendarInvite, calendar_create_request_from_invites,
-    create_calendar_event, delete_calendar_event, list_calendar_events, list_calendars,
-    parse_event_window,
+    CalendarCollection, CalendarCreateRequest, CalendarCreateReview, CalendarEvent,
+    CalendarEventWindow, CalendarEventsRequest, CalendarInvite,
+    calendar_create_request_from_invites, create_calendar_event, delete_calendar_event,
+    list_calendar_events, list_calendars, parse_event_window, review_calendar_event_creation,
 };
 use crate::cli::{
-    AccountCommand, AuthCommand, AuthServiceArg, CalendarCommand, Cli, Command, DiskCommand,
-    DiskPublicCommand, GuideTopicArg, MailAttachmentCommand, MailCommand, MailInviteCommand,
-    McpCommand, OutputFormat,
+    AccountCommand, ActivityCommand, AuthCommand, AuthServiceArg, CalendarCommand, Cli, Command,
+    DiskCommand, DiskPublicCommand, GuideTopicArg, MailAttachmentCommand, MailCommand,
+    MailInviteCommand, McpClientArg, McpCommand, McpTransportArg, OutputFormat, WorkflowCommand,
 };
 use crate::credential_store::{CredentialStore, StoredAppPasswordCredential};
 use crate::disk::{
-    DEFAULT_DISK_BASE_URL, DiskInfo, DiskResource, DownloadedFile, PrivateDiskListRequest,
-    PrivateDiskMkdirRequest, PrivateDiskUploadRequest, PublicDiskRequest, PublicDownloadRequest,
-    PublicResource, UploadedFile, create_private_directory, download_public_resource,
-    fetch_disk_info, fetch_private_resource, fetch_public_resource, upload_private_resource,
+    DEFAULT_DISK_BASE_URL, DiskInfo, DiskPublishReview, DiskResource, DiskUnpublishReview,
+    DiskUploadReview, DownloadedFile, PrivateDiskDownloadRequest, PrivateDiskListRequest,
+    PrivateDiskMkdirRequest, PrivateDiskPublishRequest, PrivateDiskUnpublishRequest,
+    PrivateDiskUploadRequest, PublicDiskRequest, PublicDownloadRequest, PublicResource,
+    TransferProgress, UnpublishedDiskResource, UploadedFile, create_private_directory,
+    download_private_resource_with_progress, download_public_resource,
+    download_public_resource_with_progress, fetch_disk_info, fetch_private_resource,
+    fetch_public_resource, publish_private_resource, review_private_publish,
+    review_private_unpublish, review_private_upload, unpublish_private_resource,
+    upload_private_resource_with_progress,
 };
+use crate::disk_link::{
+    DiskUploadLinkRequest, DiskUploadLinkResult, DiskUploadLinkReview, review_disk_upload_link,
+    upload_link_to_disk,
+};
+use crate::doctor::doctor_payload;
 use crate::error::{Result, YacliError};
+use crate::goal_router::goal_route_payload;
+use crate::home::home_payload;
 use crate::mail::{
     ExportedMailAttachment, ForwardedMail, InspectedMailInvite, MailAttachmentExportRequest,
     MailAttachmentSelector, MailAttachmentSummary, MailFolder, MailForwardRequest,
     MailInviteInspectRequest, MailMessage, MailMessageSummary, MailReplyRequest, MailSendRequest,
-    RepliedMail, SentMail, export_mail_attachment, forward_mail_message, inspect_mail_invite,
-    list_mail_folders, list_mail_messages, load_mail_attachments, read_mail_message,
-    reply_to_mail_message, search_mail_messages, send_mail_message,
+    MailSendReview, RepliedMail, SentMail, export_mail_attachment, forward_mail_message,
+    inspect_mail_invite, list_mail_folders, list_mail_messages, load_mail_attachments,
+    read_mail_message, reply_to_mail_message, review_mail_submission, search_mail_messages,
+    send_mail_message,
+};
+use crate::mail_link::{
+    MailSendLinkRequest, MailSendLinkResult, MailSendLinkReview, review_mail_send_link,
+    send_link_via_mail,
 };
 use crate::mcp::install::execute_install;
-use crate::model::{AccountConfig, MailAuthMode, NewAccountInput};
+use crate::model::{AccountConfig, CalendarAuthMode, DiskAuthMode, MailAuthMode, NewAccountInput};
+use crate::next_actions::next_actions_payload;
 use crate::oauth::{
     OauthService, default_yacli_client_id, exchange_authorization_code, start_pkce_authorization,
 };
@@ -43,12 +64,49 @@ use crate::runtime_context::{
     resolve_disk_private_context, resolve_mail_private_context,
 };
 use crate::update::execute_update;
+use crate::workflows;
 
 pub fn execute(cli: Cli) -> Result<RenderedOutput> {
     match cli.command {
         Command::Guide { topic } => execute_guide(cli.format, topic),
         Command::Add { email, name } => execute_simple_add(cli.format, email, name),
+        Command::Setup {
+            email,
+            name,
+            calendar_app_password,
+            calendar_env_var,
+            client,
+            mcp_transport,
+            mcp_url,
+            skip_login,
+            skip_mcp_install,
+            plan_only,
+        } => execute_setup(
+            cli.format,
+            SetupRequest {
+                email,
+                name,
+                calendar_app_password,
+                calendar_env_var,
+                clients: client,
+                mcp_transport,
+                mcp_url,
+                skip_login,
+                skip_mcp_install,
+                plan_only,
+            },
+        ),
+        Command::Home { account, goal } => execute_home(cli.format, account, goal),
+        Command::Doctor {
+            account,
+            goal,
+            apply_safe,
+        } => execute_doctor(cli.format, account, goal, apply_safe),
+        Command::Next { account, goal } => execute_next(cli.format, account, goal),
+        Command::Goal { query, account } => execute_goal(cli.format, query, account),
         Command::Accounts => execute_account(cli.format, AccountCommand::List),
+        Command::Activity { action } => execute_activity(cli.format, action),
+        Command::Workflow { action } => execute_workflow(cli.format, action),
         Command::Use { name } => execute_account(cli.format, AccountCommand::Use { name }),
         Command::Whoami => execute_account(cli.format, AccountCommand::Current),
         Command::Status { account } => execute_auth(cli.format, AuthCommand::Status { account }),
@@ -120,6 +178,390 @@ fn execute_simple_add(
     )
 }
 
+#[derive(Serialize)]
+struct SetupAccountSelection {
+    account: String,
+    email: String,
+    created: bool,
+    reused: bool,
+}
+
+struct SetupRequest {
+    email: Option<String>,
+    name: Option<String>,
+    calendar_app_password: Option<String>,
+    calendar_env_var: Option<String>,
+    clients: Vec<McpClientArg>,
+    mcp_transport: McpTransportArg,
+    mcp_url: Option<String>,
+    skip_login: bool,
+    skip_mcp_install: bool,
+    plan_only: bool,
+}
+
+#[derive(Serialize)]
+struct SetupStep {
+    id: &'static str,
+    status: &'static str,
+    detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<serde_json::Value>,
+}
+
+fn execute_setup(format: OutputFormat, request: SetupRequest) -> Result<RenderedOutput> {
+    let SetupRequest {
+        email,
+        name,
+        calendar_app_password,
+        calendar_env_var,
+        clients,
+        mcp_transport,
+        mcp_url,
+        skip_login,
+        skip_mcp_install,
+        plan_only,
+    } = request;
+
+    if calendar_app_password.is_some() && calendar_env_var.is_some() {
+        return Err(YacliError::Validation(
+            "setup accepts either `--calendar-app-password` or `--calendar-env-var`, but not both"
+                .to_string(),
+        ));
+    }
+
+    let account = ensure_setup_account(email, name, plan_only)?;
+    let mut steps = vec![SetupStep {
+        id: "account",
+        status: if account.created {
+            if plan_only { "planned" } else { "created" }
+        } else if plan_only {
+            "planned"
+        } else {
+            "reused"
+        },
+        detail: if account.created {
+            format!(
+                "account `{}` for `{}` is ready",
+                account.account, account.email
+            )
+        } else {
+            format!(
+                "using existing account `{}` for `{}`",
+                account.account, account.email
+            )
+        },
+        output: None,
+    }];
+
+    let mut exit_code = 0;
+    let mut next_actions = Vec::new();
+
+    if plan_only {
+        steps.push(SetupStep {
+            id: "mail_disk_login",
+            status: if skip_login { "skipped" } else { "planned" },
+            detail: if skip_login {
+                "mail/disk OAuth login was skipped by request".to_string()
+            } else {
+                format!(
+                    "will connect mail and disk for account `{}`",
+                    account.account
+                )
+            },
+            output: None,
+        });
+        steps.push(SetupStep {
+            id: "calendar_login",
+            status: if calendar_app_password.is_some() || calendar_env_var.is_some() {
+                "planned"
+            } else {
+                "pending"
+            },
+            detail: if calendar_app_password.is_some() {
+                "will connect calendar with app password".to_string()
+            } else if let Some(env_var) = calendar_env_var.as_deref() {
+                format!("will connect calendar from env var `{env_var}`")
+            } else {
+                "calendar still needs `--calendar-app-password` or `--calendar-env-var`".to_string()
+            },
+            output: None,
+        });
+        steps.push(SetupStep {
+            id: "mcp_install",
+            status: if skip_mcp_install {
+                "skipped"
+            } else {
+                "planned"
+            },
+            detail: if skip_mcp_install {
+                "mcp install was skipped by request".to_string()
+            } else {
+                format!(
+                    "will register MCP via `{}` transport",
+                    mcp_transport.label()
+                )
+            },
+            output: None,
+        });
+
+        if !skip_login {
+            next_actions.push("run `yacli setup` without `--plan-only` to complete OAuth login");
+        }
+        if calendar_app_password.is_none() && calendar_env_var.is_none() {
+            next_actions.push(
+                "provide `--calendar-app-password <пароль>` or `--calendar-env-var NAME` to finish calendar setup",
+            );
+        }
+    } else {
+        if skip_login {
+            steps.push(SetupStep {
+                id: "mail_disk_login",
+                status: "skipped",
+                detail: "mail/disk OAuth login was skipped by request".to_string(),
+                output: None,
+            });
+            next_actions.push("run `yacli login` to connect Почту и Диск");
+        } else {
+            let login = execute_auth(
+                OutputFormat::Json,
+                AuthCommand::Login {
+                    account: Some(account.account.clone()),
+                    service: None,
+                    client_id: None,
+                    env_var: None,
+                    app_password: None,
+                    code: None,
+                    login_hint: Some(account.email.clone()),
+                },
+            )?;
+            steps.push(SetupStep {
+                id: "mail_disk_login",
+                status: "completed",
+                detail: "mail and disk are connected".to_string(),
+                output: Some(login.json),
+            });
+        }
+
+        if let Some(app_password) = calendar_app_password {
+            let calendar = execute_auth(
+                OutputFormat::Json,
+                AuthCommand::Login {
+                    account: Some(account.account.clone()),
+                    service: Some(AuthServiceArg::Calendar),
+                    client_id: None,
+                    env_var: None,
+                    app_password: Some(app_password),
+                    code: None,
+                    login_hint: None,
+                },
+            )?;
+            steps.push(SetupStep {
+                id: "calendar_login",
+                status: "completed",
+                detail: "calendar is connected with app password".to_string(),
+                output: Some(calendar.json),
+            });
+        } else if let Some(env_var) = calendar_env_var {
+            let calendar = execute_auth(
+                OutputFormat::Json,
+                AuthCommand::Login {
+                    account: Some(account.account.clone()),
+                    service: Some(AuthServiceArg::Calendar),
+                    client_id: None,
+                    env_var: Some(env_var.clone()),
+                    app_password: None,
+                    code: None,
+                    login_hint: None,
+                },
+            )?;
+            steps.push(SetupStep {
+                id: "calendar_login",
+                status: "completed",
+                detail: format!("calendar is connected from env var `{env_var}`"),
+                output: Some(calendar.json),
+            });
+        } else {
+            steps.push(SetupStep {
+                id: "calendar_login",
+                status: "pending",
+                detail: "calendar still needs `--calendar-app-password` or `--calendar-env-var`"
+                    .to_string(),
+                output: None,
+            });
+            next_actions.push(
+                "run `yacli login calendar --app-password <пароль>` or `yacli setup --calendar-app-password <пароль>`",
+            );
+        }
+
+        if skip_mcp_install {
+            steps.push(SetupStep {
+                id: "mcp_install",
+                status: "skipped",
+                detail: "mcp install was skipped by request".to_string(),
+                output: None,
+            });
+            next_actions.push("run `yacli mcp install` when you are ready to register the server");
+        } else {
+            let install = execute_install(OutputFormat::Json, clients, mcp_transport, mcp_url)?;
+            if install.exit_code != 0 {
+                exit_code = install.exit_code;
+            }
+            steps.push(SetupStep {
+                id: "mcp_install",
+                status: if install.exit_code == 0 {
+                    "completed"
+                } else {
+                    "partial"
+                },
+                detail: if install.exit_code == 0 {
+                    "mcp server registration completed".to_string()
+                } else {
+                    "mcp install completed with partial failures; inspect items in output"
+                        .to_string()
+                },
+                output: Some(install.json),
+            });
+        }
+    }
+
+    let status = if plan_only {
+        None
+    } else {
+        Some(execute_auth(
+            OutputFormat::Json,
+            AuthCommand::Status {
+                account: Some(account.account.clone()),
+            },
+        )?)
+    };
+
+    let payload = json!({
+        "account": account,
+        "plan_only": plan_only,
+        "next_actions": next_actions,
+        "steps": steps,
+        "status": status.as_ref().map(|rendered| rendered.json.clone()),
+    });
+    let table = render_setup_table(&payload);
+
+    let Some(mut object) = payload.as_object().cloned() else {
+        return Err(YacliError::Serialization(
+            "expected setup payload object".to_string(),
+        ));
+    };
+    object.insert("ok".to_string(), json!(exit_code == 0));
+    object.insert("operation".to_string(), json!("setup"));
+
+    Ok(RenderedOutput {
+        format,
+        json: serde_json::Value::Object(object),
+        table,
+        exit_code,
+    })
+}
+
+fn ensure_setup_account(
+    email: Option<String>,
+    name: Option<String>,
+    plan_only: bool,
+) -> Result<SetupAccountSelection> {
+    match email {
+        Some(email) => {
+            let explicit_name = name.is_some();
+            let requested_name = name.unwrap_or_else(|| derive_account_name_from_email(&email));
+            let mut store = AccountStore::load()?;
+
+            if let Some(existing) = store.file.accounts.get(&requested_name) {
+                if existing.email != email {
+                    return Err(YacliError::Validation(format!(
+                        "account `{requested_name}` already exists for `{}`; choose another `--name`",
+                        existing.email
+                    )));
+                }
+                if !plan_only {
+                    store.set_current(&requested_name)?;
+                    store.save()?;
+                }
+                return Ok(SetupAccountSelection {
+                    account: requested_name,
+                    email,
+                    created: false,
+                    reused: true,
+                });
+            }
+
+            if let Some((existing_name, _)) = store
+                .file
+                .accounts
+                .iter()
+                .find(|(_, account)| account.email.eq_ignore_ascii_case(&email))
+            {
+                if explicit_name && existing_name != &requested_name {
+                    return Err(YacliError::Validation(format!(
+                        "email `{email}` already exists as account `{existing_name}`; rerun without `--name` or use `--name {existing_name}`"
+                    )));
+                }
+                let existing_name = existing_name.clone();
+                if !plan_only {
+                    store.set_current(&existing_name)?;
+                    store.save()?;
+                }
+                return Ok(SetupAccountSelection {
+                    account: existing_name,
+                    email,
+                    created: false,
+                    reused: true,
+                });
+            }
+
+            if !plan_only {
+                let account_config = AccountConfig::new(NewAccountInput {
+                    email: email.clone(),
+                    default: true,
+                    mail_auth_mode: MailAuthMode::OauthXoauth2,
+                    calendar_auth_mode: CalendarAuthMode::AppPassword,
+                    disk_auth_mode: DiskAuthMode::Oauth,
+                    mail_credential_ref: None,
+                    calendar_credential_ref: None,
+                    disk_credential_ref: None,
+                });
+                let report = validate_account(&requested_name, &account_config);
+                if !report.valid {
+                    return Err(YacliError::Validation(report.errors.join("; ")));
+                }
+                store.add_account(requested_name.clone(), account_config)?;
+                store.set_current(&requested_name)?;
+                store.save()?;
+            }
+
+            Ok(SetupAccountSelection {
+                account: requested_name,
+                email,
+                created: true,
+                reused: false,
+            })
+        }
+        None => {
+            let mut store = AccountStore::load()?;
+            let account_name = match name.as_deref() {
+                Some(name) => store.resolved_account_name(Some(name))?,
+                None => store.current_account_name()?,
+            };
+            let email = store.get_account(&account_name)?.email.clone();
+            if !plan_only && !store.is_current_account(&account_name) {
+                store.set_current(&account_name)?;
+                store.save()?;
+            }
+            Ok(SetupAccountSelection {
+                account: account_name,
+                email,
+                created: false,
+                reused: true,
+            })
+        }
+    }
+}
+
 fn execute_simple_logout(
     format: OutputFormat,
     account: Option<String>,
@@ -176,6 +618,559 @@ fn execute_simple_logout(
         }),
         table,
     )
+}
+
+fn execute_workflow(format: OutputFormat, action: WorkflowCommand) -> Result<RenderedOutput> {
+    match action {
+        WorkflowCommand::List => {
+            let items = workflows::workflow_catalog();
+            let mut lines = vec!["ID\tTITLE\tCONNECTS\tPROMPT\tSKILL".to_string()];
+            for item in &items {
+                lines.push(format!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    item["id"].as_str().unwrap_or_default(),
+                    item["title"].as_str().unwrap_or_default(),
+                    item["connects"].as_str().unwrap_or_default(),
+                    item["prompt_name"].as_str().unwrap_or_default(),
+                    item["skill_name"].as_str().unwrap_or_default()
+                ));
+            }
+            ok_output(
+                format,
+                "workflow.list",
+                json!({ "items": items }),
+                lines.join("\n"),
+            )
+        }
+        WorkflowCommand::Show { id } => {
+            let workflow = workflows::workflow_resource_detail(&id).ok_or_else(|| {
+                YacliError::UnsupportedOperation(format!("unknown workflow: {id}"))
+            })?;
+            let cli_steps = workflow["cli_steps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|item| item.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mcp_tools = workflow["mcp_tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|item| item.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            ok_output(
+                format,
+                "workflow.show",
+                json!({ "workflow": workflow }),
+                render_key_value_table(&[
+                    (
+                        "id",
+                        workflow["id"].as_str().unwrap_or_default().to_string(),
+                    ),
+                    (
+                        "title",
+                        workflow["title"].as_str().unwrap_or_default().to_string(),
+                    ),
+                    (
+                        "connects",
+                        workflow["connects"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    (
+                        "prompt_name",
+                        workflow["prompt_name"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    (
+                        "skill_name",
+                        workflow["skill_name"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    ("mcp_tools", mcp_tools),
+                    ("cli_steps", cli_steps),
+                ]),
+            )
+        }
+    }
+}
+
+fn execute_activity(format: OutputFormat, action: ActivityCommand) -> Result<RenderedOutput> {
+    match action {
+        ActivityCommand::List { limit } => {
+            let store = ActivityStore::load()?;
+            let items = store
+                .entries()
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect::<Vec<_>>();
+            ok_output(
+                format,
+                "activity.list",
+                json!({
+                    "limit": limit,
+                    "items": items,
+                }),
+                render_activity_list_table(&items),
+            )
+        }
+        ActivityCommand::Show { id } => {
+            let store = ActivityStore::load()?;
+            let entry = store.find(&id).cloned().ok_or_else(|| {
+                YacliError::Validation(format!("activity show: запись `{id}` не найдена"))
+            })?;
+            ok_output(
+                format,
+                "activity.show",
+                json!({
+                    "entry": entry,
+                }),
+                render_activity_show_table(&entry),
+            )
+        }
+    }
+}
+
+fn execute_home(
+    format: OutputFormat,
+    account: Option<String>,
+    goal: Option<String>,
+) -> Result<RenderedOutput> {
+    let payload = home_payload(account.as_deref(), goal.as_deref())?;
+    let table = render_home_table(&payload);
+    ok_output(format, "home", payload, table)
+}
+
+fn execute_doctor(
+    format: OutputFormat,
+    account: Option<String>,
+    goal: Option<String>,
+    apply_safe: bool,
+) -> Result<RenderedOutput> {
+    let mut payload = doctor_payload(account.as_deref(), goal.as_deref())?;
+    if apply_safe {
+        payload["safe_remediation"] =
+            apply_safe_doctor_remediation(account.as_deref(), goal.as_deref())?;
+        if let Some(entry) = doctor_safe_remediation_activity_entry(
+            "cli",
+            &payload["safe_remediation"],
+            account.as_deref(),
+            goal.as_deref(),
+        ) {
+            record_activity_best_effort(entry);
+        }
+        payload["status"] = payload["safe_remediation"]["doctor_after"]["status"].clone();
+        payload["checks"] = payload["safe_remediation"]["doctor_after"]["checks"].clone();
+        payload["focus_checks"] =
+            payload["safe_remediation"]["doctor_after"]["focus_checks"].clone();
+        payload["mcp_clients"] = payload["safe_remediation"]["doctor_after"]["mcp_clients"].clone();
+        payload["suggested_commands"] =
+            payload["safe_remediation"]["doctor_after"]["suggested_commands"].clone();
+        payload["onboardingStatus"] =
+            payload["safe_remediation"]["doctor_after"]["onboardingStatus"].clone();
+        payload["services"] = payload["safe_remediation"]["doctor_after"]["services"].clone();
+        payload["current_account"] =
+            payload["safe_remediation"]["doctor_after"]["current_account"].clone();
+        payload["email"] = payload["safe_remediation"]["doctor_after"]["email"].clone();
+        payload["goal_route"] = payload["safe_remediation"]["doctor_after"]["goal_route"].clone();
+    }
+    let table = render_doctor_table(&payload);
+    ok_output(format, "doctor", payload, table)
+}
+
+fn execute_next(
+    format: OutputFormat,
+    account: Option<String>,
+    goal: Option<String>,
+) -> Result<RenderedOutput> {
+    let payload = next_actions_payload(account.as_deref(), goal.as_deref())?;
+    let table = render_next_actions_table(&payload);
+    ok_output(format, "next", payload, table)
+}
+
+fn execute_goal(
+    format: OutputFormat,
+    query: String,
+    account: Option<String>,
+) -> Result<RenderedOutput> {
+    let payload = goal_route_payload(&query, account.as_deref())?;
+    let table = render_goal_table(&payload);
+    ok_output(format, "goal", payload, table)
+}
+
+const SAFE_CALENDAR_ENV_VAR: &str = "YACLI_CALENDAR_APP_PASSWORD";
+
+pub fn apply_safe_doctor_remediation(
+    account: Option<&str>,
+    goal: Option<&str>,
+) -> Result<serde_json::Value> {
+    let doctor_before = doctor_payload(account, goal)?;
+    let mut steps = Vec::new();
+    let mut applied_count = 0usize;
+    let mut needs_input_count = 0usize;
+    let mut failed_count = 0usize;
+
+    if doctor_before["current_account"].is_null() {
+        let command = doctor_check(&doctor_before, "account")
+            .and_then(|check| check["recommended_command"].as_str())
+            .unwrap_or("yacli setup me@yandex.ru")
+            .to_string();
+        steps.push(remediation_step(
+            "account",
+            "Аккаунт",
+            "needs_input",
+            "Для безопасного auto-fix нужен уже выбранный аккаунт или `yacli setup` с email."
+                .to_string(),
+            Some(command),
+            None,
+        ));
+        needs_input_count += 1;
+    }
+
+    if let Some(account_name) = doctor_before["current_account"].as_str() {
+        if let Some(check) = doctor_check(&doctor_before, "calendar")
+            && check["status"] != "completed"
+        {
+            if env::var_os(SAFE_CALENDAR_ENV_VAR).is_some() {
+                match execute_auth(
+                    OutputFormat::Json,
+                    AuthCommand::Login {
+                        account: Some(account_name.to_string()),
+                        service: Some(AuthServiceArg::Calendar),
+                        client_id: None,
+                        env_var: Some(SAFE_CALENDAR_ENV_VAR.to_string()),
+                        app_password: None,
+                        code: None,
+                        login_hint: None,
+                    },
+                ) {
+                    Ok(output) => {
+                        steps.push(remediation_step(
+                            "calendar",
+                            "Календарь",
+                            "applied",
+                            format!(
+                                "Календарь привязан к стандартной env-переменной `{SAFE_CALENDAR_ENV_VAR}`."
+                            ),
+                            Some(format!(
+                                "yacli login calendar --env-var {SAFE_CALENDAR_ENV_VAR}"
+                            )),
+                            Some(output.json),
+                        ));
+                        applied_count += 1;
+                    }
+                    Err(err) => {
+                        steps.push(remediation_step(
+                            "calendar",
+                            "Календарь",
+                            "failed",
+                            format!("Не удалось применить safe fix для календаря: {err}"),
+                            check["recommended_command"]
+                                .as_str()
+                                .map(ToString::to_string),
+                            None,
+                        ));
+                        failed_count += 1;
+                    }
+                }
+            } else {
+                steps.push(remediation_step(
+                    "calendar",
+                    "Календарь",
+                    "needs_input",
+                    format!(
+                        "Для safe fix не хватает env-переменной `{SAFE_CALENDAR_ENV_VAR}` с app password."
+                    ),
+                    Some(format!(
+                        "export {SAFE_CALENDAR_ENV_VAR}=<пароль> && yacli doctor --apply-safe"
+                    )),
+                    None,
+                ));
+                needs_input_count += 1;
+            }
+        }
+
+        for (service_id, title) in [("mail", "Почта"), ("disk", "Диск")] {
+            if let Some(check) = doctor_check(&doctor_before, service_id)
+                && check["status"] != "completed"
+            {
+                steps.push(remediation_step(
+                    service_id,
+                    title,
+                    "interactive",
+                    "Этот шаг требует OAuth login и остаётся явным пользовательским действием."
+                        .to_string(),
+                    check["recommended_command"]
+                        .as_str()
+                        .map(ToString::to_string),
+                    None,
+                ));
+                needs_input_count += 1;
+            }
+        }
+    }
+
+    if let Some(check) = doctor_check(&doctor_before, "mcp_install")
+        && check["status"] != "completed"
+    {
+        let clients = safe_doctor_install_clients(
+            doctor_before["mcp_clients"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        );
+        if clients.is_empty() {
+            steps.push(remediation_step(
+                "mcp_install",
+                "Установка MCP-клиентов",
+                "needs_input",
+                "Нет проверяемых config-based клиентов для безопасной автоматической установки. Native CLI-клиенты оставлены как явный ручной шаг."
+                    .to_string(),
+                check["recommended_command"].as_str().map(ToString::to_string),
+                None,
+            ));
+            needs_input_count += 1;
+        } else {
+            let command = format!(
+                "yacli mcp install{}",
+                clients
+                    .iter()
+                    .map(|client| format!(" --client {}", mcp_client_label(*client)))
+                    .collect::<String>()
+            );
+            match execute_install(OutputFormat::Json, clients, McpTransportArg::Stdio, None) {
+                Ok(output) => {
+                    let status = if output.exit_code == 0 {
+                        applied_count += 1;
+                        "applied"
+                    } else {
+                        failed_count += 1;
+                        "failed"
+                    };
+                    steps.push(remediation_step(
+                        "mcp_install",
+                        "Установка MCP-клиентов",
+                        status,
+                        format!(
+                            "Safe remediation применил MCP install для config-based клиентов: {}.",
+                            output.json["items"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .map(|item| item["client"].as_str().unwrap_or_default())
+                                .filter(|label| !label.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        Some(command),
+                        Some(output.json),
+                    ));
+                }
+                Err(err) => {
+                    steps.push(remediation_step(
+                        "mcp_install",
+                        "Установка MCP-клиентов",
+                        "failed",
+                        format!("Не удалось применить safe MCP install: {err}"),
+                        Some(command),
+                        None,
+                    ));
+                    failed_count += 1;
+                }
+            }
+        }
+    }
+
+    let doctor_after = doctor_payload(account, goal)?;
+    let status = if failed_count > 0 {
+        "failed"
+    } else if applied_count > 0 && needs_input_count > 0 {
+        "partial"
+    } else if applied_count > 0 {
+        "applied"
+    } else if needs_input_count > 0 {
+        "needs_input"
+    } else {
+        "noop"
+    };
+
+    Ok(json!({
+        "status": status,
+        "applied_count": applied_count,
+        "needs_input_count": needs_input_count,
+        "failed_count": failed_count,
+        "steps": steps,
+        "doctor_before": doctor_before,
+        "doctor_after": doctor_after,
+    }))
+}
+
+pub fn doctor_safe_remediation_activity_entry(
+    source: &str,
+    remediation: &serde_json::Value,
+    requested_account: Option<&str>,
+    goal: Option<&str>,
+) -> Option<NewActivityEntry> {
+    if remediation["applied_count"].as_u64().unwrap_or(0) == 0
+        || remediation["failed_count"].as_u64().unwrap_or(0) > 0
+    {
+        return None;
+    }
+
+    let applied_titles = remediation["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|step| step["status"] == "applied")
+        .filter_map(|step| step["title"].as_str())
+        .collect::<Vec<_>>();
+    if applied_titles.is_empty() {
+        return None;
+    }
+
+    let account = requested_account
+        .map(ToString::to_string)
+        .or_else(|| {
+            remediation["doctor_after"]["current_account"]
+                .as_str()
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "-".to_string());
+
+    let mut replay_command = "yacli doctor --apply-safe".to_string();
+    if let Some(account) = requested_account {
+        replay_command.push_str(" --account ");
+        replay_command.push_str(&shell_quote(account));
+    }
+    if let Some(goal) = goal
+        && !goal.trim().is_empty()
+    {
+        replay_command.push_str(" --goal ");
+        replay_command.push_str(&shell_quote(goal.trim()));
+    }
+
+    Some(NewActivityEntry {
+        source: source.to_string(),
+        operation: "doctor.apply_safe".to_string(),
+        account,
+        summary: format!("Применены safe fixes: {}", applied_titles.join(", ")),
+        replay_command,
+    })
+}
+
+fn doctor_check<'a>(payload: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
+    payload["checks"]
+        .as_array()?
+        .iter()
+        .find(|check| check["id"] == id)
+}
+
+fn remediation_step(
+    id: &str,
+    title: &str,
+    status: &str,
+    detail: String,
+    command: Option<String>,
+    output: Option<serde_json::Value>,
+) -> serde_json::Value {
+    json!({
+        "id": id,
+        "title": title,
+        "status": status,
+        "detail": detail,
+        "command": command,
+        "output": output,
+    })
+}
+
+fn safe_doctor_install_clients(clients: &[serde_json::Value]) -> Vec<McpClientArg> {
+    let mut selected = Vec::new();
+    for client in clients {
+        let mechanism = client["mechanism"].as_str().unwrap_or_default();
+        let status = client["status"].as_str().unwrap_or_default();
+        let experimental = client["experimental"].as_bool().unwrap_or(false);
+        if mechanism != "json_file" || status != "not_installed" || experimental {
+            continue;
+        }
+        if let Some(arg) = mcp_client_arg_from_label(client["client"].as_str().unwrap_or_default())
+        {
+            selected.push(arg);
+        }
+    }
+    selected
+}
+
+fn mcp_client_arg_from_label(label: &str) -> Option<McpClientArg> {
+    match label {
+        "claude" => Some(McpClientArg::Claude),
+        "claude-desktop" => Some(McpClientArg::ClaudeDesktop),
+        "codex" => Some(McpClientArg::Codex),
+        "gemini" => Some(McpClientArg::Gemini),
+        "warp" => Some(McpClientArg::Warp),
+        "zed" => Some(McpClientArg::Zed),
+        "cursor" => Some(McpClientArg::Cursor),
+        "antigravity" => Some(McpClientArg::Antigravity),
+        "windsurf" => Some(McpClientArg::Windsurf),
+        _ => None,
+    }
+}
+
+fn mcp_client_label(client: McpClientArg) -> &'static str {
+    match client {
+        McpClientArg::Claude => "claude",
+        McpClientArg::ClaudeDesktop => "claude-desktop",
+        McpClientArg::Codex => "codex",
+        McpClientArg::Gemini => "gemini",
+        McpClientArg::Warp => "warp",
+        McpClientArg::Zed => "zed",
+        McpClientArg::Cursor => "cursor",
+        McpClientArg::Antigravity => "antigravity",
+        McpClientArg::Windsurf => "windsurf",
+    }
+}
+
+fn record_activity_best_effort(entry: NewActivityEntry) {
+    if let Err(err) = record_activity(entry) {
+        eprintln!(
+            "{}",
+            json!({
+                "ok": false,
+                "warning": "activity_log_unavailable",
+                "message": format!("failed to record activity entry: {err}"),
+            })
+        );
+    }
+}
+
+fn transfer_activity_summary(
+    summary_prefix: &str,
+    target: &str,
+    attempts: usize,
+    elapsed_ms: u64,
+    resumed_from_bytes: Option<u64>,
+) -> String {
+    let mut details = vec![
+        format!("попыток: {attempts}"),
+        format!("время: {elapsed_ms} ms"),
+    ];
+    if let Some(bytes) = resumed_from_bytes.filter(|bytes| *bytes > 0) {
+        details.push(format!("resume: {bytes} B"));
+    }
+
+    format!("{summary_prefix}: {target} ({})", details.join(", "))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn execute_guide(format: OutputFormat, topic: GuideTopicArg) -> Result<RenderedOutput> {
@@ -748,36 +1743,311 @@ fn execute_disk(format: OutputFormat, action: DiskCommand) -> Result<RenderedOut
                 }),
                 render_disk_mkdir_table(&resolved_account, &resource),
             )
+            .inspect(|_| {
+                record_activity_best_effort(NewActivityEntry {
+                    source: "cli".to_string(),
+                    operation: "disk.mkdir".to_string(),
+                    account: resolved_account.clone(),
+                    summary: format!("Создана папка на Диске: {}", resource.path),
+                    replay_command: format!("yacli disk mkdir {}", shell_quote(&resource.path)),
+                });
+            })
         }
         DiskCommand::Upload {
             account,
             source,
             path,
             overwrite,
+            dry_run,
         } => {
             let (resolved_account, base_url, access_token) =
                 resolve_disk_private_context(account.as_deref())?;
-            let (resource, uploaded) = upload_private_resource(
+            let request = PrivateDiskUploadRequest {
+                source,
+                path: path.clone(),
+                overwrite,
+            };
+            if dry_run {
+                let review = review_private_upload(&request)?;
+                ok_output(
+                    format,
+                    "disk.upload.review",
+                    json!({
+                        "account": resolved_account,
+                        "path": path,
+                        "dry_run": true,
+                        "upload": review,
+                    }),
+                    render_disk_upload_review_table(&resolved_account, &review),
+                )
+            } else {
+                let progress = cli_transfer_progress("upload", &request.path, format);
+                let (resource, uploaded) = upload_private_resource_with_progress(
+                    &base_url,
+                    &access_token,
+                    &request,
+                    progress,
+                )?;
+
+                ok_output(
+                    format,
+                    "disk.upload",
+                    json!({
+                        "account": resolved_account,
+                        "path": path,
+                        "resource": resource,
+                        "upload": uploaded,
+                    }),
+                    render_disk_upload_table(&resolved_account, &resource, &uploaded),
+                )
+                .inspect(|_| {
+                    let mut replay = format!(
+                        "yacli disk upload {} {}",
+                        shell_quote(&uploaded.source_path),
+                        shell_quote(&uploaded.remote_path)
+                    );
+                    if uploaded.overwrite {
+                        replay.push_str(" --overwrite");
+                    }
+                    replay.push_str(" --dry-run");
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "disk.upload".to_string(),
+                        account: resolved_account.clone(),
+                        summary: transfer_activity_summary(
+                            "Загружен файл на Диск",
+                            &uploaded.remote_path,
+                            uploaded.attempts,
+                            uploaded.elapsed_ms,
+                            None,
+                        ),
+                        replay_command: replay,
+                    });
+                })
+            }
+        }
+        DiskCommand::UploadLink {
+            account,
+            source,
+            path,
+            overwrite,
+            dry_run,
+        } => {
+            let (resolved_account, base_url, access_token) =
+                resolve_disk_private_context(account.as_deref())?;
+            let request = DiskUploadLinkRequest {
+                source,
+                disk_path: path,
+                overwrite,
+            };
+            if dry_run {
+                let review = review_disk_upload_link(&request)?;
+                ok_output(
+                    format,
+                    "disk.upload_link.review",
+                    json!({
+                        "account": resolved_account,
+                        "path": request.disk_path,
+                        "dry_run": true,
+                        "review": review,
+                    }),
+                    render_disk_upload_link_review_table(&resolved_account, &review),
+                )
+            } else {
+                let result = upload_link_to_disk(&base_url, &access_token, &request)?;
+                ok_output(
+                    format,
+                    "disk.upload_link",
+                    json!({
+                        "account": resolved_account,
+                        "path": request.disk_path,
+                        "result": result,
+                    }),
+                    render_disk_upload_link_table(&resolved_account, &result),
+                )
+                .inspect(|_| {
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "disk.upload_link".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Загружен и опубликован ресурс на Диске: {}",
+                            result
+                                .resource
+                                .public_url
+                                .as_deref()
+                                .unwrap_or(&result.resource.path)
+                        ),
+                        replay_command: format!(
+                            "yacli disk upload-link --source {} --path {} --dry-run",
+                            shell_quote(&result.upload.source_path),
+                            shell_quote(&result.resource.path)
+                        ),
+                    });
+                })
+            }
+        }
+        DiskCommand::Download {
+            account,
+            path,
+            output,
+            force,
+        } => {
+            let (resolved_account, base_url, access_token) =
+                resolve_disk_private_context(account.as_deref())?;
+            let request = PrivateDiskDownloadRequest {
+                path: path.clone(),
+                output,
+                force,
+            };
+            let progress =
+                cli_transfer_progress("download", &request.output.display().to_string(), format);
+            let (resource, artifact) = download_private_resource_with_progress(
                 &base_url,
                 &access_token,
-                &PrivateDiskUploadRequest {
-                    source,
-                    path: path.clone(),
-                    overwrite,
-                },
+                &request,
+                progress,
             )?;
 
             ok_output(
                 format,
-                "disk.upload",
+                "disk.download",
                 json!({
                     "account": resolved_account,
                     "path": path,
                     "resource": resource,
-                    "upload": uploaded,
+                    "download": artifact,
                 }),
-                render_disk_upload_table(&resolved_account, &resource, &uploaded),
+                render_disk_download_table(&resolved_account, &resource, &artifact),
             )
+            .inspect(|_| {
+                let mut replay = format!(
+                    "yacli disk download {} --output {}",
+                    shell_quote(&resource.path),
+                    shell_quote(&artifact.output_path)
+                );
+                if force {
+                    replay.push_str(" --force");
+                }
+                record_activity_best_effort(NewActivityEntry {
+                    source: "cli".to_string(),
+                    operation: "disk.download".to_string(),
+                    account: resolved_account.clone(),
+                    summary: transfer_activity_summary(
+                        "Скачан файл с Диска",
+                        &resource.path,
+                        artifact.attempts,
+                        artifact.elapsed_ms,
+                        Some(artifact.resumed_from_bytes),
+                    ),
+                    replay_command: replay,
+                });
+            })
+        }
+        DiskCommand::Publish {
+            account,
+            path,
+            dry_run,
+        } => {
+            let (resolved_account, base_url, access_token) =
+                resolve_disk_private_context(account.as_deref())?;
+            let request = PrivateDiskPublishRequest { path: path.clone() };
+            if dry_run {
+                let review = review_private_publish(&base_url, &access_token, &request)?;
+                ok_output(
+                    format,
+                    "disk.publish.review",
+                    json!({
+                        "account": resolved_account,
+                        "path": path,
+                        "dry_run": true,
+                        "review": review,
+                    }),
+                    render_disk_publish_review_table(&resolved_account, &review),
+                )
+            } else {
+                let resource = publish_private_resource(&base_url, &access_token, &request)?;
+
+                ok_output(
+                    format,
+                    "disk.publish",
+                    json!({
+                        "account": resolved_account,
+                        "path": path,
+                        "resource": resource,
+                    }),
+                    render_disk_publish_table(&resolved_account, &resource),
+                )
+                .inspect(|_| {
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "disk.publish".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Опубликован ресурс на Диске: {}",
+                            resource.public_url.as_deref().unwrap_or(&resource.path)
+                        ),
+                        replay_command: format!(
+                            "yacli disk publish {} --dry-run",
+                            shell_quote(&resource.path)
+                        ),
+                    });
+                })
+            }
+        }
+        DiskCommand::Unpublish {
+            account,
+            path,
+            dry_run,
+        } => {
+            let (resolved_account, base_url, access_token) =
+                resolve_disk_private_context(account.as_deref())?;
+            let request = PrivateDiskUnpublishRequest { path: path.clone() };
+            if dry_run {
+                let review = review_private_unpublish(&base_url, &access_token, &request)?;
+                ok_output(
+                    format,
+                    "disk.unpublish.review",
+                    json!({
+                        "account": resolved_account,
+                        "path": path,
+                        "dry_run": true,
+                        "review": review,
+                    }),
+                    render_disk_unpublish_review_table(&resolved_account, &review),
+                )
+            } else {
+                let result = unpublish_private_resource(&base_url, &access_token, &request)?;
+
+                ok_output(
+                    format,
+                    "disk.unpublish",
+                    json!({
+                        "account": resolved_account,
+                        "path": path,
+                        "result": result,
+                    }),
+                    render_disk_unpublish_table(&resolved_account, &result),
+                )
+                .inspect(|_| {
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "disk.unpublish".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Отозвана публичная ссылка на Диске: {}",
+                            result
+                                .revoked_public_url
+                                .as_deref()
+                                .unwrap_or(&result.resource.path)
+                        ),
+                        replay_command: format!(
+                            "yacli disk unpublish {} --dry-run",
+                            shell_quote(&result.resource.path)
+                        ),
+                    });
+                })
+            }
         }
         DiskCommand::List {
             account,
@@ -907,34 +2177,86 @@ fn execute_calendar(format: OutputFormat, action: CalendarCommand) -> Result<Ren
             end,
             description,
             location,
+            dry_run,
         } => {
             let (resolved_account, app_password, context) =
                 resolve_calendar_private_context(account.as_deref())?;
-            let (calendar, event) = create_calendar_event(
-                &context.caldav_base_url,
-                &context.email,
-                &app_password,
-                CalendarCreateRequest {
-                    calendar,
-                    summary,
-                    start,
-                    end,
-                    description,
-                    location,
-                },
-            )?;
+            let request = CalendarCreateRequest {
+                calendar,
+                summary,
+                start,
+                end,
+                description,
+                location,
+            };
+            if dry_run {
+                let (calendar, review) = review_calendar_event_creation(
+                    &context.caldav_base_url,
+                    &context.email,
+                    &app_password,
+                    request,
+                )?;
+                ok_output(
+                    format,
+                    "calendar.create.review",
+                    json!({
+                        "account": resolved_account,
+                        "email": context.email,
+                        "calendar": calendar,
+                        "dry_run": true,
+                        "review": review,
+                    }),
+                    render_calendar_create_review_table(&resolved_account, &calendar, &review),
+                )
+            } else {
+                let (calendar, event) = create_calendar_event(
+                    &context.caldav_base_url,
+                    &context.email,
+                    &app_password,
+                    request,
+                )?;
 
-            ok_output(
-                format,
-                "calendar.create",
-                json!({
-                    "account": resolved_account,
-                    "email": context.email,
-                    "calendar": calendar,
-                    "event": calendar_event_json(&event),
-                }),
-                render_calendar_create_table(&resolved_account, &calendar, &event),
-            )
+                ok_output(
+                    format,
+                    "calendar.create",
+                    json!({
+                        "account": resolved_account,
+                        "email": context.email,
+                        "calendar": calendar,
+                        "event": calendar_event_json(&event),
+                    }),
+                    render_calendar_create_table(&resolved_account, &calendar, &event),
+                )
+                .inspect(|_| {
+                    let mut replay = format!(
+                        "yacli calendar create {} {} {}",
+                        shell_quote(event.summary.as_deref().unwrap_or("")),
+                        shell_quote(event.start.as_deref().unwrap_or("")),
+                        shell_quote(event.end.as_deref().unwrap_or(""))
+                    );
+                    if calendar.id != "default" {
+                        replay.push_str(&format!(" --calendar {}", shell_quote(&calendar.id)));
+                    }
+                    if let Some(location) = event.location.as_deref() {
+                        replay.push_str(&format!(" --location {}", shell_quote(location)));
+                    }
+                    if let Some(description) = event.description.as_deref() {
+                        replay.push_str(&format!(" --description {}", shell_quote(description)));
+                    }
+                    replay.push_str(" --dry-run");
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "calendar.create".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Создано событие в календаре {}: {}",
+                            calendar.name,
+                            event.summary.as_deref().unwrap_or("-")
+                        ),
+                        replay_command: replay,
+                    });
+                })
+            }
         }
         CalendarCommand::Delete {
             account,
@@ -1081,40 +2403,175 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
             body,
             html,
             attachments,
+            dry_run,
         } => {
             let (resolved_account, auth, context) =
                 resolve_mail_private_context(account.as_deref())?;
             let attachments = load_mail_attachments(&attachments)?;
-            let sent = send_mail_message(
-                &context.smtp_host,
-                context.smtp_port,
-                auth,
-                MailSendRequest {
-                    to: vec![to],
-                    cc,
-                    bcc,
-                    subject,
-                    text: body,
-                    html,
-                    attachments,
-                    thread_headers: None,
-                },
-            )?;
+            let request = MailSendRequest {
+                to: vec![to],
+                cc,
+                bcc,
+                subject,
+                text: body,
+                html,
+                attachments,
+                thread_headers: None,
+            };
 
-            ok_output(
-                format,
-                "mail.send",
-                json!({
-                    "account": resolved_account,
-                    "email": context.email,
-                    "smtp": {
-                        "host": context.smtp_host,
-                        "port": context.smtp_port,
-                    },
-                    "sent": sent,
-                }),
-                render_mail_send_table(&resolved_account, &sent),
-            )
+            if dry_run {
+                let review = review_mail_submission(auth, request)?;
+                ok_output(
+                    format,
+                    "mail.send.review",
+                    json!({
+                        "account": resolved_account,
+                        "email": context.email,
+                        "smtp": {
+                            "host": context.smtp_host,
+                            "port": context.smtp_port,
+                        },
+                        "dry_run": true,
+                        "review": review,
+                    }),
+                    render_mail_send_review_table(&resolved_account, &review),
+                )
+            } else {
+                let sent = send_mail_message(&context.smtp_host, context.smtp_port, auth, request)?;
+
+                ok_output(
+                    format,
+                    "mail.send",
+                    json!({
+                        "account": resolved_account,
+                        "email": context.email,
+                        "smtp": {
+                            "host": context.smtp_host,
+                            "port": context.smtp_port,
+                        },
+                        "sent": sent,
+                    }),
+                    render_mail_send_table(&resolved_account, &sent),
+                )
+                .inspect(|_| {
+                    let mut replay = format!(
+                        "yacli mail send {} {} {}",
+                        shell_quote(sent.to.first().map(String::as_str).unwrap_or("")),
+                        shell_quote(&sent.subject),
+                        shell_quote("<текст письма>")
+                    );
+                    replay.push_str(" --dry-run");
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "mail.send".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Отправлено письмо {}: {}",
+                            sent.to.first().cloned().unwrap_or_else(|| "-".to_string()),
+                            sent.subject
+                        ),
+                        replay_command: replay,
+                    });
+                })
+            }
+        }
+        MailCommand::SendLink {
+            account,
+            to,
+            cc,
+            bcc,
+            subject,
+            body,
+            html,
+            source,
+            path,
+            overwrite,
+            dry_run,
+        } => {
+            let (resolved_account, disk_base_url, access_token) =
+                resolve_disk_private_context(account.as_deref())?;
+            let (_, auth, context) = resolve_mail_private_context(account.as_deref())?;
+            let request = MailSendLinkRequest {
+                source,
+                disk_path: path,
+                overwrite,
+                to: vec![to],
+                cc,
+                bcc,
+                subject,
+                text: body,
+                html,
+            };
+
+            if dry_run {
+                let review = review_mail_send_link(auth, &request)?;
+                ok_output(
+                    format,
+                    "mail.send_link.review",
+                    json!({
+                        "account": resolved_account,
+                        "disk": {
+                            "base_url": disk_base_url,
+                        },
+                        "smtp": {
+                            "host": context.smtp_host,
+                            "port": context.smtp_port,
+                        },
+                        "dry_run": true,
+                        "review": review,
+                    }),
+                    render_mail_send_link_review_table(&resolved_account, &review),
+                )
+            } else {
+                let result = send_link_via_mail(
+                    &disk_base_url,
+                    &access_token,
+                    &context.smtp_host,
+                    context.smtp_port,
+                    auth,
+                    &request,
+                )?;
+                ok_output(
+                    format,
+                    "mail.send_link",
+                    json!({
+                        "account": resolved_account,
+                        "result": result,
+                    }),
+                    render_mail_send_link_table(&resolved_account, &result),
+                )
+                .inspect(|_| {
+                    let mut replay = format!(
+                        "yacli mail send-link {} {} {} --source {} --path {} --dry-run",
+                        shell_quote(
+                            result
+                                .sent
+                                .to
+                                .first()
+                                .map(String::as_str)
+                                .unwrap_or_default()
+                        ),
+                        shell_quote(&result.sent.subject),
+                        shell_quote("<текст письма>"),
+                        shell_quote(&request.source.display().to_string()),
+                        shell_quote(&request.disk_path)
+                    );
+                    if request.overwrite {
+                        replay.push_str(" --overwrite");
+                    }
+                    record_activity_best_effort(NewActivityEntry {
+                        source: "cli".to_string(),
+                        operation: "mail.send_link".to_string(),
+                        account: resolved_account.clone(),
+                        summary: format!(
+                            "Отправлена публичная ссылка на файл: {} -> {}",
+                            result.resource.path,
+                            result.resource.public_url.as_deref().unwrap_or("-")
+                        ),
+                        replay_command: replay,
+                    });
+                })
+            }
         }
         MailCommand::Reply {
             account,
@@ -1299,6 +2756,7 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
             event_index,
             max_bytes,
         } => {
+            let replay_name = name.clone();
             let selector =
                 mail_attachment_selector_for_command("mail invite create-event", index, name)?;
             validate_positive_event_index("mail invite create-event", event_index)?;
@@ -1352,6 +2810,32 @@ fn execute_mail_invite(format: OutputFormat, action: MailInviteCommand) -> Resul
                     &event,
                 ),
             )
+            .inspect(|_| {
+                let mut replay = format!(
+                    "yacli mail invite create-event {} --folder {} --calendar {} --event-index {}",
+                    uid,
+                    shell_quote(&folder),
+                    shell_quote(&calendar.id),
+                    event_index
+                );
+                if let Some(index) = index {
+                    replay.push_str(&format!(" --index {}", index));
+                }
+                if let Some(name) = replay_name.as_deref() {
+                    replay.push_str(&format!(" --name {}", shell_quote(name)));
+                }
+                record_activity_best_effort(NewActivityEntry {
+                    source: "cli".to_string(),
+                    operation: "mail.invite.create_event".to_string(),
+                    account: resolved_account.clone(),
+                    summary: format!(
+                        "Создано событие из приглашения письма {}: {}",
+                        uid,
+                        event.summary.as_deref().unwrap_or("-")
+                    ),
+                    replay_command: replay,
+                });
+            })
         }
     }
 }
@@ -1423,15 +2907,21 @@ fn execute_disk_public(format: OutputFormat, action: DiskPublicCommand) -> Resul
             force,
         } => {
             let (resolved_account, base_url) = resolve_disk_public_context(account.as_deref())?;
-            let (resource, artifact) = download_public_resource(
-                &base_url,
-                &PublicDownloadRequest {
-                    public_key: public_key.clone(),
-                    path: path.clone(),
-                    output,
-                    force,
-                },
-            )?;
+            let progress = cli_transfer_progress("download", &output.display().to_string(), format);
+            let request = PublicDownloadRequest {
+                public_key: public_key.clone(),
+                path: path.clone(),
+                output,
+                force,
+            };
+            let (resource, artifact) = if let Some(progress) = progress {
+                download_public_resource_with_progress(&base_url, &request, Some(progress))?
+            } else {
+                download_public_resource(&base_url, &request)?
+            };
+            let resolved_account_for_activity = resolved_account.clone();
+            let public_key_for_activity = public_key.clone();
+            let path_for_activity = path.clone();
 
             ok_output(
                 format,
@@ -1451,6 +2941,40 @@ fn execute_disk_public(format: OutputFormat, action: DiskPublicCommand) -> Resul
                     &artifact,
                 ),
             )
+            .inspect(|_| {
+                let mut replay = "yacli disk public download".to_string();
+                if let Some(account) = resolved_account_for_activity.as_deref() {
+                    replay.push_str(" --account ");
+                    replay.push_str(&shell_quote(account));
+                }
+                replay.push_str(" --public-key ");
+                replay.push_str(&shell_quote(&public_key_for_activity));
+                if let Some(path) = path_for_activity.as_deref() {
+                    replay.push_str(" --path ");
+                    replay.push_str(&shell_quote(path));
+                }
+                replay.push_str(" --output ");
+                replay.push_str(&shell_quote(&artifact.output_path));
+                if force {
+                    replay.push_str(" --force");
+                }
+
+                record_activity_best_effort(NewActivityEntry {
+                    source: "cli".to_string(),
+                    operation: "disk.public.download".to_string(),
+                    account: resolved_account_for_activity
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                    summary: transfer_activity_summary(
+                        "Скачан публичный файл Диска",
+                        &artifact.output_path,
+                        artifact.attempts,
+                        artifact.elapsed_ms,
+                        Some(artifact.resumed_from_bytes),
+                    ),
+                    replay_command: replay,
+                });
+            })
         }
     }
 }
@@ -1475,6 +2999,70 @@ fn ok_output(
         table,
         exit_code: 0,
     })
+}
+
+fn cli_transfer_progress(
+    direction: &'static str,
+    target: &str,
+    format: OutputFormat,
+) -> Option<Box<dyn FnMut(TransferProgress) + Send>> {
+    if format != OutputFormat::Table || !io::stderr().is_terminal() {
+        return None;
+    }
+
+    let target = target.to_string();
+    let mut last_line_len = 0usize;
+    Some(Box::new(move |progress: TransferProgress| {
+        let total = progress
+            .total_bytes
+            .map(format_human_bytes)
+            .unwrap_or_else(|| "unknown".to_string());
+        let transferred = format_human_bytes(progress.transferred_bytes);
+        let speed = format_human_bytes(progress.bytes_per_second.max(0.0) as u64);
+        let percent = progress
+            .total_bytes
+            .filter(|total| *total > 0)
+            .map(|total| {
+                let ratio = progress.transferred_bytes as f64 / total as f64;
+                format!("{:>5.1}%", (ratio * 100.0).min(100.0))
+            })
+            .unwrap_or_else(|| "  --.-%".to_string());
+        let line = format!(
+            "\r{} {} {} / {} ({}, {}/s)",
+            if progress.finished { "done" } else { direction },
+            target,
+            transferred,
+            total,
+            percent,
+            speed
+        );
+        let padding = if last_line_len > line.len() {
+            " ".repeat(last_line_len - line.len())
+        } else {
+            String::new()
+        };
+        eprint!("{line}{padding}");
+        if progress.finished {
+            eprintln!();
+        }
+        let _ = io::stderr().flush();
+        last_line_len = line.len();
+    }))
+}
+
+fn format_human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
 #[derive(Serialize)]
@@ -1543,6 +3131,30 @@ fn guide_workflows(topic: GuideTopicArg) -> Vec<GuideWorkflowEntry> {
 fn all_guide_commands() -> Vec<GuideCommandEntry> {
     vec![
         GuideCommandEntry {
+            path: "home",
+            topic: "all",
+            summary: "Показать единый home screen: onboarding, подключённые сервисы, workflows и activity.",
+            requires_account: false,
+            examples: vec!["yacli home", "yacli home --account work"],
+        },
+        GuideCommandEntry {
+            path: "doctor",
+            topic: "all",
+            summary: "Проверить health-check продукта: конфиг, secret backend, сервисы и readiness workflows.",
+            requires_account: false,
+            examples: vec!["yacli doctor", "yacli doctor --account work"],
+        },
+        GuideCommandEntry {
+            path: "goal",
+            topic: "all",
+            summary: "Маршрутизировать естественную цель в лучший workflow, prompt и MCP tool-path.",
+            requires_account: false,
+            examples: vec![
+                "yacli goal \"найди приглашение и добавь событие в календарь\"",
+                "yacli goal \"отправь файл по почте\" --account work",
+            ],
+        },
+        GuideCommandEntry {
             path: "add",
             topic: "account",
             summary: "Добавить аккаунт Яндекса и сразу сделать его текущим.",
@@ -1583,6 +3195,20 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             summary: "Показать, что подключено у текущего аккаунта.",
             requires_account: true,
             examples: vec!["yacli status"],
+        },
+        GuideCommandEntry {
+            path: "activity list",
+            topic: "all",
+            summary: "Показать последние успешные write-действия и их replay-команды.",
+            requires_account: false,
+            examples: vec!["yacli activity list --limit 20"],
+        },
+        GuideCommandEntry {
+            path: "activity show",
+            topic: "all",
+            summary: "Показать одну запись журнала и безопасную replay-команду.",
+            requires_account: false,
+            examples: vec!["yacli activity show <id>"],
         },
         GuideCommandEntry {
             path: "login",
@@ -1685,6 +3311,17 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             examples: vec![
                 "yacli mail send person@example.com \"Синк\" \"Привет\"",
                 "yacli mail send person@example.com \"Счёт\" \"Во вложении\" --attach ./invoice.pdf",
+                "yacli mail send person@example.com \"Счёт\" \"Во вложении\" --attach ./invoice.pdf --dry-run",
+            ],
+        },
+        GuideCommandEntry {
+            path: "mail send-link",
+            topic: "mail",
+            summary: "Загрузить большой локальный файл на Диск, опубликовать ссылку и отправить её по почте.",
+            requires_account: true,
+            examples: vec![
+                "yacli mail send-link person@example.com \"Материалы\" \"Отправляю ссылку\" --source ./archive.zip --path disk:/docs/archive/archive.zip",
+                "yacli mail send-link person@example.com \"Материалы\" \"Отправляю ссылку\" --source ./archive.zip --path disk:/docs/archive/archive.zip --dry-run",
             ],
         },
         GuideCommandEntry {
@@ -1711,6 +3348,7 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             requires_account: true,
             examples: vec![
                 "yacli calendar create \"Синк\" 2026-03-12T09:00:00Z 2026-03-12T10:00:00Z",
+                "yacli calendar create \"Синк\" 2026-03-12T09:00:00Z 2026-03-12T10:00:00Z --dry-run",
             ],
         },
         GuideCommandEntry {
@@ -1739,7 +3377,41 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             topic: "disk",
             summary: "Загрузить локальный файл в приватный Яндекс Диск.",
             requires_account: true,
-            examples: vec!["yacli disk upload ./report.pdf disk:/docs/report.pdf"],
+            examples: vec![
+                "yacli disk upload ./report.pdf disk:/docs/report.pdf",
+                "yacli disk upload ./report.pdf disk:/docs/report.pdf --dry-run",
+            ],
+        },
+        GuideCommandEntry {
+            path: "disk upload-link",
+            topic: "disk",
+            summary: "Загрузить локальный файл на Диск и сразу получить public URL / public key.",
+            requires_account: true,
+            examples: vec![
+                "yacli disk upload-link --source ./report.pdf --path disk:/docs/report.pdf",
+                "yacli disk upload-link --source ./report.pdf --path disk:/docs/report.pdf --dry-run",
+            ],
+        },
+        GuideCommandEntry {
+            path: "disk download",
+            topic: "disk",
+            summary: "Скачать файл из приватного Яндекс Диска в локальный путь.",
+            requires_account: true,
+            examples: vec!["yacli disk download disk:/docs/report.pdf --output ./report.pdf"],
+        },
+        GuideCommandEntry {
+            path: "disk publish",
+            topic: "disk",
+            summary: "Опубликовать приватный файл или папку и получить public URL / public key.",
+            requires_account: true,
+            examples: vec!["yacli disk publish disk:/docs/report.pdf"],
+        },
+        GuideCommandEntry {
+            path: "disk unpublish",
+            topic: "disk",
+            summary: "Отозвать public URL / public key у приватного файла или папки.",
+            requires_account: true,
+            examples: vec!["yacli disk unpublish disk:/docs/report.pdf"],
         },
         GuideCommandEntry {
             path: "disk info",
@@ -1931,6 +3603,17 @@ fn all_guide_workflows() -> Vec<GuideWorkflowEntry> {
             ],
         },
         GuideWorkflowEntry {
+            id: "mail_send_link_flow",
+            topic: "mail",
+            title: "Отправить ссылку на большой файл",
+            summary: "Поток от OAuth логина до загрузки файла на Диск, публикации ссылки и отправки письма со ссылкой.",
+            steps: vec![
+                "yacli add me@yandex.ru",
+                "yacli login",
+                "yacli mail send-link person@example.com \"Материалы\" \"Отправляю ссылку\" --source ./archive.zip --path disk:/docs/archive/archive.zip",
+            ],
+        },
+        GuideWorkflowEntry {
             id: "calendar_read_flow",
             topic: "calendar",
             title: "Посмотреть календари и события",
@@ -2075,6 +3758,41 @@ fn render_key_value_table(items: &[(&str, String)]) -> String {
         .map(|(key, value)| format!("{key}\t{value}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn render_setup_table(payload: &serde_json::Value) -> String {
+    let account = payload["account"]["account"].as_str().unwrap_or_default();
+    let email = payload["account"]["email"].as_str().unwrap_or_default();
+    let plan_only = payload["plan_only"].as_bool().unwrap_or(false);
+
+    let mut lines = vec![
+        format!("ACCOUNT\t{account}"),
+        format!("EMAIL\t{email}"),
+        format!("PLAN_ONLY\t{plan_only}"),
+        "STEP\tSTATUS\tDETAIL".to_string(),
+    ];
+
+    if let Some(steps) = payload["steps"].as_array() {
+        for step in steps {
+            lines.push(format!(
+                "{}\t{}\t{}",
+                step["id"].as_str().unwrap_or_default(),
+                step["status"].as_str().unwrap_or_default(),
+                step["detail"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    if let Some(actions) = payload["next_actions"].as_array()
+        && !actions.is_empty()
+    {
+        lines.push("NEXT_ACTIONS".to_string());
+        for action in actions {
+            lines.push(action.as_str().unwrap_or_default().to_string());
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn render_guide_table(
@@ -2241,8 +3959,158 @@ fn render_public_download_table(
         ("resource.name", resource.name.clone()),
         ("resource_type", resource.resource_type.clone()),
         ("output.path", artifact.output_path.clone()),
+        (
+            "resumed_from_bytes",
+            artifact.resumed_from_bytes.to_string(),
+        ),
         ("bytes_written", artifact.bytes_written.to_string()),
+        ("attempts", artifact.attempts.to_string()),
+        ("elapsed_ms", artifact.elapsed_ms.to_string()),
         ("sha256", artifact.sha256.clone()),
+    ])
+}
+
+fn render_disk_download_table(
+    account: &str,
+    resource: &DiskResource,
+    artifact: &DownloadedFile,
+) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("resource.path", resource.path.clone()),
+        ("resource.name", resource.name.clone()),
+        ("resource_type", resource.resource_type.clone()),
+        ("output.path", artifact.output_path.clone()),
+        (
+            "resumed_from_bytes",
+            artifact.resumed_from_bytes.to_string(),
+        ),
+        ("bytes_written", artifact.bytes_written.to_string()),
+        ("attempts", artifact.attempts.to_string()),
+        ("elapsed_ms", artifact.elapsed_ms.to_string()),
+        ("sha256", artifact.sha256.clone()),
+    ])
+}
+
+fn render_disk_publish_table(account: &str, resource: &DiskResource) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("resource.path", resource.path.clone()),
+        ("resource.name", resource.name.clone()),
+        ("resource_type", resource.resource_type.clone()),
+        (
+            "public_url",
+            resource
+                .public_url
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "public_key",
+            resource
+                .public_key
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    ])
+}
+
+fn render_disk_publish_review_table(account: &str, review: &DiskPublishReview) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("resource.path", review.path.clone()),
+        ("resource.name", review.resource_name.clone()),
+        ("resource_type", review.resource_type.clone()),
+        ("dry_run", "true".to_string()),
+        (
+            "already_public",
+            if review.already_public { "yes" } else { "no" }.to_string(),
+        ),
+        (
+            "current_public_url",
+            review
+                .current_public_url
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "current_public_key",
+            review
+                .current_public_key
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    ])
+}
+
+fn render_disk_unpublish_table(account: &str, result: &UnpublishedDiskResource) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("resource.path", result.resource.path.clone()),
+        ("resource.name", result.resource.name.clone()),
+        ("resource_type", result.resource.resource_type.clone()),
+        (
+            "was_public",
+            if result.was_public { "yes" } else { "no" }.to_string(),
+        ),
+        (
+            "revoked_public_url",
+            result
+                .revoked_public_url
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "revoked_public_key",
+            result
+                .revoked_public_key
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "current_public_url",
+            result
+                .resource
+                .public_url
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "current_public_key",
+            result
+                .resource
+                .public_key
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    ])
+}
+
+fn render_disk_unpublish_review_table(account: &str, review: &DiskUnpublishReview) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("resource.path", review.path.clone()),
+        ("resource.name", review.resource_name.clone()),
+        ("resource_type", review.resource_type.clone()),
+        ("dry_run", "true".to_string()),
+        (
+            "is_public",
+            if review.is_public { "yes" } else { "no" }.to_string(),
+        ),
+        (
+            "current_public_url",
+            review
+                .current_public_url
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "current_public_key",
+            review
+                .current_public_key
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
     ])
 }
 
@@ -2289,9 +4157,432 @@ fn render_disk_upload_table(
                 .unwrap_or_else(|| "-".to_string()),
         ),
         ("bytes_written", uploaded.bytes_written.to_string()),
+        ("attempts", uploaded.attempts.to_string()),
+        ("elapsed_ms", uploaded.elapsed_ms.to_string()),
         ("sha256", uploaded.sha256.clone()),
         ("overwrite", uploaded.overwrite.to_string()),
     ])
+}
+
+fn render_disk_upload_review_table(account: &str, review: &DiskUploadReview) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("dry_run", "true".to_string()),
+        ("source.path", review.source_path.clone()),
+        ("remote.path", review.remote_path.clone()),
+        ("bytes_written", review.bytes_written.to_string()),
+        ("sha256", review.sha256.clone()),
+        ("overwrite", review.overwrite.to_string()),
+    ])
+}
+
+fn render_disk_upload_link_table(account: &str, result: &DiskUploadLinkResult) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("source.path", result.upload.source_path.clone()),
+        ("resource.path", result.resource.path.clone()),
+        ("resource.name", result.resource.name.clone()),
+        ("resource_type", result.resource.resource_type.clone()),
+        ("bytes_written", result.upload.bytes_written.to_string()),
+        ("attempts", result.upload.attempts.to_string()),
+        ("elapsed_ms", result.upload.elapsed_ms.to_string()),
+        ("sha256", result.upload.sha256.clone()),
+        (
+            "public_url",
+            result
+                .resource
+                .public_url
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "public_key",
+            result
+                .resource
+                .public_key
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    ])
+}
+
+fn render_disk_upload_link_review_table(account: &str, review: &DiskUploadLinkReview) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("dry_run", "true".to_string()),
+        ("source.path", review.upload.source_path.clone()),
+        ("remote.path", review.upload.remote_path.clone()),
+        ("bytes_written", review.upload.bytes_written.to_string()),
+        ("sha256", review.upload.sha256.clone()),
+        ("overwrite", review.upload.overwrite.to_string()),
+        ("publish_path", review.publish_path.clone()),
+        ("public_url", review.link_placeholder.clone()),
+    ])
+}
+
+fn render_activity_list_table(entries: &[ActivityEntry]) -> String {
+    let mut lines = vec![
+        format!("count\t{}", entries.len()),
+        "ID\tAT\tSOURCE\tOPERATION\tACCOUNT\tSUMMARY".to_string(),
+    ];
+    lines.extend(entries.iter().map(|entry| {
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            sanitize_table_cell(&entry.id),
+            sanitize_table_cell(&entry.occurred_at),
+            sanitize_table_cell(&entry.source),
+            sanitize_table_cell(&entry.operation),
+            sanitize_table_cell(&entry.account),
+            sanitize_table_cell(&entry.summary),
+        )
+    }));
+    lines.join("\n")
+}
+
+fn render_activity_show_table(entry: &ActivityEntry) -> String {
+    render_key_value_table(&[
+        ("id", entry.id.clone()),
+        ("occurred_at", entry.occurred_at.clone()),
+        ("source", entry.source.clone()),
+        ("operation", entry.operation.clone()),
+        ("account", entry.account.clone()),
+        ("summary", entry.summary.clone()),
+        ("replay_command", entry.replay_command.clone()),
+    ])
+}
+
+fn render_home_table(payload: &serde_json::Value) -> String {
+    let mut lines = vec![
+        format!("STATUS\t{}", payload["status"].as_str().unwrap_or_default()),
+        format!(
+            "ACCOUNT\t{}",
+            payload["current_account"].as_str().unwrap_or("-")
+        ),
+        format!("EMAIL\t{}", payload["email"].as_str().unwrap_or("-")),
+        format!(
+            "WORKFLOW_COUNT\t{}",
+            payload["workflow_count"].as_u64().unwrap_or(0)
+        ),
+        format!(
+            "RECENT_ACTIVITY_COUNT\t{}",
+            payload["recent_activity_count"].as_u64().unwrap_or(0)
+        ),
+    ];
+
+    if let Some(goal) = payload["goal"].as_str()
+        && !goal.is_empty()
+    {
+        lines.push(format!("GOAL\t{goal}"));
+        lines.push(format!(
+            "GOAL_STATUS\t{}",
+            payload["goal_route"]["status"].as_str().unwrap_or("-")
+        ));
+        lines.push(format!(
+            "GOAL_REMEDIATION\t{}",
+            payload["goal_route"]["remediation"]["status"]
+                .as_str()
+                .unwrap_or("-")
+        ));
+    }
+
+    if let Some(latest_activity) = payload["latest_activity"].as_object() {
+        lines.push(format!(
+            "LATEST_ACTIVITY\t{}",
+            latest_activity
+                .get("summary")
+                .and_then(|value| value.as_str())
+                .unwrap_or("-")
+        ));
+        lines.push(format!(
+            "LATEST_REPLAY\t{}",
+            latest_activity
+                .get("replay_command")
+                .and_then(|value| value.as_str())
+                .unwrap_or("-")
+        ));
+    }
+
+    lines.push("SERVICES".to_string());
+    lines.push("SERVICE\tSTATUS\tDETAIL".to_string());
+    if let Some(services) = payload["services"].as_object() {
+        for service in ["mail", "calendar", "disk"] {
+            if let Some(state) = services.get(service) {
+                lines.push(format!(
+                    "{}\t{}\t{}",
+                    service_label(service),
+                    credential_state_label(
+                        state["credential_state"]
+                            .as_str()
+                            .unwrap_or("not_configured")
+                    ),
+                    state["detail"].as_str().unwrap_or_default()
+                ));
+            }
+        }
+    }
+
+    lines.push("HIGHLIGHTED_WORKFLOWS".to_string());
+    lines.push("ID\tTITLE\tCONNECTS".to_string());
+    if let Some(workflows) = payload["highlighted_workflows"].as_array() {
+        for workflow in workflows {
+            lines.push(format!(
+                "{}\t{}\t{}",
+                workflow["id"].as_str().unwrap_or_default(),
+                workflow["title"].as_str().unwrap_or_default(),
+                workflow["connects"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    if let Some(commands) = payload["suggested_commands"].as_array()
+        && !commands.is_empty()
+    {
+        lines.push("SUGGESTED_COMMANDS".to_string());
+        for command in commands {
+            lines.push(command.as_str().unwrap_or_default().to_string());
+        }
+    }
+
+    if payload["safe_remediation"].is_object() {
+        lines.push("SAFE_REMEDIATION".to_string());
+        lines.push(format!(
+            "STATUS\t{}",
+            payload["safe_remediation"]["status"]
+                .as_str()
+                .unwrap_or_default()
+        ));
+        lines.push(format!(
+            "APPLIED\t{}",
+            payload["safe_remediation"]["applied_count"]
+                .as_u64()
+                .unwrap_or(0)
+        ));
+        lines.push(format!(
+            "NEEDS_INPUT\t{}",
+            payload["safe_remediation"]["needs_input_count"]
+                .as_u64()
+                .unwrap_or(0)
+        ));
+        if let Some(steps) = payload["safe_remediation"]["steps"].as_array()
+            && !steps.is_empty()
+        {
+            lines.push("ID\tTITLE\tSTATUS\tCOMMAND".to_string());
+            for step in steps {
+                lines.push(format!(
+                    "{}\t{}\t{}\t{}",
+                    step["id"].as_str().unwrap_or_default(),
+                    step["title"].as_str().unwrap_or_default(),
+                    step["status"].as_str().unwrap_or_default(),
+                    step["command"].as_str().unwrap_or("-"),
+                ));
+            }
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_doctor_table(payload: &serde_json::Value) -> String {
+    let mut lines = vec![
+        format!("STATUS\t{}", payload["status"].as_str().unwrap_or_default()),
+        format!(
+            "ACCOUNT\t{}",
+            payload["current_account"].as_str().unwrap_or("-")
+        ),
+        format!("EMAIL\t{}", payload["email"].as_str().unwrap_or("-")),
+        format!(
+            "SECRET_BACKEND\t{}",
+            payload["config"]["secretBackend"].as_str().unwrap_or("-")
+        ),
+        format!(
+            "CONFIG_DIR\t{}",
+            payload["config"]["dir"].as_str().unwrap_or("-")
+        ),
+    ];
+
+    if let Some(goal) = payload["goal"].as_str()
+        && !goal.is_empty()
+    {
+        lines.push(format!("GOAL\t{goal}"));
+        lines.push(format!(
+            "GOAL_REMEDIATION\t{}",
+            payload["goal_route"]["remediation"]["status"]
+                .as_str()
+                .unwrap_or("-")
+        ));
+    }
+
+    lines.push("CHECKS".to_string());
+    lines.push("ID\tTITLE\tSTATUS\tDETAIL".to_string());
+    if let Some(checks) = payload["checks"].as_array() {
+        for check in checks {
+            lines.push(format!(
+                "{}\t{}\t{}\t{}",
+                check["id"].as_str().unwrap_or_default(),
+                check["title"].as_str().unwrap_or_default(),
+                check["status"].as_str().unwrap_or_default(),
+                sanitize_table_cell(check["detail"].as_str().unwrap_or_default()),
+            ));
+        }
+    }
+
+    if let Some(checks) = payload["focus_checks"].as_array()
+        && !checks.is_empty()
+    {
+        lines.push("GOAL_FOCUS_CHECKS".to_string());
+        lines.push("ID\tTITLE\tSTATUS".to_string());
+        for check in checks {
+            lines.push(format!(
+                "{}\t{}\t{}",
+                check["id"].as_str().unwrap_or_default(),
+                check["title"].as_str().unwrap_or_default(),
+                check["status"].as_str().unwrap_or_default(),
+            ));
+        }
+    }
+
+    if let Some(commands) = payload["suggested_commands"].as_array()
+        && !commands.is_empty()
+    {
+        lines.push("SUGGESTED_COMMANDS".to_string());
+        for command in commands {
+            lines.push(command.as_str().unwrap_or_default().to_string());
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_next_actions_table(payload: &serde_json::Value) -> String {
+    let mut lines = vec![
+        format!("STATUS\t{}", payload["status"].as_str().unwrap_or_default()),
+        format!(
+            "ACCOUNT\t{}",
+            payload["current_account"].as_str().unwrap_or("-")
+        ),
+        format!("COUNT\t{}", payload["count"].as_u64().unwrap_or(0)),
+        format!(
+            "SUMMARY\t{}",
+            sanitize_table_cell(payload["summary"].as_str().unwrap_or_default())
+        ),
+        "ACTIONS".to_string(),
+        "ID\tTITLE\tSTATUS\tCOMMAND".to_string(),
+    ];
+
+    if let Some(goal) = payload["goal"].as_str()
+        && !goal.is_empty()
+    {
+        lines.insert(3, format!("GOAL\t{goal}"));
+        lines.insert(
+            4,
+            format!(
+                "GOAL_REMEDIATION\t{}",
+                payload["goal_route"]["remediation"]["status"]
+                    .as_str()
+                    .unwrap_or("-")
+            ),
+        );
+    }
+
+    if let Some(actions) = payload["actions"].as_array() {
+        for action in actions {
+            lines.push(format!(
+                "{}\t{}\t{}\t{}",
+                action["id"].as_str().unwrap_or_default(),
+                action["title"].as_str().unwrap_or_default(),
+                action["status"].as_str().unwrap_or_default(),
+                action["command"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_goal_table(payload: &serde_json::Value) -> String {
+    let mut lines = vec![
+        format!("STATUS\t{}", payload["status"].as_str().unwrap_or_default()),
+        format!("QUERY\t{}", payload["query"].as_str().unwrap_or_default()),
+        format!(
+            "REMEDIATION_STATUS\t{}",
+            payload["remediation"]["status"]
+                .as_str()
+                .unwrap_or_default()
+        ),
+        format!(
+            "SUGGESTED_COMMAND\t{}",
+            payload["suggested_command"].as_str().unwrap_or_default()
+        ),
+    ];
+
+    if payload["best_match"].is_object() {
+        lines.push(format!(
+            "BEST_WORKFLOW\t{}",
+            payload["best_match"]["workflow"]["id"]
+                .as_str()
+                .unwrap_or_default()
+        ));
+        lines.push(format!(
+            "BEST_PROMPT\t{}",
+            payload["best_match"]["route"]["prompt_name"]
+                .as_str()
+                .unwrap_or_default()
+        ));
+        lines.push(format!(
+            "BEST_TOOL\t{}",
+            payload["best_match"]["route"]["best_tool"]
+                .as_str()
+                .unwrap_or_default()
+        ));
+    }
+
+    if let Some(hints) = payload["hints"].as_object() {
+        let hint_rows = [
+            ("GOAL_EMAIL", hints.get("email")),
+            ("GOAL_LOCAL_PATH", hints.get("local_path")),
+            ("GOAL_DISK_PATH", hints.get("disk_path")),
+            ("GOAL_QUOTED_TEXT", hints.get("quoted_text")),
+            ("GOAL_CALENDAR", hints.get("calendar")),
+        ];
+        for (label, value) in hint_rows {
+            if let Some(text) = value.and_then(serde_json::Value::as_str)
+                && !text.is_empty()
+            {
+                lines.push(format!("{label}\t{text}"));
+            }
+        }
+    }
+
+    lines.push("RECOMMENDATIONS".to_string());
+    lines.push("ID\tTITLE\tSCORE\tTOOL".to_string());
+    if let Some(items) = payload["recommendations"].as_array() {
+        for item in items {
+            lines.push(format!(
+                "{}\t{}\t{}\t{}",
+                item["workflow"]["id"].as_str().unwrap_or_default(),
+                item["workflow"]["title"].as_str().unwrap_or_default(),
+                item["score"].as_u64().unwrap_or(0),
+                item["route"]["best_tool"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    if let Some(actions) = payload["remediation"]["actions"].as_array()
+        && !actions.is_empty()
+    {
+        lines.push("REMEDIATION".to_string());
+        lines.push("ID\tTITLE\tCOMMAND".to_string());
+        for action in actions {
+            lines.push(format!(
+                "{}\t{}\t{}",
+                action["id"].as_str().unwrap_or_default(),
+                action["title"].as_str().unwrap_or_default(),
+                action["command"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn render_mail_folders_table(account: &str, folders: &[MailFolder]) -> String {
@@ -2497,6 +4788,129 @@ fn render_mail_send_table(account: &str, sent: &SentMail) -> String {
         ("subject", sent.subject.clone()),
         ("message_id", sent.message_id.clone()),
         ("body_kind", sent.body_kind.clone()),
+    ])
+}
+
+fn render_mail_send_review_table(account: &str, review: &MailSendReview) -> String {
+    let mut lines = vec![
+        format!("account\t{account}"),
+        format!("from\t{}", review.sent.from),
+        format!("to\t{}", review.sent.to.join(", ")),
+        format!(
+            "cc\t{}",
+            if review.sent.cc.is_empty() {
+                "-".to_string()
+            } else {
+                review.sent.cc.join(", ")
+            }
+        ),
+        format!("bcc_count\t{}", review.sent.bcc_count),
+        format!("subject\t{}", review.sent.subject),
+        format!("body_kind\t{}", review.sent.body_kind),
+        format!("message_bytes\t{}", review.message_bytes),
+        format!("delivery_posture\t{}", review.delivery_posture),
+        format!("attachment_count\t{}", review.attachment_count),
+        "dry_run\ttrue".to_string(),
+    ];
+
+    if review.attachments.is_empty() {
+        lines.push("attachments\t-".to_string());
+    } else {
+        lines.push("attachments".to_string());
+        lines.push("FILENAME\tMIME\tINLINE\tBYTES\tCONTENT_ID".to_string());
+        lines.extend(review.attachments.iter().map(|attachment| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}",
+                attachment.filename.as_deref().unwrap_or("-"),
+                attachment.mime_type,
+                attachment.inline,
+                attachment.bytes,
+                attachment.content_id.as_deref().unwrap_or("-")
+            )
+        }));
+    }
+
+    if let Some(remediation) = &review.remediation {
+        lines.push("remediation".to_string());
+        lines.push("WORKFLOW\tREASON\tSUGGESTED_DISK_PATH".to_string());
+        lines.push(format!(
+            "{}\t{}\t{}",
+            remediation.workflow,
+            remediation.reason,
+            remediation.suggested_disk_path.as_deref().unwrap_or("-")
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn render_mail_send_link_review_table(account: &str, review: &MailSendLinkReview) -> String {
+    let lines = vec![
+        format!("account\t{account}"),
+        format!("source_path\t{}", review.upload.source_path),
+        format!("remote_path\t{}", review.upload.remote_path),
+        format!("overwrite\t{}", review.upload.overwrite),
+        format!("bytes_written\t{}", review.upload.bytes_written),
+        format!("sha256\t{}", review.upload.sha256),
+        format!("link_placeholder\t{}", review.link_placeholder),
+        format!("to\t{}", review.mail_review.sent.to.join(", ")),
+        format!(
+            "cc\t{}",
+            if review.mail_review.sent.cc.is_empty() {
+                "-".to_string()
+            } else {
+                review.mail_review.sent.cc.join(", ")
+            }
+        ),
+        format!("bcc_count\t{}", review.mail_review.sent.bcc_count),
+        format!("subject\t{}", review.mail_review.sent.subject),
+        format!("body_kind\t{}", review.mail_review.sent.body_kind),
+        format!("attachment_count\t{}", review.mail_review.attachment_count),
+    ];
+
+    lines.join("\n")
+}
+
+fn render_mail_send_link_table(account: &str, result: &MailSendLinkResult) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("source_path", result.upload.source_path.clone()),
+        ("remote_path", result.upload.remote_path.clone()),
+        ("bytes_written", result.upload.bytes_written.to_string()),
+        ("sha256", result.upload.sha256.clone()),
+        ("attempts", result.upload.attempts.to_string()),
+        ("elapsed_ms", result.upload.elapsed_ms.to_string()),
+        (
+            "public_url",
+            result
+                .resource
+                .public_url
+                .as_deref()
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        (
+            "public_key",
+            result
+                .resource
+                .public_key
+                .as_deref()
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        ("to", result.sent.to.join(", ")),
+        (
+            "cc",
+            if result.sent.cc.is_empty() {
+                "-".to_string()
+            } else {
+                result.sent.cc.join(", ")
+            },
+        ),
+        ("bcc_count", result.sent.bcc_count.to_string()),
+        ("subject", result.sent.subject.clone()),
+        ("message_id", result.sent.message_id.clone()),
+        ("body_kind", result.sent.body_kind.clone()),
     ])
 }
 
@@ -2876,6 +5290,35 @@ fn render_calendar_create_table(
     ])
 }
 
+fn render_calendar_create_review_table(
+    account: &str,
+    calendar: &CalendarCollection,
+    review: &CalendarCreateReview,
+) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("calendar.id", calendar.id.clone()),
+        ("calendar.name", calendar.name.clone()),
+        ("dry_run", "true".to_string()),
+        ("event.summary", review.summary.clone()),
+        ("event.start", review.start.clone()),
+        ("event.end", review.end.clone()),
+        (
+            "event.location",
+            review.location.clone().unwrap_or_else(|| "-".to_string()),
+        ),
+        (
+            "event.description",
+            review
+                .description
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        ("event.status", review.status.clone()),
+        ("event.all_day", review.all_day.to_string()),
+    ])
+}
+
 fn render_calendar_delete_table(
     account: &str,
     calendar: &CalendarCollection,
@@ -2953,6 +5396,14 @@ fn render_disk_resource_table(account: &str, resource: &DiskResource) -> String 
                 .revision
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string())
+        ),
+        format!(
+            "public_url\t{}",
+            resource.public_url.as_deref().unwrap_or("-")
+        ),
+        format!(
+            "public_key\t{}",
+            resource.public_key.as_deref().unwrap_or("-")
         ),
     ];
 

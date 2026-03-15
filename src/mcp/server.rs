@@ -22,27 +22,42 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use url::Url;
 
 use crate::account_store::AccountStore;
+use crate::activity_store::{ActivityStore, NewActivityEntry, record_activity};
+use crate::commands::{apply_safe_doctor_remediation, doctor_safe_remediation_activity_entry};
 use crate::credential_store::CredentialStore;
+use crate::disk_link::{DiskUploadLinkRequest, review_disk_upload_link, upload_link_to_disk};
+use crate::doctor::doctor_payload;
 use crate::error::{Result, YacliError};
+use crate::goal_router::goal_route_payload;
+use crate::home::home_payload;
+use crate::mail_link::{MailSendLinkRequest, review_mail_send_link, send_link_via_mail};
+use crate::next_actions::next_actions_payload;
+use crate::onboarding::onboarding_resource_payload;
 use crate::runtime_context::{
     auth_state, resolve_calendar_private_context, resolve_disk_private_context,
     resolve_mail_private_context,
 };
 use crate::update::check_for_update;
+use crate::workflows;
 use crate::{
     calendar::{
         CalendarCreateRequest, CalendarEventsRequest, calendar_create_request_from_invites,
         create_calendar_event, delete_calendar_event, list_calendar_events, list_calendars,
-        parse_event_window,
+        parse_event_window, review_calendar_event_creation,
     },
     disk::{
-        PrivateDiskListRequest, PrivateDiskMkdirRequest, PrivateDiskUploadRequest,
-        create_private_directory, fetch_disk_info, fetch_private_resource, upload_private_resource,
+        DownloadedFile, PrivateDiskDownloadRequest, PrivateDiskListRequest,
+        PrivateDiskMkdirRequest, PrivateDiskPublishRequest, PrivateDiskUnpublishRequest,
+        PrivateDiskUploadRequest, create_private_directory, download_private_resource,
+        fetch_disk_info, fetch_private_resource, publish_private_resource, review_private_publish,
+        review_private_unpublish, review_private_upload, unpublish_private_resource,
+        upload_private_resource,
     },
     mail::{
         MailAttachmentExportRequest, MailAttachmentSelector, MailInviteInspectRequest,
         export_mail_attachment, inspect_mail_invite, list_mail_folders, list_mail_messages,
-        load_mail_attachments, read_mail_message, search_mail_messages, send_mail_message,
+        load_mail_attachments, read_mail_message, review_mail_submission, search_mail_messages,
+        send_mail_message,
     },
 };
 use chrono::{DateTime, Utc};
@@ -52,7 +67,7 @@ use super::{prompts, skills};
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const APP_RESOURCE_URI: &str = "ui://yacli/dashboard";
 const APP_RESOURCE_URI_TEMPLATE: &str =
-    "ui://yacli/dashboard{?account,section,resource,tool,skill,prompt}";
+    "ui://yacli/dashboard{?account,section,resource,tool,skill,prompt,workflow,activity,goal}";
 const APP_RESOURCE_MIME_TYPE: &str = "text/html;profile=mcp-app";
 const APP_EXTENSION_ID: &str = "io.modelcontextprotocol/ui";
 const APP_ACCOUNT_QUERY_PARAM: &str = "account";
@@ -61,6 +76,9 @@ const APP_RESOURCE_QUERY_PARAM: &str = "resource";
 const APP_TOOL_QUERY_PARAM: &str = "tool";
 const APP_SKILL_QUERY_PARAM: &str = "skill";
 const APP_PROMPT_QUERY_PARAM: &str = "prompt";
+const APP_WORKFLOW_QUERY_PARAM: &str = "workflow";
+const APP_ACTIVITY_QUERY_PARAM: &str = "activity";
+const APP_GOAL_QUERY_PARAM: &str = "goal";
 const HTTP_MCP_PATH: &str = "/mcp";
 const MCP_SESSION_HEADER: &str = "Mcp-Session-Id";
 const HTTP_AUTH_TOKEN_ENV: &str = "YACLI_MCP_HTTP_BEARER_TOKEN";
@@ -72,9 +90,13 @@ const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 const PROTECTED_RESOURCE_MCP_METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
 const DASHBOARD_SECTION_TOOLS: &str = "tools";
+const DASHBOARD_SECTION_HOME: &str = "home";
+const DASHBOARD_SECTION_WORKFLOWS: &str = "workflows";
+const DASHBOARD_SECTION_GOAL: &str = "goal";
 const DASHBOARD_SECTION_PROMPTS: &str = "prompts";
 const DASHBOARD_SECTION_RESOURCES: &str = "resources";
 const DASHBOARD_SECTION_AUTH: &str = "auth";
+const DASHBOARD_SECTION_ACTIVITY: &str = "activity";
 const DASHBOARD_RESOURCE_ACCOUNT: &str = "account";
 const DASHBOARD_RESOURCE_AUTH: &str = "auth";
 const DASHBOARD_RESOURCE_SKILLS: &str = "skills";
@@ -84,6 +106,8 @@ const DASHBOARD_TOOL_ACCOUNT_LIST: &str = "yacli.account.list";
 const DASHBOARD_TOOL_ACCOUNT_CURRENT: &str = "yacli.account.current";
 const DASHBOARD_TOOL_AUTH_STATUS: &str = "yacli.auth.status";
 const DASHBOARD_TOOL_UPDATE_CHECK: &str = "yacli.update.check";
+const DASHBOARD_TOOL_GOAL_ROUTE: &str = "yacli.goal.route";
+const DASHBOARD_TOOL_DOCTOR_APPLY_SAFE: &str = "yacli.doctor.apply_safe";
 
 struct DashboardResourceState {
     default_account: Option<String>,
@@ -92,6 +116,9 @@ struct DashboardResourceState {
     preferred_tool: Option<String>,
     preferred_skill: Option<String>,
     preferred_prompt: Option<String>,
+    preferred_workflow: Option<String>,
+    preferred_activity: Option<String>,
+    preferred_goal: Option<String>,
 }
 
 struct MailForwardToolRequest {
@@ -113,6 +140,20 @@ struct MailSendToolRequest {
     text: Option<String>,
     html: Option<String>,
     attachment_paths: Vec<String>,
+    dry_run: bool,
+}
+
+struct MailSendLinkToolRequest {
+    to: String,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    subject: String,
+    text: Option<String>,
+    html: Option<String>,
+    source_path: String,
+    disk_path: String,
+    overwrite: bool,
+    dry_run: bool,
 }
 
 struct MailAttachmentExportToolRequest {
@@ -138,6 +179,46 @@ struct MailInviteCreateEventToolRequest {
     calendar: String,
     event_index: usize,
     max_bytes: u64,
+}
+
+struct CalendarCreateToolRequest {
+    calendar: String,
+    summary: String,
+    start: String,
+    end: String,
+    description: Option<String>,
+    location: Option<String>,
+    dry_run: bool,
+}
+
+struct DiskUploadToolRequest {
+    source: String,
+    path: String,
+    overwrite: bool,
+    dry_run: bool,
+}
+
+struct DiskUploadLinkToolRequest {
+    source: String,
+    path: String,
+    overwrite: bool,
+    dry_run: bool,
+}
+
+struct DiskDownloadToolRequest {
+    path: String,
+    output_path: String,
+    force: bool,
+}
+
+struct DiskPublishToolRequest {
+    path: String,
+    dry_run: bool,
+}
+
+struct DiskUnpublishToolRequest {
+    path: String,
+    dry_run: bool,
 }
 
 struct SessionState {
@@ -1060,6 +1141,35 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
             ui_enabled,
         ),
         tool(
+            DASHBOARD_TOOL_GOAL_ROUTE,
+            "Route a natural-language goal into the best yacli workflow, prompt and MCP tool-path.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string" },
+                    "account": { "type": "string" }
+                },
+                "required": ["goal"],
+                "additionalProperties": false
+            }),
+            Some(MODEL_AND_APP_VISIBILITY),
+            ui_enabled,
+        ),
+        tool(
+            DASHBOARD_TOOL_DOCTOR_APPLY_SAFE,
+            "Apply only safe local remediation steps from the current doctor and goal context, then return the refreshed doctor state.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string" },
+                    "account": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+            Some(MODEL_AND_APP_VISIBILITY),
+            ui_enabled,
+        ),
+        tool(
             "yacli.mail.folders",
             "List folders in the configured mailbox.",
             json!({
@@ -1143,9 +1253,40 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
                     "attachments": {
                         "type": "array",
                         "items": { "type": "string" }
-                    }
+                    },
+                    "dry_run": { "type": "boolean" }
                 },
                 "required": ["to", "subject"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.mail.send_link",
+            "Upload one local file to Yandex Disk, publish it, and send the public link by email.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "to": { "type": "string" },
+                    "cc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "bcc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "subject": { "type": "string" },
+                    "text": { "type": "string" },
+                    "html": { "type": "string" },
+                    "source_path": { "type": "string" },
+                    "disk_path": { "type": "string" },
+                    "overwrite": { "type": "boolean" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["to", "subject", "source_path", "disk_path"],
                 "additionalProperties": false
             }),
             None,
@@ -1304,7 +1445,8 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
                     "start": { "type": "string" },
                     "end": { "type": "string" },
                     "description": { "type": "string" },
-                    "location": { "type": "string" }
+                    "location": { "type": "string" },
+                    "dry_run": { "type": "boolean" }
                 },
                 "required": ["summary", "start", "end"],
                 "additionalProperties": false
@@ -1381,9 +1523,77 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
                     "account": { "type": "string" },
                     "source": { "type": "string" },
                     "path": { "type": "string" },
-                    "overwrite": { "type": "boolean" }
+                    "overwrite": { "type": "boolean" },
+                    "dry_run": { "type": "boolean" }
                 },
                 "required": ["source", "path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.upload_link",
+            "Upload one local file to Yandex Disk and immediately publish a public link.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "source": { "type": "string" },
+                    "path": { "type": "string" },
+                    "overwrite": { "type": "boolean" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["source", "path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.download",
+            "Download one private Yandex Disk file to a local path on the MCP server host.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "path": { "type": "string" },
+                    "output_path": { "type": "string" },
+                    "force": { "type": "boolean" }
+                },
+                "required": ["path", "output_path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.publish",
+            "Publish one private Yandex Disk resource and return its public URL.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "path": { "type": "string" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.unpublish",
+            "Revoke the public URL of one private Yandex Disk resource.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "path": { "type": "string" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["path"],
                 "additionalProperties": false
             }),
             None,
@@ -1434,6 +1644,25 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
         DASHBOARD_TOOL_UPDATE_CHECK => {
             update_check(arguments.get("version").and_then(Value::as_str))?
         }
+        DASHBOARD_TOOL_GOAL_ROUTE => goal_route_payload(
+            required_string(&arguments, "goal")?,
+            arguments.get("account").and_then(Value::as_str),
+        )?,
+        DASHBOARD_TOOL_DOCTOR_APPLY_SAFE => {
+            let structured = apply_safe_doctor_remediation(
+                arguments.get("account").and_then(Value::as_str),
+                arguments.get("goal").and_then(Value::as_str),
+            )?;
+            if let Some(entry) = doctor_safe_remediation_activity_entry(
+                "mcp",
+                &structured,
+                arguments.get("account").and_then(Value::as_str),
+                arguments.get("goal").and_then(Value::as_str),
+            ) {
+                record_activity_mcp(entry);
+            }
+            structured
+        }
         "yacli.mail.folders" => mail_folders(arguments.get("account").and_then(Value::as_str))?,
         "yacli.mail.list" => mail_list(
             arguments.get("account").and_then(Value::as_str),
@@ -1462,6 +1691,22 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
                 text: optional_string_owned(&arguments, "text"),
                 html: optional_string_owned(&arguments, "html"),
                 attachment_paths: string_list(&arguments, "attachments")?,
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
+        )?,
+        "yacli.mail.send_link" => mail_send_link(
+            arguments.get("account").and_then(Value::as_str),
+            MailSendLinkToolRequest {
+                to: required_string(&arguments, "to")?.to_string(),
+                cc: string_list(&arguments, "cc")?,
+                bcc: string_list(&arguments, "bcc")?,
+                subject: required_string(&arguments, "subject")?.to_string(),
+                text: optional_string_owned(&arguments, "text"),
+                html: optional_string_owned(&arguments, "html"),
+                source_path: required_string(&arguments, "source_path")?.to_string(),
+                disk_path: required_string(&arguments, "disk_path")?.to_string(),
+                overwrite: optional_bool(&arguments, "overwrite").unwrap_or(false),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
             },
         )?,
         "yacli.mail.reply" => mail_reply(
@@ -1545,12 +1790,17 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
         )?,
         "yacli.calendar.create" => calendar_create(
             arguments.get("account").and_then(Value::as_str),
-            optional_string(&arguments, "calendar").unwrap_or("default"),
-            required_string(&arguments, "summary")?,
-            required_string(&arguments, "start")?,
-            required_string(&arguments, "end")?,
-            optional_string_owned(&arguments, "description"),
-            optional_string_owned(&arguments, "location"),
+            CalendarCreateToolRequest {
+                calendar: optional_string(&arguments, "calendar")
+                    .unwrap_or("default")
+                    .to_string(),
+                summary: required_string(&arguments, "summary")?.to_string(),
+                start: required_string(&arguments, "start")?.to_string(),
+                end: required_string(&arguments, "end")?.to_string(),
+                description: optional_string_owned(&arguments, "description"),
+                location: optional_string_owned(&arguments, "location"),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
         )?,
         "yacli.calendar.delete" => calendar_delete(
             arguments.get("account").and_then(Value::as_str),
@@ -1570,9 +1820,43 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
         )?,
         "yacli.disk.upload" => disk_upload(
             arguments.get("account").and_then(Value::as_str),
-            required_string(&arguments, "source")?,
-            required_string(&arguments, "path")?,
-            optional_bool(&arguments, "overwrite").unwrap_or(false),
+            DiskUploadToolRequest {
+                source: required_string(&arguments, "source")?.to_string(),
+                path: required_string(&arguments, "path")?.to_string(),
+                overwrite: optional_bool(&arguments, "overwrite").unwrap_or(false),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
+        )?,
+        "yacli.disk.upload_link" => disk_upload_link(
+            arguments.get("account").and_then(Value::as_str),
+            DiskUploadLinkToolRequest {
+                source: required_string(&arguments, "source")?.to_string(),
+                path: required_string(&arguments, "path")?.to_string(),
+                overwrite: optional_bool(&arguments, "overwrite").unwrap_or(false),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
+        )?,
+        "yacli.disk.download" => disk_download(
+            arguments.get("account").and_then(Value::as_str),
+            DiskDownloadToolRequest {
+                path: required_string(&arguments, "path")?.to_string(),
+                output_path: required_string(&arguments, "output_path")?.to_string(),
+                force: optional_bool(&arguments, "force").unwrap_or(false),
+            },
+        )?,
+        "yacli.disk.publish" => disk_publish(
+            arguments.get("account").and_then(Value::as_str),
+            DiskPublishToolRequest {
+                path: required_string(&arguments, "path")?.to_string(),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
+        )?,
+        "yacli.disk.unpublish" => disk_unpublish(
+            arguments.get("account").and_then(Value::as_str),
+            DiskUnpublishToolRequest {
+                path: required_string(&arguments, "path")?.to_string(),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
         )?,
         _ => {
             return Err(YacliError::UnsupportedOperation(format!(
@@ -1611,9 +1895,45 @@ fn resource_definitions(ui_enabled: bool) -> Vec<Value> {
             "mimeType": "text/markdown"
         }),
         json!({
+            "uri": "resource://yacli/home",
+            "name": "yacli Home",
+            "description": "Canonical unified home summary for account, onboarding, doctor, workflows, activity and next actions",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "resource://yacli/onboarding",
+            "name": "yacli Onboarding",
+            "description": "Live onboarding checklist driven by account, auth posture and optional goal context",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "resource://yacli/doctor",
+            "name": "yacli Doctor",
+            "description": "Health-check for config, secret backend, service readiness, workflows and optional goal context",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "resource://yacli/next-actions",
+            "name": "yacli Next Actions",
+            "description": "Ranked next steps with the highest product payoff and optional goal-aware prioritization",
+            "mimeType": "application/json"
+        }),
+        json!({
             "uri": "resource://yacli/skills",
             "name": "yacli Embedded Skills",
             "description": "Catalog of embedded yacli SKILL.md workflows mirrored into MCP resources",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "resource://yacli/workflows",
+            "name": "yacli Workflow Hub",
+            "description": "Catalog of cross-service workflows exposed as one canonical MCP resource",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "resource://yacli/activity",
+            "name": "yacli Activity Log",
+            "description": "Catalog of recent successful write-actions with replay commands",
             "mimeType": "application/json"
         }),
     ];
@@ -1632,6 +1952,36 @@ fn resource_definitions(ui_enabled: bool) -> Vec<Value> {
 fn resource_templates(_ui_enabled: bool) -> Vec<Value> {
     let mut templates = vec![
         json!({
+            "uriTemplate": "resource://yacli/home/{account}",
+            "name": "yacli Home Resource",
+            "description": "Read one canonical yacli home summary for a configured account",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/home{?goal}",
+            "name": "yacli Goal-aware Home Resource",
+            "description": "Read one canonical yacli home summary prioritized for a natural-language goal",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/home/{account}{?goal}",
+            "name": "yacli Goal-aware Account Home Resource",
+            "description": "Read one canonical yacli home summary for a configured account and natural-language goal",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/onboarding{?goal}",
+            "name": "yacli Goal-aware Onboarding Resource",
+            "description": "Read onboarding checklist focused on a natural-language goal",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/doctor{?goal}",
+            "name": "yacli Goal-aware Doctor Resource",
+            "description": "Read health-check focused on a natural-language goal",
+            "mimeType": "application/json"
+        }),
+        json!({
             "uriTemplate": "resource://yacli/account/{account}",
             "name": "yacli Account Resource",
             "description": "Read one configured yacli account summary as JSON",
@@ -1648,6 +1998,30 @@ fn resource_templates(_ui_enabled: bool) -> Vec<Value> {
             "name": "yacli Embedded Skill Resource",
             "description": "Read one embedded yacli SKILL.md workflow as Markdown",
             "mimeType": "text/markdown"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/workflow/{workflow}",
+            "name": "yacli Workflow Detail Resource",
+            "description": "Read one canonical yacli workflow with CLI steps and MCP links",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/activity/{activity}",
+            "name": "yacli Activity Detail Resource",
+            "description": "Read one successful write-action with its replay command",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/next-actions{?goal}",
+            "name": "yacli Goal-aware Next Actions Resource",
+            "description": "Read ranked next steps prioritized for a natural-language goal",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uriTemplate": "resource://yacli/next-actions/{account}{?goal}",
+            "name": "yacli Goal-aware Account Next Actions Resource",
+            "description": "Read ranked next steps for a configured account and natural-language goal",
+            "mimeType": "application/json"
         }),
     ];
 
@@ -1814,6 +2188,29 @@ fn auth_resource(uri: &str) -> Result<Value> {
     auth_status(Some(&account_name))
 }
 
+fn home_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let (account_name, goal) = home_resource_request(uri)?;
+    json_resource_contents(uri, home_payload(account_name.as_deref(), goal.as_deref())?)
+}
+
+fn next_actions_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let (account_name, goal) = next_actions_resource_request(uri)?;
+    json_resource_contents(
+        uri,
+        next_actions_payload(account_name.as_deref(), goal.as_deref())?,
+    )
+}
+
+fn onboarding_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let goal = onboarding_resource_request(uri)?;
+    json_resource_contents(uri, onboarding_resource_payload(goal.as_deref())?)
+}
+
+fn doctor_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let goal = doctor_resource_request(uri)?;
+    json_resource_contents(uri, doctor_payload(None, goal.as_deref())?)
+}
+
 fn skills_catalog_resource() -> Value {
     let items = skills::skill_names()
         .into_iter()
@@ -1842,6 +2239,59 @@ fn skill_resource_contents(uri: &str) -> Result<Vec<Value>> {
         "mimeType": "text/markdown",
         "text": content,
     })])
+}
+
+fn workflow_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let workflow_id = templated_account_name(uri, "workflow")?;
+    let payload = workflows::workflow_resource_detail(&workflow_id).ok_or_else(|| {
+        YacliError::UnsupportedOperation(format!("unknown workflow resource: {uri}"))
+    })?;
+    json_resource_contents(uri, payload)
+}
+
+fn activity_catalog_resource() -> Result<Value> {
+    let store = ActivityStore::load()?;
+    let items = store
+        .entries()
+        .iter()
+        .take(50)
+        .map(|entry| {
+            json!({
+                "id": entry.id,
+                "occurred_at": entry.occurred_at,
+                "source": entry.source,
+                "operation": entry.operation,
+                "account": entry.account,
+                "summary": entry.summary,
+                "replay_command": entry.replay_command,
+                "uri": format!("resource://yacli/activity/{}", entry.id),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "count": items.len(),
+        "items": items,
+    }))
+}
+
+fn activity_resource_contents(uri: &str) -> Result<Vec<Value>> {
+    let activity_id = templated_account_name(uri, "activity")?;
+    let store = ActivityStore::load()?;
+    let payload = store
+        .find(&activity_id)
+        .map(|entry| {
+            json!({
+                "id": entry.id,
+                "occurred_at": entry.occurred_at,
+                "source": entry.source,
+                "operation": entry.operation,
+                "account": entry.account,
+                "summary": entry.summary,
+                "replay_command": entry.replay_command,
+            })
+        })
+        .ok_or_else(|| YacliError::Validation(format!("unknown activity entry: {activity_id}")))?;
+    json_resource_contents(uri, payload)
 }
 
 fn app_snapshot() -> Result<Value> {
@@ -1968,26 +2418,121 @@ fn mail_send(account: Option<&str>, request: MailSendToolRequest) -> Result<Valu
             .map(PathBuf::from)
             .collect::<Vec<_>>(),
     )?;
-    let sent = send_mail_message(
-        &context.smtp_host,
-        context.smtp_port,
-        auth,
-        crate::mail::MailSendRequest {
-            to: vec![request.to],
-            cc: request.cc,
-            bcc: request.bcc,
-            subject: request.subject,
-            text: request.text,
-            html: request.html,
-            attachments,
-            thread_headers: None,
-        },
-    )?;
-    Ok(json!({
-        "account": resolved_account,
-        "attachments": request.attachment_paths,
-        "sent": sent,
-    }))
+    let send_request = crate::mail::MailSendRequest {
+        to: vec![request.to],
+        cc: request.cc,
+        bcc: request.bcc,
+        subject: request.subject,
+        text: request.text,
+        html: request.html,
+        attachments,
+        thread_headers: None,
+    };
+
+    if request.dry_run {
+        let review = review_mail_submission(auth, send_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "attachments": request.attachment_paths,
+            "dry_run": true,
+            "review": review,
+            "smtp": {
+                "host": context.smtp_host,
+                "port": context.smtp_port
+            }
+        }))
+    } else {
+        let sent = send_mail_message(&context.smtp_host, context.smtp_port, auth, send_request)?;
+        let mut replay = format!(
+            "yacli mail send {} {} {} --dry-run",
+            shell_quote(sent.to.first().map(String::as_str).unwrap_or("")),
+            shell_quote(&sent.subject),
+            shell_quote("<текст письма>")
+        );
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "mail.send".to_string(),
+            account: resolved_account.clone(),
+            summary: format!(
+                "Отправлено письмо {}: {}",
+                sent.to.first().cloned().unwrap_or_else(|| "-".to_string()),
+                sent.subject
+            ),
+            replay_command: std::mem::take(&mut replay),
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "attachments": request.attachment_paths,
+            "sent": sent,
+        }))
+    }
+}
+
+fn mail_send_link(account: Option<&str>, request: MailSendLinkToolRequest) -> Result<Value> {
+    let (resolved_account, disk_base_url, access_token) = resolve_disk_private_context(account)?;
+    let (_, auth, context) = resolve_mail_private_context(account)?;
+    let send_link_request = MailSendLinkRequest {
+        source: PathBuf::from(&request.source_path),
+        disk_path: request.disk_path,
+        overwrite: request.overwrite,
+        to: vec![request.to],
+        cc: request.cc,
+        bcc: request.bcc,
+        subject: request.subject,
+        text: request.text,
+        html: request.html,
+    };
+
+    if request.dry_run {
+        let review = review_mail_send_link(auth, &send_link_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "dry_run": true,
+            "review": review,
+            "disk": {
+                "base_url": disk_base_url,
+            },
+            "smtp": {
+                "host": context.smtp_host,
+                "port": context.smtp_port
+            }
+        }))
+    } else {
+        let result = send_link_via_mail(
+            &disk_base_url,
+            &access_token,
+            &context.smtp_host,
+            context.smtp_port,
+            auth,
+            &send_link_request,
+        )?;
+        let mut replay = format!(
+            "yacli mail send-link {} {} {} --source {} --path {} --dry-run",
+            shell_quote(result.sent.to.first().map(String::as_str).unwrap_or("")),
+            shell_quote(&result.sent.subject),
+            shell_quote("<текст письма>"),
+            shell_quote(&request.source_path),
+            shell_quote(&result.resource.path)
+        );
+        if request.overwrite {
+            replay.push_str(" --overwrite");
+        }
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "mail.send_link".to_string(),
+            account: resolved_account.clone(),
+            summary: format!(
+                "Отправлена публичная ссылка на файл: {} -> {}",
+                result.resource.path,
+                result.resource.public_url.as_deref().unwrap_or("-")
+            ),
+            replay_command: replay,
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "result": result,
+        }))
+    }
 }
 
 fn mail_reply(
@@ -2104,6 +2649,7 @@ fn mail_invite_create_event(
         ));
     }
     let (resolved_account, auth, mail_context) = resolve_mail_private_context(account)?;
+    let replay_selector = request.selector.clone();
     let inspected = inspect_mail_invite(
         &mail_context.imap_host,
         mail_context.imap_port,
@@ -2129,6 +2675,30 @@ fn mail_invite_create_event(
         &app_password,
         create_request,
     )?;
+    let mut replay = format!(
+        "yacli mail invite create-event {} --folder {} --calendar {} --event-index {}",
+        request.uid,
+        shell_quote(&request.folder),
+        shell_quote(&calendar.id),
+        request.event_index
+    );
+    match &replay_selector {
+        MailAttachmentSelector::Index(index) => replay.push_str(&format!(" --index {}", index)),
+        MailAttachmentSelector::Filename(name) => {
+            replay.push_str(&format!(" --name {}", shell_quote(name)));
+        }
+    }
+    record_activity_mcp(NewActivityEntry {
+        source: "mcp".to_string(),
+        operation: "mail.invite.create_event".to_string(),
+        account: resolved_account.clone(),
+        summary: format!(
+            "Создано событие из приглашения письма {}: {}",
+            request.uid,
+            event.summary.as_deref().unwrap_or("-")
+        ),
+        replay_command: replay,
+    });
 
     Ok(json!({
         "account": resolved_account,
@@ -2178,34 +2748,70 @@ fn calendar_events(
     }))
 }
 
-fn calendar_create(
-    account: Option<&str>,
-    calendar: &str,
-    summary: &str,
-    start: &str,
-    end: &str,
-    description: Option<String>,
-    location: Option<String>,
-) -> Result<Value> {
+fn calendar_create(account: Option<&str>, request: CalendarCreateToolRequest) -> Result<Value> {
     let (resolved_account, app_password, context) = resolve_calendar_private_context(account)?;
-    let (calendar, event) = create_calendar_event(
-        &context.caldav_base_url,
-        &context.email,
-        &app_password,
-        CalendarCreateRequest {
-            calendar: calendar.to_string(),
-            summary: summary.to_string(),
-            start: start.to_string(),
-            end: end.to_string(),
-            description,
-            location,
-        },
-    )?;
-    Ok(json!({
-        "account": resolved_account,
-        "calendar": calendar,
-        "event": event,
-    }))
+    let dry_run = request.dry_run;
+    let create_request = CalendarCreateRequest {
+        calendar: request.calendar,
+        summary: request.summary,
+        start: request.start,
+        end: request.end,
+        description: request.description,
+        location: request.location,
+    };
+    if dry_run {
+        let (calendar, review) = review_calendar_event_creation(
+            &context.caldav_base_url,
+            &context.email,
+            &app_password,
+            create_request,
+        )?;
+        Ok(json!({
+            "account": resolved_account,
+            "calendar": calendar,
+            "dry_run": true,
+            "review": review,
+        }))
+    } else {
+        let (calendar, event) = create_calendar_event(
+            &context.caldav_base_url,
+            &context.email,
+            &app_password,
+            create_request,
+        )?;
+        let mut replay = format!(
+            "yacli calendar create {} {} {}",
+            shell_quote(event.summary.as_deref().unwrap_or("")),
+            shell_quote(event.start.as_deref().unwrap_or("")),
+            shell_quote(event.end.as_deref().unwrap_or(""))
+        );
+        if calendar.id != "default" {
+            replay.push_str(&format!(" --calendar {}", shell_quote(&calendar.id)));
+        }
+        if let Some(location) = event.location.as_deref() {
+            replay.push_str(&format!(" --location {}", shell_quote(location)));
+        }
+        if let Some(description) = event.description.as_deref() {
+            replay.push_str(&format!(" --description {}", shell_quote(description)));
+        }
+        replay.push_str(" --dry-run");
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "calendar.create".to_string(),
+            account: resolved_account.clone(),
+            summary: format!(
+                "Создано событие в календаре {}: {}",
+                calendar.name,
+                event.summary.as_deref().unwrap_or("-")
+            ),
+            replay_command: replay,
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "calendar": calendar,
+            "event": event,
+        }))
+    }
 }
 
 fn calendar_delete(account: Option<&str>, calendar: &str, uid: &str) -> Result<Value> {
@@ -2259,6 +2865,13 @@ fn disk_mkdir(account: Option<&str>, path: &str) -> Result<Value> {
             path: path.to_string(),
         },
     )?;
+    record_activity_mcp(NewActivityEntry {
+        source: "mcp".to_string(),
+        operation: "disk.mkdir".to_string(),
+        account: resolved_account.clone(),
+        summary: format!("Создана папка на Диске: {}", resource.path),
+        replay_command: format!("yacli disk mkdir {}", shell_quote(&resource.path)),
+    });
     Ok(json!({
         "account": resolved_account,
         "path": path,
@@ -2266,23 +2879,228 @@ fn disk_mkdir(account: Option<&str>, path: &str) -> Result<Value> {
     }))
 }
 
-fn disk_upload(account: Option<&str>, source: &str, path: &str, overwrite: bool) -> Result<Value> {
+fn disk_upload(account: Option<&str>, request: DiskUploadToolRequest) -> Result<Value> {
     let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
-    let (resource, upload) = upload_private_resource(
-        &base_url,
-        &access_token,
-        &PrivateDiskUploadRequest {
-            source: PathBuf::from(source),
-            path: path.to_string(),
-            overwrite,
-        },
-    )?;
+    let dry_run = request.dry_run;
+    let upload_request = PrivateDiskUploadRequest {
+        source: PathBuf::from(request.source),
+        path: request.path,
+        overwrite: request.overwrite,
+    };
+    if dry_run {
+        let review = review_private_upload(&upload_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "path": upload_request.path,
+            "dry_run": true,
+            "upload": review,
+        }))
+    } else {
+        let (resource, upload) =
+            upload_private_resource(&base_url, &access_token, &upload_request)?;
+        let mut replay = format!(
+            "yacli disk upload {} {}",
+            shell_quote(&upload.source_path),
+            shell_quote(&upload.remote_path)
+        );
+        if upload.overwrite {
+            replay.push_str(" --overwrite");
+        }
+        replay.push_str(" --dry-run");
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "disk.upload".to_string(),
+            account: resolved_account.clone(),
+            summary: format!("Загружен файл на Диск: {}", upload.remote_path),
+            replay_command: replay,
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "path": upload_request.path,
+            "resource": resource,
+            "upload": upload,
+        }))
+    }
+}
+
+fn disk_upload_link(account: Option<&str>, request: DiskUploadLinkToolRequest) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let upload_link_request = DiskUploadLinkRequest {
+        source: PathBuf::from(&request.source),
+        disk_path: request.path.clone(),
+        overwrite: request.overwrite,
+    };
+    if request.dry_run {
+        let review = review_disk_upload_link(&upload_link_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "path": request.path,
+            "dry_run": true,
+            "review": review,
+        }))
+    } else {
+        let result = upload_link_to_disk(&base_url, &access_token, &upload_link_request)?;
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "disk.upload_link".to_string(),
+            account: resolved_account.clone(),
+            summary: format!(
+                "Загружен и опубликован ресурс на Диске: {}",
+                result
+                    .resource
+                    .public_url
+                    .as_deref()
+                    .unwrap_or(&result.resource.path)
+            ),
+            replay_command: format!(
+                "yacli disk upload-link --source {} --path {} --dry-run",
+                shell_quote(&result.upload.source_path),
+                shell_quote(&result.resource.path)
+            ),
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "path": request.path,
+            "result": result,
+        }))
+    }
+}
+
+fn disk_download(account: Option<&str>, request: DiskDownloadToolRequest) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let download_request = PrivateDiskDownloadRequest {
+        path: request.path,
+        output: PathBuf::from(request.output_path),
+        force: request.force,
+    };
+    let (resource, download) =
+        download_private_resource(&base_url, &access_token, &download_request)?;
+
+    let mut replay = format!(
+        "yacli disk download {} --output {}",
+        shell_quote(&resource.path),
+        shell_quote(&download.output_path)
+    );
+    if request.force {
+        replay.push_str(" --force");
+    }
+    record_activity_mcp(NewActivityEntry {
+        source: "mcp".to_string(),
+        operation: "disk.download".to_string(),
+        account: resolved_account.clone(),
+        summary: mcp_transfer_activity_summary("Скачан файл с Диска", &resource.path, &download),
+        replay_command: replay,
+    });
+
     Ok(json!({
         "account": resolved_account,
-        "path": path,
+        "path": download_request.path,
         "resource": resource,
-        "upload": upload,
+        "download": download,
     }))
+}
+
+fn disk_publish(account: Option<&str>, request: DiskPublishToolRequest) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let publish_request = PrivateDiskPublishRequest {
+        path: request.path.clone(),
+    };
+    if request.dry_run {
+        let review = review_private_publish(&base_url, &access_token, &publish_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "path": request.path,
+            "dry_run": true,
+            "review": review,
+        }))
+    } else {
+        let resource = publish_private_resource(&base_url, &access_token, &publish_request)?;
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "disk.publish".to_string(),
+            account: resolved_account.clone(),
+            summary: format!(
+                "Опубликован ресурс на Диске: {}",
+                resource.public_url.as_deref().unwrap_or(&resource.path)
+            ),
+            replay_command: format!(
+                "yacli disk publish {} --dry-run",
+                shell_quote(&resource.path)
+            ),
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "path": request.path,
+            "resource": resource,
+        }))
+    }
+}
+
+fn disk_unpublish(account: Option<&str>, request: DiskUnpublishToolRequest) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let unpublish_request = PrivateDiskUnpublishRequest {
+        path: request.path.clone(),
+    };
+    if request.dry_run {
+        let review = review_private_unpublish(&base_url, &access_token, &unpublish_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "path": request.path,
+            "dry_run": true,
+            "review": review,
+        }))
+    } else {
+        let result = unpublish_private_resource(&base_url, &access_token, &unpublish_request)?;
+        record_activity_mcp(NewActivityEntry {
+            source: "mcp".to_string(),
+            operation: "disk.unpublish".to_string(),
+            account: resolved_account.clone(),
+            summary: format!(
+                "Отозвана публичная ссылка на Диске: {}",
+                result
+                    .revoked_public_url
+                    .as_deref()
+                    .unwrap_or(&result.resource.path)
+            ),
+            replay_command: format!(
+                "yacli disk unpublish {} --dry-run",
+                shell_quote(&result.resource.path)
+            ),
+        });
+        Ok(json!({
+            "account": resolved_account,
+            "path": request.path,
+            "result": result,
+        }))
+    }
+}
+
+fn record_activity_mcp(entry: NewActivityEntry) {
+    if let Err(err) = record_activity(entry) {
+        eprintln!(
+            "{}",
+            json!({
+                "ok": false,
+                "warning": "activity_log_unavailable",
+                "message": format!("failed to record activity entry: {err}"),
+            })
+        );
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn mcp_transfer_activity_summary(prefix: &str, target: &str, download: &DownloadedFile) -> String {
+    let mut details = vec![
+        format!("попыток: {}", download.attempts),
+        format!("время: {} ms", download.elapsed_ms),
+    ];
+    if download.resumed_from_bytes > 0 {
+        details.push(format!("resume: {} B", download.resumed_from_bytes));
+    }
+    format!("{prefix}: {target} ({})", details.join(", "))
 }
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
@@ -2382,6 +3200,9 @@ fn app_html(uri: &str) -> Result<String> {
         "preferredTool": bootstrap_state.preferred_tool,
         "preferredSkill": bootstrap_state.preferred_skill,
         "preferredPrompt": bootstrap_state.preferred_prompt,
+        "preferredWorkflow": bootstrap_state.preferred_workflow,
+        "preferredActivity": bootstrap_state.preferred_activity,
+        "preferredGoal": bootstrap_state.preferred_goal,
     }))
     .map_err(|err| YacliError::Serialization(err.to_string()))?;
 
@@ -2415,7 +3236,19 @@ fn resource_contents(uri: &str) -> Result<Vec<Value>> {
             "mimeType": "text/markdown",
             "text": "# yacli MCP\n\nStable read-only tools are available for accounts, auth status, mail, calendar, and disk.\n\nApps-ready clients can also load `ui://yacli/dashboard`."
         })]),
+        home_uri if is_home_resource_uri(home_uri) => home_resource_contents(home_uri),
+        onboarding_uri if is_onboarding_resource_uri(onboarding_uri) => {
+            onboarding_resource_contents(onboarding_uri)
+        }
+        doctor_uri if is_doctor_resource_uri(doctor_uri) => doctor_resource_contents(doctor_uri),
+        next_actions_uri if is_next_actions_resource_uri(next_actions_uri) => {
+            next_actions_resource_contents(next_actions_uri)
+        }
         "resource://yacli/skills" => json_resource_contents(uri, skills_catalog_resource()),
+        "resource://yacli/workflows" => {
+            json_resource_contents(uri, workflows::workflow_resource_catalog())
+        }
+        "resource://yacli/activity" => json_resource_contents(uri, activity_catalog_resource()?),
         dashboard_uri if is_dashboard_resource_uri(dashboard_uri) => Ok(vec![json!({
             "uri": dashboard_uri,
             "mimeType": APP_RESOURCE_MIME_TYPE,
@@ -2431,6 +3264,12 @@ fn resource_contents(uri: &str) -> Result<Vec<Value>> {
         skill_uri if skill_uri.starts_with("resource://yacli/skill/") => {
             skill_resource_contents(skill_uri)
         }
+        workflow_uri if workflow_uri.starts_with("resource://yacli/workflow/") => {
+            workflow_resource_contents(workflow_uri)
+        }
+        activity_uri if activity_uri.starts_with("resource://yacli/activity/") => {
+            activity_resource_contents(activity_uri)
+        }
         _ => Err(YacliError::UnsupportedOperation(format!(
             "unknown MCP resource: {uri}"
         ))),
@@ -2443,6 +3282,22 @@ fn is_dashboard_resource_uri(uri: &str) -> bool {
 
 fn is_subscribable_resource_uri(uri: &str) -> bool {
     uri.starts_with("resource://yacli/account/") || uri.starts_with("resource://yacli/auth/")
+}
+
+fn is_home_resource_uri(uri: &str) -> bool {
+    resource_request(uri, "home").is_ok()
+}
+
+fn is_next_actions_resource_uri(uri: &str) -> bool {
+    resource_request(uri, "next-actions").is_ok()
+}
+
+fn is_onboarding_resource_uri(uri: &str) -> bool {
+    goal_query_resource_request(uri, "onboarding").is_ok()
+}
+
+fn is_doctor_resource_uri(uri: &str) -> bool {
+    goal_query_resource_request(uri, "doctor").is_ok()
 }
 
 fn templated_account_name(uri: &str, namespace: &str) -> Result<String> {
@@ -2466,6 +3321,74 @@ fn templated_account_name(uri: &str, namespace: &str) -> Result<String> {
     Ok(parts[1].to_string())
 }
 
+fn home_resource_request(uri: &str) -> Result<(Option<String>, Option<String>)> {
+    resource_request(uri, "home")
+}
+
+fn next_actions_resource_request(uri: &str) -> Result<(Option<String>, Option<String>)> {
+    resource_request(uri, "next-actions")
+}
+
+fn onboarding_resource_request(uri: &str) -> Result<Option<String>> {
+    goal_query_resource_request(uri, "onboarding")
+}
+
+fn doctor_resource_request(uri: &str) -> Result<Option<String>> {
+    goal_query_resource_request(uri, "doctor")
+}
+
+fn resource_request(uri: &str, namespace: &str) -> Result<(Option<String>, Option<String>)> {
+    let parsed = Url::parse(uri)
+        .map_err(|err| YacliError::Validation(format!("invalid resource URI `{uri}`: {err}")))?;
+    let segments = parsed
+        .path_segments()
+        .ok_or_else(|| YacliError::Validation(format!("invalid resource URI `{uri}`")))?;
+    let parts = segments.collect::<Vec<_>>();
+    if parsed.scheme() != "resource" || parsed.host_str() != Some("yacli") {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "unknown MCP resource: {uri}"
+        )));
+    }
+    let goal = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "goal")
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    match parts.as_slice() {
+        [only] if *only == namespace => Ok((None, goal)),
+        [first, account] if *first == namespace && !account.trim().is_empty() => {
+            Ok((Some(account.to_string()), goal))
+        }
+        _ => Err(YacliError::UnsupportedOperation(format!(
+            "unknown MCP resource: {uri}"
+        ))),
+    }
+}
+
+fn goal_query_resource_request(uri: &str, namespace: &str) -> Result<Option<String>> {
+    let parsed = Url::parse(uri)
+        .map_err(|err| YacliError::Validation(format!("invalid resource URI `{uri}`: {err}")))?;
+    let segments = parsed
+        .path_segments()
+        .ok_or_else(|| YacliError::Validation(format!("invalid resource URI `{uri}`")))?;
+    let parts = segments.collect::<Vec<_>>();
+    if parsed.scheme() != "resource"
+        || parsed.host_str() != Some("yacli")
+        || parts.as_slice() != [namespace]
+    {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "unknown MCP resource: {uri}"
+        )));
+    }
+
+    Ok(parsed
+        .query_pairs()
+        .find(|(key, _)| key == "goal")
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
+}
+
 fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
     let parsed = Url::parse(uri)
         .map_err(|err| YacliError::Validation(format!("invalid resource URI `{uri}`: {err}")))?;
@@ -2485,6 +3408,9 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
     let mut tool = None;
     let mut skill = None;
     let mut prompt = None;
+    let mut workflow = None;
+    let mut activity = None;
+    let mut goal = None;
     for (key, value) in parsed.query_pairs() {
         match key.as_ref() {
             APP_ACCOUNT_QUERY_PARAM => {
@@ -2503,13 +3429,17 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
                 let value = value.into_owned();
                 if !matches!(
                     value.as_str(),
-                    DASHBOARD_SECTION_TOOLS
+                    DASHBOARD_SECTION_HOME
+                        | DASHBOARD_SECTION_TOOLS
+                        | DASHBOARD_SECTION_WORKFLOWS
+                        | DASHBOARD_SECTION_GOAL
                         | DASHBOARD_SECTION_PROMPTS
                         | DASHBOARD_SECTION_RESOURCES
                         | DASHBOARD_SECTION_AUTH
+                        | DASHBOARD_SECTION_ACTIVITY
                 ) {
                     return Err(YacliError::Validation(format!(
-                        "dashboard resource query `{APP_SECTION_QUERY_PARAM}` must be one of: {DASHBOARD_SECTION_TOOLS}, {DASHBOARD_SECTION_PROMPTS}, {DASHBOARD_SECTION_RESOURCES}, {DASHBOARD_SECTION_AUTH}"
+                        "dashboard resource query `{APP_SECTION_QUERY_PARAM}` must be one of: {DASHBOARD_SECTION_HOME}, {DASHBOARD_SECTION_TOOLS}, {DASHBOARD_SECTION_WORKFLOWS}, {DASHBOARD_SECTION_GOAL}, {DASHBOARD_SECTION_PROMPTS}, {DASHBOARD_SECTION_RESOURCES}, {DASHBOARD_SECTION_AUTH}, {DASHBOARD_SECTION_ACTIVITY}"
                     )));
                 }
                 if section.replace(value).is_some() {
@@ -2581,6 +3511,43 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
                     )));
                 }
             }
+            APP_WORKFLOW_QUERY_PARAM => {
+                let value = value.into_owned();
+                if workflows::workflow_definition(&value).is_none() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_WORKFLOW_QUERY_PARAM}` must be one of the canonical yacli workflows"
+                    )));
+                }
+                if workflow.replace(value).is_some() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_WORKFLOW_QUERY_PARAM}` cannot appear more than once"
+                    )));
+                }
+            }
+            APP_ACTIVITY_QUERY_PARAM => {
+                if value.trim().is_empty() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_ACTIVITY_QUERY_PARAM}` cannot be empty"
+                    )));
+                }
+                if activity.replace(value.into_owned()).is_some() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_ACTIVITY_QUERY_PARAM}` cannot appear more than once"
+                    )));
+                }
+            }
+            APP_GOAL_QUERY_PARAM => {
+                if value.trim().is_empty() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_GOAL_QUERY_PARAM}` cannot be empty"
+                    )));
+                }
+                if goal.replace(value.into_owned()).is_some() {
+                    return Err(YacliError::Validation(format!(
+                        "dashboard resource query `{APP_GOAL_QUERY_PARAM}` cannot appear more than once"
+                    )));
+                }
+            }
             _ => {
                 return Err(YacliError::UnsupportedOperation(format!(
                     "unknown MCP resource: {uri}"
@@ -2615,14 +3582,41 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
             section = Some(DASHBOARD_SECTION_RESOURCES.to_string());
         } else if tool.is_some() {
             section = Some(DASHBOARD_SECTION_TOOLS.to_string());
+        } else if workflow.is_some() {
+            section = Some(DASHBOARD_SECTION_WORKFLOWS.to_string());
+        } else if goal.is_some() {
+            section = Some(DASHBOARD_SECTION_GOAL.to_string());
         } else if prompt.is_some() {
             section = Some(DASHBOARD_SECTION_PROMPTS.to_string());
+        } else if activity.is_some() {
+            section = Some(DASHBOARD_SECTION_ACTIVITY.to_string());
         }
     }
 
     if prompt.is_some() && section.as_deref() != Some(DASHBOARD_SECTION_PROMPTS) {
         return Err(YacliError::Validation(format!(
             "dashboard resource query `{APP_PROMPT_QUERY_PARAM}` requires `{APP_SECTION_QUERY_PARAM}=prompts`"
+        )));
+    }
+
+    if workflow.is_some() && section.as_deref() != Some(DASHBOARD_SECTION_WORKFLOWS) {
+        return Err(YacliError::Validation(format!(
+            "dashboard resource query `{APP_WORKFLOW_QUERY_PARAM}` requires `{APP_SECTION_QUERY_PARAM}=workflows`"
+        )));
+    }
+
+    if goal.is_some()
+        && section.as_deref() != Some(DASHBOARD_SECTION_GOAL)
+        && section.as_deref() != Some(DASHBOARD_SECTION_HOME)
+    {
+        return Err(YacliError::Validation(format!(
+            "dashboard resource query `{APP_GOAL_QUERY_PARAM}` requires `{APP_SECTION_QUERY_PARAM}=goal` or `{APP_SECTION_QUERY_PARAM}=home`"
+        )));
+    }
+
+    if activity.is_some() && section.as_deref() != Some(DASHBOARD_SECTION_ACTIVITY) {
+        return Err(YacliError::Validation(format!(
+            "dashboard resource query `{APP_ACTIVITY_QUERY_PARAM}` requires `{APP_SECTION_QUERY_PARAM}=activity`"
         )));
     }
 
@@ -2633,6 +3627,9 @@ fn parse_dashboard_resource_state(uri: &str) -> Result<DashboardResourceState> {
         preferred_tool: tool,
         preferred_skill: skill,
         preferred_prompt: prompt,
+        preferred_workflow: workflow,
+        preferred_activity: activity,
+        preferred_goal: goal,
     })
 }
 
@@ -2686,6 +3683,8 @@ fn tool_visibility(tool_name: &str) -> Option<&'static [&'static str]> {
         | "yacli.account.list"
         | "yacli.account.current"
         | "yacli.auth.status"
+        | DASHBOARD_TOOL_GOAL_ROUTE
+        | DASHBOARD_TOOL_DOCTOR_APPLY_SAFE
         | DASHBOARD_TOOL_UPDATE_CHECK => Some(MODEL_AND_APP_VISIBILITY),
         _ => None,
     }

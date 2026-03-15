@@ -101,7 +101,7 @@ jobs:
           binary_path="$(find "$smoke_dir" -type f -name yacli | head -n 1)"
           test -n "$binary_path"
           chmod +x "$binary_path"
-          sh ./scripts/smoke-product-surface.sh "$binary_path"
+          YACLI_EXPECT_SECRET_BACKEND=keyring sh ./scripts/smoke-product-surface.sh "$binary_path"
       - name: Assemble release checksums
         shell: bash
         run: |

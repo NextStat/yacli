@@ -37,6 +37,20 @@ fn write_credentials_file(config_dir: &std::path::Path, content: &str) {
     fs::write(config_dir.join("credentials.toml"), content).expect("credentials file written");
 }
 
+fn write_activity_file(config_dir: &std::path::Path, content: &str) {
+    fs::write(config_dir.join("activity.toml"), content).expect("activity file written");
+}
+
+fn expected_claude_desktop_config_path(home: &std::path::Path) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Claude/claude_desktop_config.json")
+    } else if cfg!(target_os = "windows") {
+        home.join("AppData/Roaming/Claude/claude_desktop_config.json")
+    } else {
+        home.join(".config/Claude/claude_desktop_config.json")
+    }
+}
+
 fn write_mock_account_with_refs(
     config_dir: &std::path::Path,
     disk_base_url: &str,
@@ -244,6 +258,11 @@ fn top_level_help_hides_agent_guide_command() {
         .stdout(predicate::str::contains("Параметры:"))
         .stdout(predicate::str::contains("[OPTIONS] <КОМАНДА>"))
         .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("setup"))
+        .stdout(predicate::str::contains("home"))
+        .stdout(predicate::str::contains("doctor"))
+        .stdout(predicate::str::contains("goal"))
+        .stdout(predicate::str::contains("workflow"))
         .stdout(predicate::str::contains("login"))
         .stdout(predicate::str::contains("update"))
         .stdout(predicate::str::contains("mail"))
@@ -265,6 +284,799 @@ fn top_level_help_hides_agent_guide_command() {
             predicate::str::contains("Print this message or the help of the given subcommand(s)")
                 .not(),
         );
+}
+
+#[test]
+fn setup_help_describes_onboarding_surface() {
+    yacli()
+        .args(["setup", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Провести первичную настройку аккаунта и MCP за один проход",
+        ))
+        .stdout(predicate::str::contains("--calendar-app-password <ПАРОЛЬ>"))
+        .stdout(predicate::str::contains("--calendar-env-var <ПЕРЕМЕННАЯ>"))
+        .stdout(predicate::str::contains("--skip-login"))
+        .stdout(predicate::str::contains("--skip-mcp-install"))
+        .stdout(predicate::str::contains("--plan-only"));
+}
+
+#[test]
+fn home_help_describes_unified_surface() {
+    yacli()
+        .args(["home", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Показать единый home screen по аккаунту, onboarding, workflows и activity",
+        ))
+        .stdout(predicate::str::contains("--account <АККАУНТ>"))
+        .stdout(predicate::str::contains("--goal <ЦЕЛЬ>"));
+}
+
+#[test]
+fn doctor_help_describes_health_check_surface() {
+    yacli()
+        .args(["doctor", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Проверить продуктовый health-check: конфиг, секреты, сервисы и readiness workflows",
+        ))
+        .stdout(predicate::str::contains("--account <АККАУНТ>"))
+        .stdout(predicate::str::contains("--goal <ЦЕЛЬ>"))
+        .stdout(predicate::str::contains("--apply-safe"));
+}
+
+#[test]
+fn next_help_describes_ranked_actions_surface() {
+    yacli()
+        .args(["next", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Показать 3-5 следующих действий с наибольшим продуктовым эффектом",
+        ))
+        .stdout(predicate::str::contains("--account <АККАУНТ>"))
+        .stdout(predicate::str::contains("--goal <ЦЕЛЬ>"));
+}
+
+#[test]
+fn goal_help_describes_router_surface() {
+    yacli()
+        .args(["goal", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Маршрутизировать естественную цель в лучший workflow, prompt и MCP tool-path",
+        ))
+        .stdout(predicate::str::contains("--account <АККАУНТ>"));
+}
+
+#[test]
+fn workflow_help_describes_hub_surface() {
+    yacli()
+        .args(["workflow", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Показать готовые кросс-сервисные workflow yacli",
+        ))
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("show"));
+}
+
+#[test]
+fn activity_help_describes_log_surface() {
+    yacli()
+        .args(["activity", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Показать журнал последних действий и replay-команды",
+        ))
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("show"));
+}
+
+#[test]
+fn workflow_list_returns_canonical_catalog() {
+    let output = yacli()
+        .args(["workflow", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "workflow.list");
+    let items = value["items"].as_array().expect("items array");
+    assert!(items.iter().any(|item| item["id"] == "daily-briefing"));
+    assert!(items.iter().any(|item| item["id"] == "send-link-by-mail"));
+    assert!(items.iter().any(|item| item["id"] == "publish-file-link"));
+    assert!(items.iter().any(|item| item["id"] == "revoke-public-link"));
+    assert!(items.iter().any(|item| item["id"] == "invite-to-calendar"));
+}
+
+#[test]
+fn workflow_show_returns_steps_prompt_and_skill() {
+    let output = yacli()
+        .args(["workflow", "show", "attachment-to-disk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "workflow.show");
+    let workflow = &value["workflow"];
+    assert_eq!(workflow["id"], "attachment-to-disk");
+    assert_eq!(workflow["prompt_name"], "attachment-to-disk");
+    assert_eq!(workflow["skill_name"], "yacli-attachment-to-disk");
+    assert_eq!(
+        workflow["prompt_resource"],
+        "resource://yacli/skill/yacli-attachment-to-disk"
+    );
+}
+
+#[test]
+fn goal_returns_best_workflow_for_russian_invite_request() {
+    let output = yacli()
+        .args([
+            "goal",
+            "найди приглашение в письме и добавь встречу в календарь",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "goal");
+    assert_eq!(value["status"], "matched");
+    assert_eq!(value["best_match"]["workflow"]["id"], "invite-to-calendar");
+    assert_eq!(
+        value["best_match"]["route"]["tool_arguments"]["calendar"],
+        "team"
+    );
+}
+
+#[test]
+fn goal_returns_best_workflow_for_russian_revoke_link_request() {
+    let output = yacli()
+        .args(["goal", "отзови публичную ссылку у файла на диске"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "goal");
+    assert_eq!(value["status"], "matched");
+    assert_eq!(value["best_match"]["workflow"]["id"], "revoke-public-link");
+}
+
+#[test]
+fn goal_returns_best_workflow_for_russian_publish_link_request() {
+    let output = yacli()
+        .args(["goal", "загрузи файл на диск и дай публичную ссылку"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "goal");
+    assert_eq!(value["status"], "matched");
+    assert_eq!(value["best_match"]["workflow"]["id"], "publish-file-link");
+}
+
+#[test]
+fn goal_extracts_hints_for_autofill_surface() {
+    let output = yacli()
+        .args([
+            "goal",
+            "отправь \"Материалы ревью\" на andrei@nextstat.io файл ./review.zip через disk:/docs/review.zip в календарь team",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["hints"]["email"], "andrei@nextstat.io");
+    assert_eq!(value["hints"]["local_path"], "./review.zip");
+    assert_eq!(value["hints"]["disk_path"], "disk:/docs/review.zip");
+    assert_eq!(value["hints"]["quoted_text"], "Материалы ревью");
+    assert_eq!(value["hints"]["calendar"], "team");
+    assert_eq!(value["best_match"]["workflow"]["id"], "send-link-by-mail");
+    assert_eq!(
+        value["best_match"]["route"]["tool_arguments"]["to"],
+        "andrei@nextstat.io"
+    );
+    assert_eq!(
+        value["best_match"]["route"]["tool_arguments"]["source_path"],
+        "./review.zip"
+    );
+    assert_eq!(
+        value["best_match"]["route"]["tool_arguments"]["disk_path"],
+        "disk:/docs/review.zip"
+    );
+}
+
+#[test]
+fn goal_reports_remediation_when_product_is_not_ready() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "goal",
+            "найди приглашение в письме и добавь встречу в календарь",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["status"], "matched");
+    assert_eq!(value["best_match"]["workflow"]["id"], "invite-to-calendar");
+    assert_eq!(value["remediation"]["status"], "needs_setup");
+    assert!(
+        value["remediation"]["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|item| item["id"] == "account")
+    );
+}
+
+#[test]
+fn setup_plan_only_reports_steps_without_writing_files() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "setup",
+            "me@yandex.ru",
+            "--plan-only",
+            "--skip-login",
+            "--skip-mcp-install",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "setup");
+    assert_eq!(value["plan_only"], true);
+    assert_eq!(value["account"]["account"], "me");
+    assert_eq!(value["account"]["created"], true);
+    let steps = value["steps"].as_array().expect("steps array");
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["id"] == "account" && step["status"] == "planned")
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["id"] == "mail_disk_login" && step["status"] == "skipped")
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["id"] == "mcp_install" && step["status"] == "skipped")
+    );
+    assert!(!temp.path().join("accounts.toml").exists());
+}
+
+#[test]
+fn home_without_accounts_requests_setup() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["home"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "home");
+    assert_eq!(value["status"], "needs_setup");
+    assert_eq!(value["current_account"], Value::Null);
+    assert_eq!(value["doctor"]["status"], "needs_setup");
+    assert!(
+        value["suggested_commands"]
+            .as_array()
+            .expect("suggested commands")
+            .iter()
+            .any(|item| item == "yacli setup me@yandex.ru")
+    );
+}
+
+#[test]
+fn home_table_summarizes_ready_account_workflows_and_activity() {
+    let temp = tempdir().expect("tempdir");
+    write_accounts_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+credential_ref = "env:YACLI_MAIL_TOKEN"
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+credential_ref = "env:YACLI_CALENDAR_APP_PASSWORD"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "https://cloud-api.yandex.net"
+credential_ref = "env:YACLI_DISK_TOKEN"
+"#,
+    );
+    write_activity_file(
+        temp.path(),
+        r#"
+version = 1
+
+[[entries]]
+id = "act_20260314T120000Z_demo1234"
+occurred_at = "2026-03-14T12:00:00Z"
+source = "cli"
+operation = "disk.upload"
+account = "mock"
+summary = "Загружен report.pdf в disk:/docs/report.pdf"
+replay_command = "yacli disk upload ./report.pdf disk:/docs/report.pdf"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_MAIL_TOKEN", "mail-token")
+        .env("YACLI_CALENDAR_APP_PASSWORD", "calendar-password")
+        .env("YACLI_DISK_TOKEN", "disk-token")
+        .args(["--format", "table", "home"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("STATUS\tin_progress"))
+        .stdout(predicate::str::contains("ACCOUNT\tmock"))
+        .stdout(predicate::str::contains("WORKFLOW_COUNT\t8"))
+        .stdout(predicate::str::contains(
+            "LATEST_ACTIVITY\tЗагружен report.pdf",
+        ))
+        .stdout(predicate::str::contains("Почта\tПодключено"))
+        .stdout(predicate::str::contains("HIGHLIGHTED_WORKFLOWS"))
+        .stdout(predicate::str::contains("daily-briefing"))
+        .stdout(predicate::str::contains(
+            "yacli mcp install --client claude",
+        ));
+}
+
+#[test]
+fn doctor_reports_health_check_and_suggested_commands() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .args(["doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "doctor");
+    assert_eq!(value["status"], "needs_setup");
+    assert_eq!(value["config"]["secretBackend"], "file");
+    assert!(
+        value["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .any(|item| item["id"] == "secret_backend")
+    );
+    assert!(
+        value["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .any(|item| item["id"] == "mcp_install")
+    );
+    assert!(
+        value["suggested_commands"]
+            .as_array()
+            .expect("suggested commands")
+            .iter()
+            .any(|item| item == "yacli setup me@yandex.ru")
+    );
+}
+
+#[test]
+fn doctor_with_goal_reports_goal_specific_remediation() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .args([
+            "doctor",
+            "--goal",
+            "найди приглашение в письме и добавь встречу в календарь",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "doctor");
+    assert_eq!(
+        value["goal"],
+        "найди приглашение в письме и добавь встречу в календарь"
+    );
+    assert_eq!(value["goal_route"]["status"], "matched");
+    assert_eq!(value["goal_route"]["remediation"]["status"], "needs_setup");
+    assert!(
+        value["focus_checks"]
+            .as_array()
+            .expect("focus checks")
+            .iter()
+            .any(|item| item["id"] == "account")
+    );
+}
+
+#[test]
+fn next_without_accounts_prioritizes_setup() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["next"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "next");
+    assert_eq!(value["status"], "needs_setup");
+    assert!(
+        value["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|item| item["command"] == "yacli setup me@yandex.ru")
+    );
+}
+
+#[test]
+fn next_with_goal_prioritizes_goal_remediation() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "next",
+            "--goal",
+            "найди приглашение в письме и добавь встречу в календарь",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "next");
+    assert_eq!(
+        value["goal"],
+        "найди приглашение в письме и добавь встречу в календарь"
+    );
+    assert_eq!(value["goal_route"]["status"], "matched");
+    assert_eq!(
+        value["goal_route"]["best_match"]["workflow"]["id"],
+        "invite-to-calendar"
+    );
+    assert_eq!(value["goal_route"]["remediation"]["status"], "needs_setup");
+    assert_eq!(value["actions"][0]["source"], "goal");
+}
+
+#[test]
+fn home_with_goal_embeds_goal_route_and_goal_aware_next_actions() {
+    let temp = tempdir().expect("tempdir");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["home", "--goal", "отправь файл по почте"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "home");
+    assert_eq!(value["goal"], "отправь файл по почте");
+    assert_eq!(value["goal_route"]["status"], "matched");
+    assert_eq!(
+        value["goal_route"]["best_match"]["workflow"]["id"],
+        "send-file-by-mail"
+    );
+    assert_eq!(value["next_actions"]["goal"], "отправь файл по почте");
+}
+
+#[test]
+fn doctor_reports_installed_claude_desktop_mcp_client() {
+    let config_dir = tempdir().expect("config tempdir");
+    let home_dir = tempdir().expect("home tempdir");
+    let expected_config = expected_claude_desktop_config_path(home_dir.path());
+    fs::create_dir_all(expected_config.parent().expect("parent")).expect("create parent");
+    fs::write(
+        &expected_config,
+        r#"{
+  "mcpServers": {
+    "yacli": {
+      "command": "/Users/test/.local/bin/yacli",
+      "args": ["mcp"]
+    }
+  }
+}
+"#,
+    )
+    .expect("claude desktop config");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .env("HOME", home_dir.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .args(["doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert!(
+        value["mcp_clients"]
+            .as_array()
+            .expect("mcp clients")
+            .iter()
+            .any(|item| item["client"] == "claude-desktop" && item["status"] == "installed")
+    );
+    assert!(
+        value["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .any(|item| item["id"] == "mcp_install" && item["status"] == "completed")
+    );
+}
+
+#[test]
+fn doctor_apply_safe_installs_detected_claude_desktop_registration() {
+    let config_dir = tempdir().expect("config tempdir");
+    let home_dir = tempdir().expect("home tempdir");
+    let expected_config = expected_claude_desktop_config_path(home_dir.path());
+    fs::create_dir_all(expected_config.parent().expect("parent")).expect("create parent");
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .env("HOME", home_dir.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .args(["doctor", "--apply-safe"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "doctor");
+    assert_eq!(value["safe_remediation"]["status"], "partial");
+    assert!(
+        value["safe_remediation"]["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|step| step["id"] == "mcp_install" && step["status"] == "applied")
+    );
+    assert!(
+        value["safe_remediation"]["doctor_after"]["mcp_clients"]
+            .as_array()
+            .expect("mcp clients")
+            .iter()
+            .any(|item| item["client"] == "claude-desktop" && item["status"] == "installed")
+    );
+    assert!(expected_config.exists());
+}
+
+#[test]
+fn doctor_apply_safe_connects_calendar_from_standard_env_var() {
+    let config_dir = tempdir().expect("config tempdir");
+    let home_dir = tempdir().expect("home tempdir");
+    write_mock_account_with_calendar_refs(config_dir.path(), "https://caldav.yandex.ru", None);
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .env("HOME", home_dir.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .env("YACLI_CALENDAR_APP_PASSWORD", "secret")
+        .args(["doctor", "--apply-safe"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert!(
+        value["safe_remediation"]["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|step| step["id"] == "calendar" && step["status"] == "applied")
+    );
+    assert_eq!(
+        value["safe_remediation"]["doctor_after"]["services"]["calendar"]["credential_state"],
+        "env_present"
+    );
+}
+
+#[test]
+fn doctor_apply_safe_records_activity_entry_with_replay() {
+    let config_dir = tempdir().expect("config tempdir");
+    let home_dir = tempdir().expect("home tempdir");
+    let expected_config = expected_claude_desktop_config_path(home_dir.path());
+    fs::create_dir_all(expected_config.parent().expect("parent")).expect("create parent");
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .env("HOME", home_dir.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .args(["doctor", "--apply-safe"])
+        .assert()
+        .success();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .env("HOME", home_dir.path())
+        .env("YACLI_SECRET_BACKEND", "file")
+        .args(["activity", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "activity.list");
+    let items = value["items"].as_array().expect("activity items");
+    assert_eq!(items[0]["operation"], "doctor.apply_safe");
+    assert_eq!(items[0]["source"], "cli");
+    assert_eq!(items[0]["replay_command"], "yacli doctor --apply-safe");
+}
+
+#[test]
+fn setup_skip_login_can_connect_calendar_and_install_claude_desktop() {
+    let config_dir = tempdir().expect("config tempdir");
+    let home_dir = tempdir().expect("home tempdir");
+    let expected_config = expected_claude_desktop_config_path(home_dir.path());
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .env("HOME", home_dir.path())
+        .env("YACLI_CALENDAR_APP_PASSWORD", "secret")
+        .args([
+            "setup",
+            "me@yandex.ru",
+            "--skip-login",
+            "--calendar-env-var",
+            "YACLI_CALENDAR_APP_PASSWORD",
+            "--client",
+            "claude-desktop",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "setup");
+    assert_eq!(value["account"]["account"], "me");
+    assert_eq!(value["account"]["created"], true);
+    assert_eq!(
+        value["status"]["services"]["calendar"]["credential_state"],
+        "env_present"
+    );
+    let steps = value["steps"].as_array().expect("steps array");
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["id"] == "mail_disk_login" && step["status"] == "skipped")
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["id"] == "calendar_login" && step["status"] == "completed")
+    );
+    let install_step = steps
+        .iter()
+        .find(|step| step["id"] == "mcp_install")
+        .expect("mcp install step");
+    assert_eq!(install_step["status"], "completed");
+    assert_eq!(install_step["output"]["operation"], "mcp.install");
+    assert!(expected_config.exists());
+}
+
+#[test]
+fn setup_is_idempotent_for_existing_account() {
+    let config_dir = tempdir().expect("config tempdir");
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .args([
+            "setup",
+            "me@yandex.ru",
+            "--skip-login",
+            "--skip-mcp-install",
+        ])
+        .assert()
+        .success();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", config_dir.path())
+        .args([
+            "setup",
+            "me@yandex.ru",
+            "--skip-login",
+            "--skip-mcp-install",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "setup");
+    assert_eq!(value["account"]["created"], false);
+    assert_eq!(value["account"]["reused"], true);
 }
 
 #[test]
@@ -381,6 +1193,28 @@ fn mail_send_help_uses_positional_recipient_subject_and_text() {
 }
 
 #[test]
+fn mail_send_link_help_uses_source_and_path_flags() {
+    yacli()
+        .args(["mail", "send-link", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli mail send-link [OPTIONS] --source <ФАЙЛ> --path <ПУТЬ> <EMAIL> <ТЕМА> [ТЕКСТ]",
+        ));
+}
+
+#[test]
+fn disk_upload_link_help_uses_source_and_path_flags() {
+    yacli()
+        .args(["disk", "upload-link", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli disk upload-link [OPTIONS] --source <ФАЙЛ> --path <ПУТЬ>",
+        ));
+}
+
+#[test]
 fn mail_attachment_export_help_shows_selector_flags() {
     yacli()
         .args(["mail", "attachment", "export", "--help"])
@@ -447,7 +1281,8 @@ fn calendar_create_help_uses_positional_summary_and_dates() {
         ))
         .stdout(predicate::str::contains("--summary").not())
         .stdout(predicate::str::contains("--start").not())
-        .stdout(predicate::str::contains("--end").not());
+        .stdout(predicate::str::contains("--end").not())
+        .stdout(predicate::str::contains("--dry-run"));
 }
 
 #[test]
@@ -495,6 +1330,44 @@ fn disk_upload_help_uses_positional_source_and_path() {
             "yacli disk upload [OPTIONS] <ФАЙЛ> <ПУТЬ>",
         ))
         .stdout(predicate::str::contains("--source").not())
+        .stdout(predicate::str::contains("--path").not())
+        .stdout(predicate::str::contains("--dry-run"));
+}
+
+#[test]
+fn disk_download_help_uses_positional_path_and_output_flag() {
+    yacli()
+        .args(["disk", "download", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli disk download [OPTIONS] --output <ФАЙЛ> <ПУТЬ>",
+        ))
+        .stdout(predicate::str::contains("--path").not())
+        .stdout(predicate::str::contains("--output"));
+}
+
+#[test]
+fn disk_publish_help_uses_positional_path() {
+    yacli()
+        .args(["disk", "publish", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli disk publish [OPTIONS] <ПУТЬ>",
+        ))
+        .stdout(predicate::str::contains("--path").not());
+}
+
+#[test]
+fn disk_unpublish_help_uses_positional_path() {
+    yacli()
+        .args(["disk", "unpublish", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli disk unpublish [OPTIONS] <ПУТЬ>",
+        ))
         .stdout(predicate::str::contains("--path").not());
 }
 
@@ -519,6 +1392,16 @@ fn guide_lists_stable_commands_and_workflows() {
     assert!(commands.iter().any(|entry| entry["path"] == "use"));
     assert!(commands.iter().any(|entry| entry["path"] == "whoami"));
     assert!(commands.iter().any(|entry| entry["path"] == "status"));
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "activity list")
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|entry| entry["path"] == "activity show")
+    );
     assert!(commands.iter().any(|entry| entry["path"] == "login"));
     assert!(
         commands
@@ -2820,6 +3703,373 @@ client_id = "client-123"
 }
 
 #[test]
+fn mail_send_dry_run_reviews_message_without_network() {
+    let temp = tempdir().expect("tempdir");
+    let attachment_path = temp.path().join("invoice.txt");
+    fs::write(&attachment_path, "invoice body").expect("attachment");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send",
+            "--account",
+            "mock",
+            "--dry-run",
+            "person@example.com",
+            "Hello",
+            "Body",
+            "--attach",
+            attachment_path.to_str().expect("attachment path"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"operation\":\"mail.send.review\"",
+        ))
+        .stdout(predicate::str::contains("\"dry_run\":true"))
+        .stdout(predicate::str::contains("\"attachment_count\":1"))
+        .stdout(predicate::str::contains("\"filename\":\"invoice.txt\""))
+        .stdout(predicate::str::contains(
+            "\"body_kind\":\"multipart_mixed\"",
+        ));
+}
+
+#[test]
+fn mail_send_link_dry_run_reviews_upload_publish_and_mail_without_network() {
+    let temp = tempdir().expect("tempdir");
+    let source_path = temp.path().join("archive.zip");
+    fs::write(&source_path, "archive body").expect("source");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        Some("store:disk"),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send-link",
+            "--account",
+            "mock",
+            "--source",
+            source_path.to_str().expect("utf8 path"),
+            "--path",
+            "disk:/docs/archive.zip",
+            "--dry-run",
+            "person@example.com",
+            "Материалы",
+            "Отправляю ссылку",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"operation\":\"mail.send_link.review\"",
+        ))
+        .stdout(predicate::str::contains("\"dry_run\":true"))
+        .stdout(predicate::str::contains(
+            "\"remote_path\":\"disk:/docs/archive.zip\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"link_placeholder\":\"<публичная ссылка на файл>\"",
+        ))
+        .stdout(predicate::str::contains("\"subject\":\"Материалы\""));
+}
+
+#[test]
+fn mail_send_dry_run_recommends_send_link_for_oversized_attachment() {
+    let temp = tempdir().expect("tempdir");
+    let attachment_path = temp.path().join("archive.zip");
+    fs::write(&attachment_path, vec![b'x'; 20 * 1024 * 1024]).expect("attachment");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send",
+            "--account",
+            "mock",
+            "--dry-run",
+            "person@example.com",
+            "Большой архив",
+            "Материалы во вложении",
+            "--attach",
+            attachment_path.to_str().expect("attachment path"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"delivery_posture\":\"send_link_recommended\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"workflow\":\"send-link-by-mail\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"suggested_disk_path\":\"disk:/uploads/archive.zip\"",
+        ));
+}
+
+#[test]
+fn mail_send_blocks_oversized_attachment_before_smtp_attempt() {
+    let temp = tempdir().expect("tempdir");
+    let attachment_path = temp.path().join("archive.zip");
+    fs::write(&attachment_path, vec![b'x'; 20 * 1024 * 1024]).expect("attachment");
+
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        None,
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send",
+            "--account",
+            "mock",
+            "person@example.com",
+            "Большой архив",
+            "Материалы во вложении",
+            "--attach",
+            attachment_path.to_str().expect("attachment path"),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("send-link-by-mail"));
+}
+
+#[test]
+fn mail_send_link_surfaces_public_url_when_smtp_fails_after_publish() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+    let source_path = temp.path().join("archive.zip");
+    fs::write(&source_path, "archive body").expect("source");
+
+    write_accounts_file(
+        temp.path(),
+        &format!(
+            r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "127.0.0.1"
+smtp_port = 9
+credential_ref = "store:mail"
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "{}"
+credential_ref = "store:disk"
+"#,
+            server.url()
+        ),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _ticket = server
+        .mock("GET", "/v1/disk/resources/upload")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/archive.zip".into()),
+            Matcher::UrlEncoded("overwrite".into(), "false".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "href": "{}/upload-target/archive.zip",
+  "method": "PUT",
+  "templated": false
+}}"#,
+            server.url()
+        ))
+        .create();
+    let _upload = server
+        .mock("PUT", "/upload-target/archive.zip")
+        .match_body(Matcher::Exact("archive body".to_string()))
+        .with_status(201)
+        .create();
+    let _publish = server
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/archive.zip".into(),
+        ))
+        .with_status(200)
+        .create();
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/archive.zip".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "archive.zip",
+  "path": "disk:/docs/archive.zip",
+  "type": "file",
+  "size": 12,
+  "mime_type": "application/zip",
+  "public_url": "https://disk.yandex.ru/i/archive-link",
+  "public_key": "archive-link-key",
+  "revision": 7
+}"#,
+        )
+        .create();
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send-link",
+            "--account",
+            "mock",
+            "--source",
+            source_path.to_str().expect("utf8 path"),
+            "--path",
+            "disk:/docs/archive.zip",
+            "person@example.com",
+            "Материалы",
+            "Отправляю ссылку",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "mail send-link already uploaded and published `disk:/docs/archive.zip`",
+        ))
+        .stderr(predicate::str::contains(
+            "public_url: https://disk.yandex.ru/i/archive-link",
+        ));
+}
+
+#[test]
 fn mail_send_rejects_directory_attachment_before_network() {
     let temp = tempdir().expect("tempdir");
 
@@ -3334,6 +4584,126 @@ END:VCALENDAR]]></c:calendar-data>
         value["event"]["href"],
         "/calendars/me@yandex.ru/default/canonical-event.ics"
     );
+}
+
+#[test]
+fn calendar_create_dry_run_reviews_event_without_caldav_put() {
+    let temp = tempdir().expect("tempdir");
+    let mut caldav = Server::new();
+
+    write_mock_account_with_calendar_refs(temp.path(), &caldav.url(), Some("store:calendar"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.calendar]
+kind = "app_password"
+secret = "calendar-secret"
+"#,
+    );
+
+    let auth = basic_auth_header("me@yandex.ru", "calendar-secret");
+
+    let _principal = caldav
+        .mock("PROPFIND", "/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "0")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:current-user-principal>
+          <d:href>/principals/users/me@yandex.ru/</d:href>
+        </d:current-user-principal>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let _home = caldav
+        .mock("PROPFIND", "/principals/users/me@yandex.ru/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "0")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/principals/users/me@yandex.ru/</d:href>
+    <d:propstat>
+      <d:prop>
+        <c:calendar-home-set>
+          <d:href>/calendars/me@yandex.ru/</d:href>
+        </c:calendar-home-set>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let _collections = caldav
+        .mock("PROPFIND", "/calendars/me@yandex.ru/")
+        .match_header("authorization", auth.as_str())
+        .match_header("depth", "1")
+        .with_status(207)
+        .with_header("content-type", "application/xml; charset=utf-8")
+        .with_body(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/calendars/me@yandex.ru/default/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:displayname>Личный</d:displayname>
+        <d:resourcetype><d:collection/><c:calendar/></d:resourcetype>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#,
+        )
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "calendar",
+            "create",
+            "--account",
+            "mock",
+            "Синк команды",
+            "2026-03-12T09:00:00Z",
+            "2026-03-12T10:00:00Z",
+            "--description",
+            "Первая строка\nвторая",
+            "--location",
+            "Meet",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "calendar.create.review");
+    assert_eq!(value["calendar"]["id"], "default");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["review"]["summary"], "Синк команды");
+    assert_eq!(value["review"]["start"], "2026-03-12T09:00:00Z");
+    assert_eq!(value["review"]["end"], "2026-03-12T10:00:00Z");
+    assert_eq!(value["review"]["status"], "CONFIRMED");
+    assert_eq!(value["review"]["location"], "Meet");
 }
 
 #[test]
@@ -3985,41 +5355,393 @@ client_id = "client-123"
 }
 
 #[test]
+fn disk_upload_dry_run_reviews_file_without_network() {
+    let temp = tempdir().expect("tempdir");
+    let source_path = temp.path().join("note.txt");
+    fs::write(&source_path, b"hello disk").expect("source file");
+
+    write_mock_account(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        Some("store:disk"),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "upload",
+            "--account",
+            "mock",
+            source_path.to_str().expect("utf8 path"),
+            "disk:/docs/note.txt",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.upload.review");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["path"], "disk:/docs/note.txt");
+    assert_eq!(value["upload"]["remote_path"], "disk:/docs/note.txt");
+    assert_eq!(value["upload"]["bytes_written"], 10);
+
+    let activity = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity).expect("activity json");
+    assert_eq!(activity_value["items"].as_array().expect("items").len(), 0);
+}
+
+#[test]
+fn disk_upload_link_dry_run_reviews_upload_and_publish_without_network() {
+    let temp = tempdir().expect("tempdir");
+    let source_path = temp.path().join("note.txt");
+    fs::write(&source_path, b"hello disk").expect("source file");
+
+    write_mock_account(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        Some("store:disk"),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "upload-link",
+            "--account",
+            "mock",
+            "--source",
+            source_path.to_str().expect("utf8 path"),
+            "--path",
+            "disk:/docs/note.txt",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.upload_link.review");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(
+        value["review"]["upload"]["remote_path"],
+        "disk:/docs/note.txt"
+    );
+    assert_eq!(value["review"]["publish_path"], "disk:/docs/note.txt");
+
+    let activity = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity).expect("activity json");
+    assert_eq!(activity_value["items"].as_array().expect("items").len(), 0);
+}
+
+#[test]
+fn disk_upload_link_writes_file_publishes_link_and_records_activity() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+    let source_path = temp.path().join("note.txt");
+    fs::write(&source_path, b"hello disk").expect("source file");
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _ticket = server
+        .mock("GET", "/v1/disk/resources/upload")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/note.txt".into()),
+            Matcher::UrlEncoded("overwrite".into(), "false".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "href": "{}/upload-target/note.txt",
+  "method": "PUT",
+  "templated": false
+}}"#,
+            server.url()
+        ))
+        .create();
+
+    let _upload = server
+        .mock("PUT", "/upload-target/note.txt")
+        .match_body(Matcher::Exact("hello disk".to_string()))
+        .with_status(201)
+        .create();
+
+    let _publish = server
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/note.txt".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/note.txt".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "note.txt",
+  "path": "disk:/docs/note.txt",
+  "type": "file",
+  "size": 10,
+  "mime_type": "text/plain",
+  "public_url": "https://disk.yandex.ru/i/public-note",
+  "public_key": "public-key-note",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "upload-link",
+            "--account",
+            "mock",
+            "--source",
+            source_path.to_str().expect("utf8 path"),
+            "--path",
+            "disk:/docs/note.txt",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.upload_link");
+    assert_eq!(value["result"]["upload"]["bytes_written"], 10);
+    assert_eq!(
+        value["result"]["resource"]["public_url"].as_str(),
+        Some("https://disk.yandex.ru/i/public-note")
+    );
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["operation"], "disk.upload_link");
+}
+
+#[test]
+fn activity_list_and_show_surface_last_successful_disk_upload() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+    let source_path = temp.path().join("note.txt");
+    fs::write(&source_path, b"hello disk").expect("source file");
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _ticket = server
+        .mock("GET", "/v1/disk/resources/upload")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/note.txt".into()),
+            Matcher::UrlEncoded("overwrite".into(), "false".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "href": "{}/upload-target/note.txt",
+  "method": "PUT",
+  "templated": false
+}}"#,
+            server.url()
+        ))
+        .create();
+
+    let _upload = server
+        .mock("PUT", "/upload-target/note.txt")
+        .match_body(Matcher::Exact("hello disk".to_string()))
+        .with_status(201)
+        .create();
+
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/note.txt".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "note.txt",
+  "path": "disk:/docs/note.txt",
+  "type": "file",
+  "size": 10,
+  "mime_type": "text/plain",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .create();
+
+    yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "upload",
+            "--account",
+            "mock",
+            source_path.to_str().expect("utf8 path"),
+            "disk:/docs/note.txt",
+        ])
+        .assert()
+        .success();
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["operation"], "disk.upload");
+    assert_eq!(items[0]["source"], "cli");
+    assert_eq!(items[0]["account"], "mock");
+    assert!(
+        items[0]["summary"]
+            .as_str()
+            .expect("summary")
+            .contains("попыток: 1")
+    );
+    assert!(
+        items[0]["replay_command"]
+            .as_str()
+            .expect("replay command")
+            .contains("--dry-run")
+    );
+
+    let entry_id = items[0]["id"].as_str().expect("entry id");
+    let show_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "show", entry_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let show_value: Value = serde_json::from_slice(&show_output).expect("show json");
+    assert_eq!(show_value["entry"]["id"], entry_id);
+    assert_eq!(show_value["entry"]["operation"], "disk.upload");
+}
+
+#[test]
 fn disk_public_show_returns_resource_metadata() {
     let temp = tempdir().expect("tempdir");
     let mut server = Server::new();
 
-    write_accounts_file(
-        temp.path(),
-        &format!(
-            r#"
-version = 1
-
-[accounts.mock]
-email = "me@yandex.ru"
-default = true
-
-[accounts.mock.mail]
-enabled = true
-auth_mode = "oauth_xoauth2"
-imap_host = "imap.yandex.com"
-imap_port = 993
-smtp_host = "smtp.yandex.com"
-smtp_port = 465
-
-[accounts.mock.calendar]
-enabled = true
-auth_mode = "app_password"
-caldav_base_url = "https://caldav.yandex.ru"
-
-[accounts.mock.disk]
-enabled = true
-auth_mode = "oauth"
-rest_base_url = "{}"
-"#,
-            server.url()
-        ),
-    );
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
 
     let _mock = server
         .mock("GET", "/v1/disk/public/resources")
@@ -4094,37 +5816,7 @@ fn disk_public_show_surfaces_provider_errors() {
     let temp = tempdir().expect("tempdir");
     let mut server = Server::new();
 
-    write_accounts_file(
-        temp.path(),
-        &format!(
-            r#"
-version = 1
-
-[accounts.mock]
-email = "me@yandex.ru"
-default = true
-
-[accounts.mock.mail]
-enabled = true
-auth_mode = "oauth_xoauth2"
-imap_host = "imap.yandex.com"
-imap_port = 993
-smtp_host = "smtp.yandex.com"
-smtp_port = 465
-
-[accounts.mock.calendar]
-enabled = true
-auth_mode = "app_password"
-caldav_base_url = "https://caldav.yandex.ru"
-
-[accounts.mock.disk]
-enabled = true
-auth_mode = "oauth"
-rest_base_url = "{}"
-"#,
-            server.url()
-        ),
-    );
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
 
     let _mock = server
         .mock("GET", "/v1/disk/public/resources")
@@ -4268,6 +5960,680 @@ rest_base_url = "{}"
         value["download"]["sha256"].as_str().expect("sha256").len(),
         64
     );
+    assert_eq!(value["download"]["resumed_from_bytes"].as_u64(), Some(0));
+    assert_eq!(value["download"]["attempts"].as_u64(), Some(1));
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["operation"], "disk.public.download");
+    assert_eq!(items[0]["account"], "mock");
+    assert!(
+        items[0]["summary"]
+            .as_str()
+            .expect("summary")
+            .contains("попыток: 1")
+    );
+    let replay = items[0]["replay_command"].as_str().expect("replay command");
+    assert!(replay.contains("yacli disk public download"));
+    assert!(replay.contains("--public-key"));
+    assert!(replay.contains("--output"));
+}
+
+#[test]
+fn disk_download_writes_private_file_and_records_activity() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+    let output_path = temp.path().join("downloads").join("guide.pdf");
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.read"]
+client_id = "client-123"
+"#,
+    );
+
+    let body = b"%PDF-1.4\nprivate pdf\n";
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/guide.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "name": "guide.pdf",
+  "path": "disk:/docs/guide.pdf",
+  "type": "file",
+  "size": {},
+  "mime_type": "application/pdf",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}}"#,
+            body.len()
+        ))
+        .create();
+
+    let _ticket = server
+        .mock("GET", "/v1/disk/resources/download")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/guide.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "href": "{}/download/private-guide.pdf",
+  "method": "GET"
+}}"#,
+            server.url()
+        ))
+        .create();
+
+    let _download = server
+        .mock("GET", "/download/private-guide.pdf")
+        .with_status(200)
+        .with_header("content-type", "application/pdf")
+        .with_body(body.as_slice())
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_DISK_TOKEN", "disk-token")
+        .args([
+            "disk",
+            "download",
+            "--account",
+            "mock",
+            "disk:/docs/guide.pdf",
+            "--output",
+            output_path.to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.download");
+    assert_eq!(value["resource"]["name"], "guide.pdf");
+    assert_eq!(
+        value["download"]["bytes_written"].as_u64(),
+        Some(body.len() as u64)
+    );
+    assert_eq!(value["download"]["attempts"].as_u64(), Some(1));
+    assert_eq!(
+        fs::read(&output_path).expect("downloaded file"),
+        body.as_slice()
+    );
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_DISK_TOKEN", "disk-token")
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["operation"], "disk.download");
+    assert_eq!(items[0]["account"], "mock");
+    assert!(
+        items[0]["replay_command"]
+            .as_str()
+            .expect("replay command")
+            .contains("yacli disk download")
+    );
+}
+
+#[test]
+fn disk_publish_dry_run_reviews_public_link_without_mutation() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "publish",
+            "--account",
+            "mock",
+            "disk:/docs/report.pdf",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.publish.review");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["review"]["already_public"], true);
+    assert_eq!(
+        value["review"]["current_public_url"].as_str(),
+        Some("https://disk.yandex.ru/i/public-report")
+    );
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    assert_eq!(activity_value["items"].as_array().expect("items").len(), 0);
+}
+
+#[test]
+fn disk_publish_returns_public_link_and_records_activity() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _publish = server
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "publish",
+            "--account",
+            "mock",
+            "disk:/docs/report.pdf",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.publish");
+    assert_eq!(
+        value["resource"]["public_url"].as_str(),
+        Some("https://disk.yandex.ru/i/public-report")
+    );
+    assert_eq!(
+        value["resource"]["public_key"].as_str(),
+        Some("public-key-report")
+    );
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["operation"], "disk.publish");
+    assert!(
+        items[0]["replay_command"]
+            .as_str()
+            .expect("replay command")
+            .contains("yacli disk publish")
+    );
+}
+
+#[test]
+fn disk_unpublish_dry_run_reviews_public_link_without_mutation() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "unpublish",
+            "--account",
+            "mock",
+            "disk:/docs/report.pdf",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.unpublish.review");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["review"]["is_public"], true);
+    assert_eq!(
+        value["review"]["current_public_url"].as_str(),
+        Some("https://disk.yandex.ru/i/public-report")
+    );
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    assert_eq!(activity_value["items"].as_array().expect("items").len(), 0);
+}
+
+#[test]
+fn disk_unpublish_revokes_public_link_and_records_activity() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+
+    write_mock_account(temp.path(), &server.url(), Some("store:disk"));
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _metadata_before = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/public-report",
+  "public_key": "public-key-report",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 19
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let _unpublish = server
+        .mock("PUT", "/v1/disk/resources/unpublish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/report.pdf".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("{}")
+        .create();
+
+    let _metadata_after = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/report.pdf".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "report.pdf",
+  "path": "disk:/docs/report.pdf",
+  "type": "file",
+  "size": 42,
+  "mime_type": "application/pdf",
+  "created": "2026-03-12T21:00:00+00:00",
+  "modified": "2026-03-12T21:00:01+00:00",
+  "md5": "5eb63bbbe01eeed093cb22bb8f5acdc3",
+  "revision": 20
+}"#,
+        )
+        .expect(1)
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "unpublish",
+            "--account",
+            "mock",
+            "disk:/docs/report.pdf",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "disk.unpublish");
+    assert_eq!(value["result"]["was_public"], true);
+    assert_eq!(
+        value["result"]["revoked_public_url"].as_str(),
+        Some("https://disk.yandex.ru/i/public-report")
+    );
+    assert_eq!(value["result"]["resource"]["public_url"], Value::Null);
+    assert_eq!(value["result"]["resource"]["public_key"], Value::Null);
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["operation"], "disk.unpublish");
+    assert!(
+        items[0]["replay_command"]
+            .as_str()
+            .expect("replay command")
+            .contains("yacli disk unpublish")
+    );
+}
+
+#[test]
+fn disk_public_download_resumes_from_partial_file_when_range_is_supported() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+    let output_path = temp.path().join("downloads").join("guide.pdf");
+    let partial_path = temp.path().join("downloads").join("guide.pdf.part");
+
+    write_accounts_file(
+        temp.path(),
+        &format!(
+            r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "smtp.yandex.com"
+smtp_port = 465
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "{}"
+"#,
+            server.url()
+        ),
+    );
+
+    fs::create_dir_all(output_path.parent().expect("parent")).expect("download dir");
+    let body = b"%PDF-1.4\nmock pdf\n";
+    let partial_len = 8usize;
+    fs::write(&partial_path, &body[..partial_len]).expect("partial file");
+
+    let _metadata = server
+        .mock("GET", "/v1/disk/public/resources")
+        .match_query(Matcher::UrlEncoded(
+            "public_key".into(),
+            "https://disk.yandex.ru/i/example".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{
+  "name": "guide.pdf",
+  "path": "/guide.pdf",
+  "type": "file",
+  "size": {},
+  "mime_type": "application/pdf",
+  "public_url": "https://disk.yandex.ru/i/example",
+  "public_key": "public-key-value",
+  "file": "{}/download/guide.pdf"
+}}"#,
+            body.len(),
+            server.url()
+        ))
+        .create();
+
+    let _download = server
+        .mock("GET", "/download/guide.pdf")
+        .match_header("range", format!("bytes={partial_len}-").as_str())
+        .with_status(206)
+        .with_header(
+            "content-range",
+            format!("bytes {}-{}/{}", partial_len, body.len() - 1, body.len()).as_str(),
+        )
+        .with_header("content-type", "application/pdf")
+        .with_body(&body[partial_len..])
+        .create();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "disk",
+            "public",
+            "download",
+            "--account",
+            "mock",
+            "--public-key",
+            "https://disk.yandex.ru/i/example",
+            "--output",
+            output_path.to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(
+        value["download"]["resumed_from_bytes"].as_u64(),
+        Some(partial_len as u64)
+    );
+    assert_eq!(value["download"]["attempts"].as_u64(), Some(1));
+    assert_eq!(
+        fs::read(&output_path).expect("downloaded file"),
+        body.as_slice()
+    );
+    assert!(!partial_path.exists(), "partial file should be finalized");
 }
 
 #[test]

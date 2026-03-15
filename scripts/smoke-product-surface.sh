@@ -2,6 +2,7 @@
 set -eu
 
 BINARY="${1:-target/debug/yacli}"
+EXPECTED_SECRET_BACKEND="${YACLI_EXPECT_SECRET_BACKEND:-file}"
 
 if [ ! -x "$BINARY" ]; then
     echo "Binary is not executable: $BINARY" >&2
@@ -55,6 +56,21 @@ printf '==> yacli version/help surface\n'
 "$BINARY" mcp install --help >/dev/null
 "$BINARY" update --help >/dev/null
 "$BINARY" --format json guide --topic mail >/dev/null
+
+printf '==> doctor secret backend contract\n'
+doctor_output="$(
+    YACLI_CONFIG_DIR="${tmp_root}/config" \
+    "$BINARY" --format json doctor
+)"
+python3 - <<'PY' "$doctor_output" "$EXPECTED_SECRET_BACKEND"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected = sys.argv[2]
+assert payload["operation"] == "doctor", payload
+assert payload["config"]["secretBackend"] == expected, payload
+PY
 
 printf '==> stdio MCP initialize (JSONL)\n'
 python3 - "$BINARY" <<'PY'

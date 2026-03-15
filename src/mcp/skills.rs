@@ -46,12 +46,24 @@ const SKILLS: &[Skill] = &[
         content: include_str!("../../skills/yacli-send-file-by-mail/SKILL.md"),
     },
     Skill {
+        name: "yacli-send-link-by-mail",
+        content: include_str!("../../skills/yacli-send-link-by-mail/SKILL.md"),
+    },
+    Skill {
+        name: "yacli-publish-file-link",
+        content: include_str!("../../skills/yacli-publish-file-link/SKILL.md"),
+    },
+    Skill {
+        name: "yacli-revoke-public-link",
+        content: include_str!("../../skills/yacli-revoke-public-link/SKILL.md"),
+    },
+    Skill {
         name: "yacli-invite-to-calendar",
         content: include_str!("../../skills/yacli-invite-to-calendar/SKILL.md"),
     },
 ];
 
-pub const SKILL_COUNT: usize = 10;
+pub const SKILL_COUNT: usize = 13;
 
 pub fn skill_names() -> Vec<&'static str> {
     SKILLS.iter().map(|s| s.name).collect()
@@ -80,6 +92,9 @@ pub fn skill_prompt_name(name: &str) -> Option<&'static str> {
         "yacli-reply-with-context" => Some("reply-with-context"),
         "yacli-attachment-to-disk" => Some("attachment-to-disk"),
         "yacli-send-file-by-mail" => Some("send-file-by-mail"),
+        "yacli-send-link-by-mail" => Some("send-link-by-mail"),
+        "yacli-publish-file-link" => Some("publish-file-link"),
+        "yacli-revoke-public-link" => Some("revoke-public-link"),
         "yacli-invite-to-calendar" => Some("invite-to-calendar"),
         _ => None,
     }
@@ -148,6 +163,9 @@ mod tests {
         assert!(names.contains(&"yacli-reply-with-context"));
         assert!(names.contains(&"yacli-attachment-to-disk"));
         assert!(names.contains(&"yacli-send-file-by-mail"));
+        assert!(names.contains(&"yacli-send-link-by-mail"));
+        assert!(names.contains(&"yacli-publish-file-link"));
+        assert!(names.contains(&"yacli-revoke-public-link"));
         assert!(names.contains(&"yacli-invite-to-calendar"));
     }
 
@@ -300,8 +318,28 @@ mod tests {
             Some("send-file-by-mail")
         );
         assert_eq!(
+            prompt_skill_name("send-link-by-mail"),
+            Some("yacli-send-link-by-mail")
+        );
+        assert_eq!(
+            prompt_skill_name("publish-file-link"),
+            Some("yacli-publish-file-link")
+        );
+        assert_eq!(
+            prompt_skill_name("revoke-public-link"),
+            Some("yacli-revoke-public-link")
+        );
+        assert_eq!(
             prompt_skill_name("invite-to-calendar"),
             Some("yacli-invite-to-calendar")
+        );
+        assert_eq!(
+            skill_prompt_name("yacli-publish-file-link"),
+            Some("publish-file-link")
+        );
+        assert_eq!(
+            skill_prompt_name("yacli-revoke-public-link"),
+            Some("revoke-public-link")
         );
         assert_eq!(
             skill_prompt_name("yacli-invite-to-calendar"),

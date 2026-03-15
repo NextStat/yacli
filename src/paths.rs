@@ -19,3 +19,7 @@ pub fn accounts_path() -> Result<PathBuf> {
 pub fn credentials_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("credentials.toml"))
 }
+
+pub fn activity_log_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("activity.toml"))
+}

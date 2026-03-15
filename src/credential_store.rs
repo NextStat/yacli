@@ -70,6 +70,13 @@ pub struct CredentialStore {
     removed: BTreeSet<(String, String)>,
 }
 
+pub fn configured_secret_backend_name() -> Result<&'static str> {
+    match configured_secret_backend()? {
+        SecretBackendKind::File => Ok("file"),
+        SecretBackendKind::Keyring => Ok("keyring"),
+    }
+}
+
 impl CredentialStore {
     pub fn load() -> Result<Self> {
         let backend = configured_secret_backend()?;
@@ -212,10 +219,23 @@ fn configured_secret_backend() -> Result<SecretBackendKind> {
         .as_deref()
     {
         Some("file") => Ok(SecretBackendKind::File),
-        Some("keyring") | None | Some("") => supported_keyring_backend(),
+        Some("keyring") => supported_keyring_backend(),
+        None | Some("") => default_secret_backend(),
         Some(other) => Err(YacliError::Config(format!(
             "unsupported secret backend `{other}`; expected `keyring` or `file`"
         ))),
+    }
+}
+
+fn default_secret_backend() -> Result<SecretBackendKind> {
+    #[cfg(debug_assertions)]
+    {
+        Ok(SecretBackendKind::File)
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        supported_keyring_backend()
     }
 }
 
@@ -421,6 +441,42 @@ mod tests {
 
         unsafe {
             env::remove_var("YACLI_CONFIG_DIR");
+            env::remove_var(SECRET_BACKEND_ENV);
+        }
+    }
+
+    #[test]
+    fn unset_secret_backend_uses_default_for_build_profile() {
+        let _guard = CREDENTIAL_STORE_TEST_LOCK
+            .lock()
+            .expect("credential store test lock");
+        unsafe {
+            env::remove_var(SECRET_BACKEND_ENV);
+        }
+
+        let backend = configured_secret_backend_name().expect("configured backend");
+
+        #[cfg(debug_assertions)]
+        assert_eq!(backend, "file");
+
+        #[cfg(not(debug_assertions))]
+        assert_eq!(backend, "keyring");
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn explicit_keyring_overrides_debug_default() {
+        let _guard = CREDENTIAL_STORE_TEST_LOCK
+            .lock()
+            .expect("credential store test lock");
+        unsafe {
+            env::set_var(SECRET_BACKEND_ENV, "keyring");
+        }
+
+        let backend = configured_secret_backend_name().expect("configured backend");
+        assert_eq!(backend, "keyring");
+
+        unsafe {
             env::remove_var(SECRET_BACKEND_ENV);
         }
     }

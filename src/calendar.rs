@@ -92,6 +92,19 @@ pub struct CalendarCreateRequest {
     pub location: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct CalendarCreateReview {
+    pub summary: String,
+    pub start: String,
+    pub end: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    pub status: String,
+    pub all_day: bool,
+}
+
 pub fn calendar_create_request_from_invites(
     calendar: &str,
     invites: &[CalendarInvite],
@@ -217,6 +230,16 @@ pub fn create_calendar_event(
 ) -> Result<(CalendarCollection, CalendarEvent)> {
     let client = CaldavClient::new(base_url, account, app_password)?;
     client.create_event(request)
+}
+
+pub fn review_calendar_event_creation(
+    base_url: &str,
+    account: &str,
+    app_password: &str,
+    request: CalendarCreateRequest,
+) -> Result<(CalendarCollection, CalendarCreateReview)> {
+    let client = CaldavClient::new(base_url, account, app_password)?;
+    client.review_create_event(request)
 }
 
 pub fn delete_calendar_event(
@@ -394,15 +417,7 @@ impl CaldavClient {
         &self,
         request: CalendarCreateRequest,
     ) -> Result<(CalendarCollection, CalendarEvent)> {
-        let calendar = self.find_calendar(&request.calendar)?;
-        let window = parse_create_event_window(&request.start, &request.end)?;
-
-        let summary = request.summary.trim();
-        if summary.is_empty() {
-            return Err(YacliError::Validation(
-                "calendar create <SUMMARY> не должен быть пустым".to_string(),
-            ));
-        }
+        let (calendar, review) = self.review_create_event(request)?;
 
         let uid = generate_calendar_uid();
         let event_href = format!(
@@ -413,10 +428,16 @@ impl CaldavClient {
         let event_url = self.resolve_href(&event_href)?;
         let ical = build_calendar_event_ical(
             &uid,
-            summary,
-            request.description.as_deref(),
-            request.location.as_deref(),
-            &window,
+            &review.summary,
+            review.description.as_deref(),
+            review.location.as_deref(),
+            &ParsedCalendarWriteWindow {
+                start: parse_calendar_boundary(&review.start, "calendar create <START>")?,
+                end: parse_calendar_boundary(&review.end, "calendar create <END>")?,
+                normalized_start: review.start.clone(),
+                normalized_end: review.end.clone(),
+                all_day: review.all_day,
+            },
         );
         let put_etag = self.send_calendar_put(&event_url, &ical, "CalDAV event create")?;
         let mut created = self.find_event_by_uid(&calendar, &uid)?;
@@ -424,26 +445,35 @@ impl CaldavClient {
             created.etag = put_etag;
         }
         if created.summary.is_none() {
-            created.summary = Some(summary.to_string());
+            created.summary = Some(review.summary.clone());
         }
         if created.description.is_none() {
-            created.description = request.description;
+            created.description = review.description.clone();
         }
         if created.location.is_none() {
-            created.location = request.location;
+            created.location = review.location.clone();
         }
         if created.start.is_none() {
-            created.start = Some(window.normalized_start);
+            created.start = Some(review.start.clone());
         }
         if created.end.is_none() {
-            created.end = Some(window.normalized_end);
+            created.end = Some(review.end.clone());
         }
         if created.status.is_none() {
-            created.status = Some("CONFIRMED".to_string());
+            created.status = Some(review.status.clone());
         }
-        created.all_day = window.all_day;
+        created.all_day = review.all_day;
 
         Ok((calendar, created))
+    }
+
+    fn review_create_event(
+        &self,
+        request: CalendarCreateRequest,
+    ) -> Result<(CalendarCollection, CalendarCreateReview)> {
+        let calendar = self.find_calendar(&request.calendar)?;
+        let review = build_calendar_create_review(request, "calendar create")?;
+        Ok((calendar, review))
     }
 
     fn delete_event(
@@ -931,6 +961,29 @@ fn parse_create_event_window(start: &str, end: &str) -> Result<ParsedCalendarWri
     }
 }
 
+fn build_calendar_create_review(
+    request: CalendarCreateRequest,
+    command_name: &str,
+) -> Result<CalendarCreateReview> {
+    let window = parse_create_event_window(&request.start, &request.end)?;
+    let summary = request.summary.trim();
+    if summary.is_empty() {
+        return Err(YacliError::Validation(format!(
+            "{command_name} <SUMMARY> не должен быть пустым"
+        )));
+    }
+
+    Ok(CalendarCreateReview {
+        summary: summary.to_string(),
+        start: window.normalized_start,
+        end: window.normalized_end,
+        description: request.description,
+        location: request.location,
+        status: "CONFIRMED".to_string(),
+        all_day: window.all_day,
+    })
+}
+
 fn parse_calendar_boundary(value: &str, flag_name: &str) -> Result<ParsedCalendarBoundary> {
     if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
         return Ok(ParsedCalendarBoundary::Date(date));
@@ -1209,10 +1262,10 @@ fn parse_time_boundary(value: &str, flag_name: &str) -> Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CalendarInvite, build_calendar_event_ical, build_calendar_query_xml,
-        build_calendar_uid_query_xml, calendar_create_request_from_invites,
-        normalize_ical_datetime, parse_calendar_invites, parse_create_event_window,
-        parse_dav_responses, parse_event_window, parse_ical_events,
+        CalendarCreateRequest, CalendarInvite, build_calendar_create_review,
+        build_calendar_event_ical, build_calendar_query_xml, build_calendar_uid_query_xml,
+        calendar_create_request_from_invites, normalize_ical_datetime, parse_calendar_invites,
+        parse_create_event_window, parse_dav_responses, parse_event_window, parse_ical_events,
     };
 
     #[test]
@@ -1352,6 +1405,29 @@ END:VCALENDAR]]></c:calendar-data>
                 .to_string()
                 .contains("mail invite create-event selected VEVENT is missing SUMMARY")
         );
+    }
+
+    #[test]
+    fn build_calendar_create_review_normalizes_timed_event_without_persisting() {
+        let review = build_calendar_create_review(
+            CalendarCreateRequest {
+                calendar: "default".to_string(),
+                summary: "  Синк команды  ".to_string(),
+                start: "2026-03-12T09:00:00Z".to_string(),
+                end: "2026-03-12T10:00:00Z".to_string(),
+                description: Some("Первая строка\nвторая".to_string()),
+                location: Some("Meet".to_string()),
+            },
+            "calendar create",
+        )
+        .expect("review");
+
+        assert_eq!(review.summary, "Синк команды");
+        assert_eq!(review.start, "2026-03-12T09:00:00Z");
+        assert_eq!(review.end, "2026-03-12T10:00:00Z");
+        assert_eq!(review.status, "CONFIRMED");
+        assert!(!review.all_day);
+        assert_eq!(review.location.as_deref(), Some("Meet"));
     }
 
     #[test]
