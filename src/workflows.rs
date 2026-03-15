@@ -257,6 +257,24 @@ pub fn workflow_catalog() -> Vec<Value> {
     WORKFLOWS.iter().map(workflow_json).collect()
 }
 
+pub fn workflow_runtime_catalog(requested_account: Option<&str>) -> Result<Vec<Value>> {
+    let doctor = doctor_payload(requested_account, None)?;
+    let store = ActivityStore::load()?;
+    Ok(WORKFLOWS
+        .iter()
+        .map(|definition| {
+            let mut payload = workflow_json(definition);
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "execution".to_string(),
+                    workflow_execution_payload(definition.id, &doctor, store.entries()),
+                );
+            }
+            payload
+        })
+        .collect())
+}
+
 pub fn workflow_json(definition: &WorkflowDefinition) -> Value {
     json!({
         "id": definition.id,
@@ -317,8 +335,9 @@ fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry
         .as_ref()
         .map(|entry| activity_entry_supports_undo(entry))
         .unwrap_or(false);
+    let can_replay = latest_activity.is_some();
 
-    let (state, summary, next_action) = if !missing_services.is_empty() {
+    let (state, summary, next_action, available_actions) = if !missing_services.is_empty() {
         (
             "needs_input",
             format!(
@@ -326,6 +345,7 @@ fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry
                 missing_services.join(", ")
             ),
             "connect_services",
+            vec!["connect_services"],
         )
     } else if let Some(entry) = latest_activity.as_ref() {
         if workflow_activity_is_undo(id, entry) {
@@ -333,42 +353,79 @@ fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry
                 "undone",
                 format!("Последний запуск workflow уже откатан: {}.", entry.summary),
                 "open_workflow",
+                vec!["open_workflow", "review"],
             )
         } else if workflow_activity_is_partial_failure(id, entry) {
             (
-                "partial_failure",
+                "recovery_ready",
                 format!("Workflow завершился частично: {}.", entry.summary),
                 "resume",
+                vec!["resume", "share_replay"],
             )
         } else if workflow_activity_is_applied(id, entry) {
             (
-                "applied",
+                if activity_entry_supports_undo(entry) {
+                    "undo_ready"
+                } else {
+                    "applied"
+                },
                 format!("Workflow уже выполнялся успешно: {}.", entry.summary),
                 if activity_entry_supports_undo(entry) {
                     "undo"
                 } else {
                     "replay"
                 },
+                if activity_entry_supports_undo(entry) {
+                    vec!["undo", "share_replay"]
+                } else {
+                    vec!["share_replay", "open_workflow"]
+                },
             )
         } else {
             (
-                "ready",
-                "Workflow готов к следующему запуску.".to_string(),
+                if supports_review {
+                    "review_ready"
+                } else {
+                    "ready"
+                },
+                if supports_review {
+                    "Workflow готов к review перед запуском.".to_string()
+                } else {
+                    "Workflow готов к следующему запуску.".to_string()
+                },
                 if supports_review {
                     "review"
                 } else {
                     "open_workflow"
                 },
+                if supports_review {
+                    vec!["review", "open_workflow"]
+                } else {
+                    vec!["open_workflow"]
+                },
             )
         }
     } else {
         (
-            "ready",
-            "Workflow готов к первому запуску.".to_string(),
+            if supports_review {
+                "review_ready"
+            } else {
+                "ready"
+            },
+            if supports_review {
+                "Workflow готов к первому review перед запуском.".to_string()
+            } else {
+                "Workflow готов к первому запуску.".to_string()
+            },
             if supports_review {
                 "review"
             } else {
                 "open_workflow"
+            },
+            if supports_review {
+                vec!["review", "open_workflow"]
+            } else {
+                vec!["open_workflow"]
             },
         )
     };
@@ -381,7 +438,9 @@ fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry
         "supports_review": supports_review,
         "supports_recovery": supports_recovery,
         "supports_undo": supports_undo,
+        "supports_replay": can_replay,
         "next_action": next_action,
+        "available_actions": available_actions,
         "latest_activity": latest_activity.map(activity_entry_json),
     })
 }
@@ -555,8 +614,9 @@ mod tests {
         }];
 
         let payload = workflow_execution_payload("send-link-by-mail", &doctor, &entries);
-        assert_eq!(payload["state"], "partial_failure");
+        assert_eq!(payload["state"], "recovery_ready");
         assert_eq!(payload["next_action"], "resume");
+        assert_eq!(payload["available_actions"][0], "resume");
         assert_eq!(
             payload["latest_activity"]["operation"],
             "mail.send_link.partial"
@@ -604,5 +664,50 @@ mod tests {
         assert_eq!(payload["state"], "needs_input");
         assert_eq!(payload["missing_services"][0], "mail");
         assert_eq!(payload["next_action"], "connect_services");
+    }
+
+    #[test]
+    fn workflow_execution_marks_review_ready_for_reviewable_flow_without_history() {
+        let doctor = json!({
+            "services": {
+                "mail": { "credential_state": "store_present" },
+                "disk": { "credential_state": "store_present" },
+                "calendar": { "credential_state": "not_configured" }
+            }
+        });
+
+        let payload = workflow_execution_payload("send-link-by-mail", &doctor, &[]);
+        assert_eq!(payload["state"], "review_ready");
+        assert_eq!(payload["next_action"], "review");
+        assert_eq!(payload["available_actions"][0], "review");
+    }
+
+    #[test]
+    fn workflow_execution_marks_undo_ready_for_reversible_applied_flow() {
+        let doctor = json!({
+            "services": {
+                "mail": { "credential_state": "not_configured" },
+                "disk": { "credential_state": "store_present" },
+                "calendar": { "credential_state": "not_configured" }
+            }
+        });
+        let entries = vec![ActivityEntry {
+            id: "act_publish".to_string(),
+            occurred_at: "2026-03-15T12:00:00Z".to_string(),
+            source: "cli".to_string(),
+            operation: "disk.upload_link".to_string(),
+            account: "mock".to_string(),
+            summary: "Файл загружен и опубликован".to_string(),
+            replay_command:
+                "yacli disk upload-link --source ./archive.zip --path disk:/docs/archive.zip"
+                    .to_string(),
+            undo: None,
+            undo_command: Some("yacli disk unpublish disk:/docs/archive.zip".to_string()),
+        }];
+
+        let payload = workflow_execution_payload("publish-file-link", &doctor, &entries);
+        assert_eq!(payload["state"], "undo_ready");
+        assert_eq!(payload["next_action"], "undo");
+        assert_eq!(payload["available_actions"][0], "undo");
     }
 }

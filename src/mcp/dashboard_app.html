@@ -1969,6 +1969,16 @@
                   id: latestWorkflow.id || "",
                   title: latestWorkflow.title || latestWorkflow.id || "",
                   prompt: latestWorkflow.prompt_name || "",
+                  executionState:
+                    latestWorkflow.execution &&
+                    typeof latestWorkflow.execution.state === "string"
+                      ? latestWorkflow.execution.state
+                      : "",
+                  executionNextAction:
+                    latestWorkflow.execution &&
+                    typeof latestWorkflow.execution.next_action === "string"
+                      ? latestWorkflow.execution.next_action
+                      : "",
                 }
               : null,
             latestActivity: latestActivity
@@ -2462,6 +2472,15 @@
             !Array.isArray(source.execution)
             ? source.execution
             : null;
+        }
+
+        function workflowExecutionHasAction(action, detail) {
+          const execution = workflowExecutionPayload(detail);
+          const actions =
+            execution && Array.isArray(execution.available_actions)
+              ? execution.available_actions
+              : [];
+          return actions.includes(action);
         }
 
         function workflowSupportsReview(detail) {
@@ -3242,7 +3261,9 @@
           elements.actionHomeUndoLatest.disabled =
             disposed || !latestUndoableActivity();
           elements.actionPreviewWorkflow.disabled =
-            disposed || !workflowDryRunToolName();
+            disposed ||
+            !workflowDryRunToolName() ||
+            (workflowDetailPayload() && !workflowExecutionHasAction("review"));
           elements.actionApplyWorkflow.disabled =
             disposed ||
             !state.reviewedToolName ||

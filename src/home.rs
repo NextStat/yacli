@@ -23,7 +23,7 @@ pub fn home_payload(requested_account: Option<&str>, goal: Option<&str>) -> Resu
     } else {
         None
     };
-    let workflow_items = workflows::workflow_catalog();
+    let workflow_items = workflows::workflow_runtime_catalog(requested_account)?;
     let workflow_count = workflow_items.len();
     let highlighted_workflows = workflow_items.into_iter().take(3).collect::<Vec<_>>();
     let activity_store = ActivityStore::load()?;

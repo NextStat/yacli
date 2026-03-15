@@ -688,6 +688,13 @@ fn execute_workflow(format: OutputFormat, action: WorkflowCommand) -> Result<Ren
                 .map(|item| item.as_str().unwrap_or_default().to_string())
                 .collect::<Vec<_>>()
                 .join(",");
+            let execution_actions = workflow["execution"]["available_actions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|item| item.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
 
             ok_output(
                 format,
@@ -737,6 +744,7 @@ fn execute_workflow(format: OutputFormat, action: WorkflowCommand) -> Result<Ren
                             .unwrap_or_default()
                             .to_string(),
                     ),
+                    ("execution_actions", execution_actions),
                     ("mcp_tools", mcp_tools),
                     ("cli_steps", cli_steps),
                 ]),

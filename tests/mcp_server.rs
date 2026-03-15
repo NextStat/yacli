@@ -4405,6 +4405,10 @@ rest_base_url = "https://cloud-api.yandex.net"
         workflow_payload["execution"]["next_action"],
         "connect_services"
     );
+    assert_eq!(
+        workflow_payload["execution"]["available_actions"][0],
+        "connect_services"
+    );
 
     let goal_onboarding_contents = responses[17]["result"]["contents"]
         .as_array()

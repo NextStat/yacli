@@ -4374,6 +4374,10 @@ rest_base_url = "https://cloud-api.yandex.net"
         workflow_json["execution"]["next_action"],
         "connect_services"
     );
+    assert_eq!(
+        workflow_json["execution"]["available_actions"][0],
+        "connect_services"
+    );
 
     let activity_catalog = post_json(
         &client,

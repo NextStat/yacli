@@ -426,6 +426,10 @@ fn workflow_show_returns_steps_prompt_and_skill() {
     );
     assert_eq!(workflow["execution"]["state"], "needs_input");
     assert_eq!(workflow["execution"]["next_action"], "connect_services");
+    assert_eq!(
+        workflow["execution"]["available_actions"][0],
+        "connect_services"
+    );
 }
 
 #[test]
@@ -905,6 +909,15 @@ fn home_with_goal_embeds_goal_route_and_goal_aware_next_actions() {
     assert_eq!(
         value["goal_route"]["best_match"]["workflow"]["id"],
         "send-file-by-mail"
+    );
+    assert_eq!(value["highlighted_workflows"][0]["id"], "daily-briefing");
+    assert_eq!(
+        value["highlighted_workflows"][0]["execution"]["state"],
+        "needs_input"
+    );
+    assert_eq!(
+        value["highlighted_workflows"][0]["execution"]["available_actions"][0],
+        "connect_services"
     );
     assert_eq!(value["next_actions"]["goal"], "отправь файл по почте");
     assert!(value["suggestions"].is_object());
