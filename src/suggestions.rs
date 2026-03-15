@@ -27,6 +27,7 @@ const LIVE_DISK_SCAN_PATH: &str = "disk:/";
 const LIVE_DISK_SCAN_LIMIT: usize = 50;
 const LIVE_CALENDAR_LOOKAHEAD_DAYS: u64 = 14;
 const LIVE_CALENDAR_EVENT_LIMIT: usize = 20;
+const LIVE_CALENDAR_MATERIALS_WINDOW_DAYS: u64 = 3;
 
 #[derive(Clone, Debug, Serialize)]
 struct SuggestionAction {
@@ -443,28 +444,10 @@ fn collect_live_disk_suggestions(
     suggestions: &mut Vec<SuggestionItem>,
     seen: &mut BTreeSet<String>,
 ) {
-    let Ok((resolved_account, base_url, access_token)) =
-        resolve_disk_private_context(requested_account)
-    else {
+    let Some((resolved_account, root_items)) = fetch_live_disk_root_items(requested_account) else {
         return;
     };
-    let Ok(root) = fetch_private_resource(
-        &base_url,
-        &access_token,
-        &PrivateDiskListRequest {
-            path: LIVE_DISK_SCAN_PATH.to_string(),
-            limit: LIVE_DISK_SCAN_LIMIT,
-            offset: 0,
-        },
-    ) else {
-        return;
-    };
-
-    let Some(public_item) = root
-        .children
-        .as_ref()
-        .and_then(|children| children.items.iter().find(|item| is_public_disk_item(item)))
-    else {
+    let Some(public_item) = root_items.iter().find(|item| is_public_disk_item(item)) else {
         return;
     };
 
@@ -499,6 +482,9 @@ fn collect_live_calendar_suggestions(
     let Some(to) = now.checked_add_days(Days::new(LIVE_CALENDAR_LOOKAHEAD_DAYS)) else {
         return;
     };
+    let disk_root = fetch_live_disk_root_items(Some(&resolved_account));
+    let mut cancelled_suggestion = None;
+    let mut materials_suggestion = None;
 
     for calendar in calendars {
         let Ok((resolved_calendar, _, events)) = list_calendar_events(
@@ -515,24 +501,69 @@ fn collect_live_calendar_suggestions(
             continue;
         };
 
-        let Some(event) = events
-            .iter()
-            .find(|event| is_cancelled_calendar_event(event))
-        else {
-            continue;
-        };
-
-        push_suggestion(
-            suggestions,
-            seen,
-            build_live_calendar_cancelled_suggestion(
+        if cancelled_suggestion.is_none()
+            && let Some(event) = events
+                .iter()
+                .find(|event| is_cancelled_calendar_event(event))
+        {
+            cancelled_suggestion = Some(build_live_calendar_cancelled_suggestion(
                 &resolved_account,
                 &resolved_calendar.id,
                 event,
-            ),
-        );
-        break;
+            ));
+        }
+
+        if materials_suggestion.is_none()
+            && let Some((disk_account, root_items)) = disk_root.as_ref()
+            && disk_account == &resolved_account
+            && let Some(event) = first_upcoming_materials_event(&events, now)
+            && let Some(path) = suggested_calendar_materials_path(event)
+            && !disk_path_exists(root_items, &path)
+        {
+            materials_suggestion = Some(build_live_calendar_materials_suggestion(
+                &resolved_account,
+                event,
+                &path,
+            ));
+        }
+
+        if cancelled_suggestion.is_some() && materials_suggestion.is_some() {
+            break;
+        }
     }
+
+    if let Some(suggestion) = cancelled_suggestion {
+        push_suggestion(suggestions, seen, suggestion);
+    }
+    if let Some(suggestion) = materials_suggestion {
+        push_suggestion(suggestions, seen, suggestion);
+    }
+}
+
+fn fetch_live_disk_root_items(
+    requested_account: Option<&str>,
+) -> Option<(String, Vec<DiskResourceItem>)> {
+    let Ok((resolved_account, base_url, access_token)) =
+        resolve_disk_private_context(requested_account)
+    else {
+        return None;
+    };
+    let Ok(root) = fetch_private_resource(
+        &base_url,
+        &access_token,
+        &PrivateDiskListRequest {
+            path: LIVE_DISK_SCAN_PATH.to_string(),
+            limit: LIVE_DISK_SCAN_LIMIT,
+            offset: 0,
+        },
+    ) else {
+        return None;
+    };
+    let items = root
+        .children
+        .map(|children| children.items)
+        .unwrap_or_default();
+    Some((resolved_account, items))
 }
 
 fn build_live_mail_invite_suggestion(
@@ -781,6 +812,46 @@ fn build_live_calendar_cancelled_suggestion(
     }
 }
 
+fn build_live_calendar_materials_suggestion(
+    account: &str,
+    event: &CalendarEvent,
+    path: &str,
+) -> SuggestionItem {
+    let summary = event.summary.as_deref().unwrap_or("Без названия");
+    let start = event.start.as_deref().unwrap_or("-");
+    let command = format!(
+        "yacli disk mkdir --account {} {}",
+        shell_quote(account),
+        shell_quote(path)
+    );
+    SuggestionItem {
+        id: format!("live-calendar-materials-{}", path),
+        title: "Подготовить папку на Диске для ближайшей встречи".to_string(),
+        status: "ready",
+        priority: 4,
+        reason: format!(
+            "В календаре есть ближайшее событие \"{}\" на {}. Можно заранее подготовить папку {} для материалов и файлов по встрече.",
+            summary, start, path
+        ),
+        command,
+        source: "calendar_live",
+        kind: "follow_up",
+        activity_id: format!("calendar:{}:{}", event.calendar_id, path),
+        operation: "calendar.materials_folder.suggested".to_string(),
+        workflow_id: None,
+        action: open_tool_action(
+            None,
+            Some("disk.mkdir"),
+            "yacli.disk.mkdir",
+            json!({
+                "account": account,
+                "path": path,
+            }),
+            false,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -826,6 +897,79 @@ fn is_cancelled_calendar_event(event: &CalendarEvent) -> bool {
         .status
         .as_deref()
         .is_some_and(|status| status.eq_ignore_ascii_case("CANCELLED"))
+}
+
+fn first_upcoming_materials_event(
+    events: &[CalendarEvent],
+    now: chrono::DateTime<Utc>,
+) -> Option<&CalendarEvent> {
+    let latest_start = now
+        .checked_add_days(Days::new(LIVE_CALENDAR_MATERIALS_WINDOW_DAYS))
+        .unwrap_or(now);
+    events
+        .iter()
+        .filter(|event| !is_cancelled_calendar_event(event))
+        .filter(|event| {
+            event
+                .summary
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .filter(|event| {
+            event
+                .start
+                .as_deref()
+                .and_then(parse_calendar_event_start)
+                .is_some_and(|start| start >= now && start <= latest_start)
+        })
+        .min_by_key(|event| event.start.clone())
+}
+
+fn suggested_calendar_materials_path(event: &CalendarEvent) -> Option<String> {
+    let summary = event.summary.as_deref()?.trim();
+    if summary.is_empty() {
+        return None;
+    }
+    let date = event
+        .start
+        .as_deref()
+        .map(calendar_event_date_prefix)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "meeting".to_string());
+    let name = sanitize_disk_folder_name(summary);
+    Some(format!("disk:/{date} {name}"))
+}
+
+fn disk_path_exists(items: &[DiskResourceItem], path: &str) -> bool {
+    items.iter().any(|item| item.path == path)
+}
+
+fn parse_calendar_event_start(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|parsed| parsed.with_timezone(&Utc))
+        .ok()
+}
+
+fn calendar_event_date_prefix(value: &str) -> String {
+    value.chars().take(10).collect::<String>()
+}
+
+fn sanitize_disk_folder_name(value: &str) -> String {
+    let mut sanitized = value
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            _ if ch.is_control() => ' ',
+            _ => ch,
+        })
+        .collect::<String>();
+    sanitized = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sanitized = sanitized.trim_matches(['.', ' ']).to_string();
+    if sanitized.is_empty() {
+        "Встреча".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn is_public_disk_item(item: &DiskResourceItem) -> bool {
@@ -917,10 +1061,11 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         LiveMailMessageContext, build_live_calendar_cancelled_suggestion,
-        build_live_disk_public_link_suggestion, build_live_disk_send_link_suggestion,
-        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
-        collect_suggestions, first_invite_attachment_in_summaries,
-        first_regular_attachment_in_summaries, is_cancelled_calendar_event, is_public_disk_item,
+        build_live_calendar_materials_suggestion, build_live_disk_public_link_suggestion,
+        build_live_disk_send_link_suggestion, build_live_mail_attachment_suggestion,
+        build_live_mail_invite_suggestion, collect_suggestions,
+        first_invite_attachment_in_summaries, first_regular_attachment_in_summaries,
+        is_cancelled_calendar_event, is_public_disk_item, suggested_calendar_materials_path,
         summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
@@ -1312,5 +1457,63 @@ mod tests {
             Some("uid-123")
         );
         assert!(suggestion.reason.contains("CANCELLED"));
+    }
+
+    #[test]
+    fn suggested_calendar_materials_path_uses_date_and_sanitized_summary() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/event.ics".to_string(),
+            uid: Some("uid-456".to_string()),
+            summary: Some("Ревью / Платформа".to_string()),
+            start: Some("2026-03-20T10:00:00Z".to_string()),
+            end: Some("2026-03-20T10:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        assert_eq!(
+            suggested_calendar_materials_path(&event).as_deref(),
+            Some("disk:/2026-03-20 Ревью - Платформа")
+        );
+    }
+
+    #[test]
+    fn build_live_calendar_materials_suggestion_returns_mkdir_handoff() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/event.ics".to_string(),
+            uid: Some("uid-789".to_string()),
+            summary: Some("Планирование".to_string()),
+            start: Some("2026-03-21T09:00:00Z".to_string()),
+            end: Some("2026-03-21T09:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        let suggestion = build_live_calendar_materials_suggestion(
+            "mock",
+            &event,
+            "disk:/2026-03-21 Планирование",
+        );
+        assert_eq!(suggestion.source, "calendar_live");
+        assert_eq!(suggestion.kind, "follow_up");
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(suggestion.action.tool_name, Some("yacli.disk.mkdir"));
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|value| value["path"].as_str()),
+            Some("disk:/2026-03-21 Планирование")
+        );
+        assert!(suggestion.reason.contains("ближайшее событие"));
     }
 }
