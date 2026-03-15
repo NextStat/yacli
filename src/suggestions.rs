@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use chrono::{Days, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::activity_store::{ActivityEntry, ActivityStore};
+use crate::calendar::{CalendarEvent, CalendarEventsRequest, list_calendar_events, list_calendars};
 use crate::disk::{DiskResourceItem, PrivateDiskListRequest, fetch_private_resource};
 use crate::doctor::doctor_payload;
 use crate::error::Result;
@@ -13,7 +15,9 @@ use crate::mail::{
     MailAttachmentSummary, MailMessage, list_mail_messages, read_mail_message,
     smtp_safe_message_bytes,
 };
-use crate::runtime_context::{resolve_disk_private_context, resolve_mail_private_context};
+use crate::runtime_context::{
+    resolve_calendar_private_context, resolve_disk_private_context, resolve_mail_private_context,
+};
 use crate::workflows;
 
 const LIVE_MAILBOX_NAME: &str = "INBOX";
@@ -21,6 +25,8 @@ const LIVE_MAIL_SCAN_LIMIT: usize = 5;
 const LIVE_MAIL_MAX_BYTES: u64 = 1024 * 1024;
 const LIVE_DISK_SCAN_PATH: &str = "disk:/";
 const LIVE_DISK_SCAN_LIMIT: usize = 50;
+const LIVE_CALENDAR_LOOKAHEAD_DAYS: u64 = 14;
+const LIVE_CALENDAR_EVENT_LIMIT: usize = 20;
 
 #[derive(Clone, Debug, Serialize)]
 struct SuggestionAction {
@@ -88,6 +94,11 @@ pub fn suggestions_payload(requested_account: Option<&str>, goal: Option<&str>) 
     collect_live_disk_suggestions(
         requested_account.or(current_account),
         goal_workflow,
+        &mut suggestions,
+        &mut seen_commands,
+    );
+    collect_live_calendar_suggestions(
+        requested_account.or(current_account),
         &mut suggestions,
         &mut seen_commands,
     );
@@ -470,6 +481,60 @@ fn collect_live_disk_suggestions(
     );
 }
 
+fn collect_live_calendar_suggestions(
+    requested_account: Option<&str>,
+    suggestions: &mut Vec<SuggestionItem>,
+    seen: &mut BTreeSet<String>,
+) {
+    let Ok((resolved_account, app_password, context)) =
+        resolve_calendar_private_context(requested_account)
+    else {
+        return;
+    };
+    let Ok(calendars) = list_calendars(&context.caldav_base_url, &context.email, &app_password)
+    else {
+        return;
+    };
+    let now = Utc::now();
+    let Some(to) = now.checked_add_days(Days::new(LIVE_CALENDAR_LOOKAHEAD_DAYS)) else {
+        return;
+    };
+
+    for calendar in calendars {
+        let Ok((resolved_calendar, _, events)) = list_calendar_events(
+            &context.caldav_base_url,
+            &context.email,
+            &app_password,
+            CalendarEventsRequest {
+                calendar: calendar.id.clone(),
+                from: now,
+                to,
+                limit: LIVE_CALENDAR_EVENT_LIMIT,
+            },
+        ) else {
+            continue;
+        };
+
+        let Some(event) = events
+            .iter()
+            .find(|event| is_cancelled_calendar_event(event))
+        else {
+            continue;
+        };
+
+        push_suggestion(
+            suggestions,
+            seen,
+            build_live_calendar_cancelled_suggestion(
+                &resolved_account,
+                &resolved_calendar.id,
+                event,
+            ),
+        );
+        break;
+    }
+}
+
 fn build_live_mail_invite_suggestion(
     context: LiveMailMessageContext<'_>,
     attachment_index: usize,
@@ -674,6 +739,48 @@ fn build_live_disk_send_link_suggestion(
     }
 }
 
+fn build_live_calendar_cancelled_suggestion(
+    account: &str,
+    calendar_id: &str,
+    event: &CalendarEvent,
+) -> SuggestionItem {
+    let uid = event.uid.as_deref().unwrap_or_default();
+    let summary = event.summary.as_deref().unwrap_or("Без названия");
+    let start = event.start.as_deref().unwrap_or("-");
+    let command = format!(
+        "yacli calendar delete --calendar {} {}",
+        shell_quote(calendar_id),
+        shell_quote(uid)
+    );
+    SuggestionItem {
+        id: format!("live-calendar-cancelled-{}", uid),
+        title: "Удалить отменённое событие из календаря".to_string(),
+        status: "ready",
+        priority: 2,
+        reason: format!(
+            "В календаре {} есть событие \"{}\" со статусом CANCELLED на {}. Его можно сразу убрать как live cleanup.",
+            event.calendar_name, summary, start
+        ),
+        command,
+        source: "calendar_live",
+        kind: "cleanup",
+        activity_id: format!("calendar:{calendar_id}:{uid}"),
+        operation: "calendar.cancelled.detected".to_string(),
+        workflow_id: None,
+        action: open_tool_action(
+            None,
+            Some("calendar.delete"),
+            "yacli.calendar.delete",
+            json!({
+                "account": account,
+                "calendar": calendar_id,
+                "uid": uid,
+            }),
+            false,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -712,6 +819,13 @@ fn is_calendar_invite_attachment(attachment: &MailAttachmentSummary) -> bool {
 
 fn is_oversized_mail_message(size: u64) -> bool {
     size > smtp_safe_message_bytes()
+}
+
+fn is_cancelled_calendar_event(event: &CalendarEvent) -> bool {
+    event
+        .status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("CANCELLED"))
 }
 
 fn is_public_disk_item(item: &DiskResourceItem) -> bool {
@@ -802,13 +916,15 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveMailMessageContext, build_live_disk_public_link_suggestion,
-        build_live_disk_send_link_suggestion, build_live_mail_attachment_suggestion,
-        build_live_mail_invite_suggestion, collect_suggestions,
-        first_invite_attachment_in_summaries, first_regular_attachment_in_summaries,
-        is_public_disk_item, summary_for_suggestions,
+        LiveMailMessageContext, build_live_calendar_cancelled_suggestion,
+        build_live_disk_public_link_suggestion, build_live_disk_send_link_suggestion,
+        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
+        collect_suggestions, first_invite_attachment_in_summaries,
+        first_regular_attachment_in_summaries, is_cancelled_calendar_event, is_public_disk_item,
+        summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
+    use crate::calendar::CalendarEvent;
     use crate::disk::DiskResourceItem;
     use crate::mail::{MailAttachmentSummary, smtp_safe_message_bytes};
 
@@ -1145,5 +1261,56 @@ mod tests {
             Some("https://disk.yandex.ru/i/report")
         );
         assert!(suggestion.command.contains("send-published-link"));
+    }
+
+    #[test]
+    fn cancelled_calendar_event_detection_is_case_insensitive() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/event.ics".to_string(),
+            uid: Some("uid-123".to_string()),
+            summary: Some("Ревью".to_string()),
+            start: Some("2026-03-20T10:00:00Z".to_string()),
+            end: Some("2026-03-20T10:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("cancelled".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        assert!(is_cancelled_calendar_event(&event));
+    }
+
+    #[test]
+    fn build_live_calendar_cancelled_suggestion_returns_delete_handoff() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/event.ics".to_string(),
+            uid: Some("uid-123".to_string()),
+            summary: Some("Ревью".to_string()),
+            start: Some("2026-03-20T10:00:00Z".to_string()),
+            end: Some("2026-03-20T10:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CANCELLED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        let suggestion = build_live_calendar_cancelled_suggestion("mock", "team", &event);
+        assert_eq!(suggestion.source, "calendar_live");
+        assert_eq!(suggestion.kind, "cleanup");
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(suggestion.action.tool_name, Some("yacli.calendar.delete"));
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|value| value["uid"].as_str()),
+            Some("uid-123")
+        );
+        assert!(suggestion.reason.contains("CANCELLED"));
     }
 }
