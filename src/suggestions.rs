@@ -489,6 +489,7 @@ fn collect_live_calendar_suggestions(
     let mut materials_suggestion = None;
     let mut follow_up_suggestion = None;
     let mut reply_suggestion = None;
+    let mut reply_link_suggestion = None;
 
     for calendar in calendars {
         let Ok((resolved_calendar, _, events)) = list_calendar_events(
@@ -546,7 +547,28 @@ fn collect_live_calendar_suggestions(
             ));
         }
 
+        if reply_link_suggestion.is_none()
+            && let Some((disk_account, root_items)) = disk_root.as_ref()
+            && let Some((mail_account, messages)) = mail_inbox.as_ref()
+            && disk_account == &resolved_account
+            && mail_account == &resolved_account
+            && let Some(event) = first_recent_follow_up_event(&events, now)
+            && let Some(path) = suggested_calendar_materials_path(event)
+            && let Some(item) = root_items
+                .iter()
+                .find(|item| item.path == path && is_public_disk_item(item))
+            && let Some(message) = first_recent_follow_up_message(messages, event)
+        {
+            reply_link_suggestion = Some(build_live_calendar_mail_link_follow_up_suggestion(
+                &resolved_account,
+                event,
+                message,
+                item,
+            ));
+        }
+
         if reply_suggestion.is_none()
+            && reply_link_suggestion.is_none()
             && let Some((mail_account, messages)) = mail_inbox.as_ref()
             && mail_account == &resolved_account
             && let Some(event) = first_recent_follow_up_event(&events, now)
@@ -563,6 +585,7 @@ fn collect_live_calendar_suggestions(
             && materials_suggestion.is_some()
             && follow_up_suggestion.is_some()
             && reply_suggestion.is_some()
+            && reply_link_suggestion.is_some()
         {
             break;
         }
@@ -575,6 +598,9 @@ fn collect_live_calendar_suggestions(
         push_suggestion(suggestions, seen, suggestion);
     }
     if let Some(suggestion) = follow_up_suggestion {
+        push_suggestion(suggestions, seen, suggestion);
+    }
+    if let Some(suggestion) = reply_link_suggestion {
         push_suggestion(suggestions, seen, suggestion);
     }
     if let Some(suggestion) = reply_suggestion {
@@ -998,6 +1024,53 @@ fn build_live_calendar_mail_follow_up_suggestion(
     }
 }
 
+fn build_live_calendar_mail_link_follow_up_suggestion(
+    account: &str,
+    event: &CalendarEvent,
+    message: &MailMessageSummary,
+    item: &DiskResourceItem,
+) -> SuggestionItem {
+    let event_summary = event.summary.as_deref().unwrap_or("Без названия");
+    let mail_subject = message.subject.as_deref().unwrap_or("Без темы");
+    let from = message.from.as_deref().unwrap_or("-");
+    let public_url = item.public_url.as_deref().unwrap_or("-");
+    let suggested_text =
+        format!("Спасибо за встречу \"{event_summary}\". Отправляю материалы: {public_url}");
+    let command = format!(
+        "yacli mail reply --account {} {} {}",
+        shell_quote(account),
+        message.uid,
+        shell_quote(&suggested_text)
+    );
+    SuggestionItem {
+        id: format!("live-calendar-mail-link-follow-up-{}", message.uid),
+        title: "Ответить на письмо и отправить ссылку на материалы".to_string(),
+        status: "ready",
+        priority: 1,
+        reason: format!(
+            "После события \"{}\" в INBOX есть свежее письмо \"{}\" от {} и уже опубликованная папка {}. Можно сразу открыть follow-up reply с готовой ссылкой на материалы.",
+            event_summary, mail_subject, from, item.path
+        ),
+        command,
+        source: "calendar_live",
+        kind: "follow_up",
+        activity_id: format!("calendar:{}:mail-link:{}", event.calendar_id, message.uid),
+        operation: "calendar.mail_link_follow_up.suggested".to_string(),
+        workflow_id: Some("reply-with-context"),
+        action: open_tool_action(
+            Some("reply-with-context"),
+            Some("mail.reply"),
+            "yacli.mail.reply",
+            json!({
+                "account": account,
+                "uid": message.uid,
+                "text": suggested_text,
+            }),
+            false,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -1260,11 +1333,12 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         LiveMailMessageContext, build_live_calendar_cancelled_suggestion,
-        build_live_calendar_mail_follow_up_suggestion, build_live_calendar_materials_suggestion,
-        build_live_calendar_publish_materials_suggestion, build_live_disk_public_link_suggestion,
-        build_live_disk_send_link_suggestion, build_live_mail_attachment_suggestion,
-        build_live_mail_invite_suggestion, collect_suggestions,
-        first_invite_attachment_in_summaries, first_recent_follow_up_event,
+        build_live_calendar_mail_follow_up_suggestion,
+        build_live_calendar_mail_link_follow_up_suggestion,
+        build_live_calendar_materials_suggestion, build_live_calendar_publish_materials_suggestion,
+        build_live_disk_public_link_suggestion, build_live_disk_send_link_suggestion,
+        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
+        collect_suggestions, first_invite_attachment_in_summaries, first_recent_follow_up_event,
         first_recent_follow_up_message, first_regular_attachment_in_summaries,
         is_cancelled_calendar_event, is_public_disk_item, suggested_calendar_materials_path,
         summary_for_suggestions,
@@ -1886,5 +1960,62 @@ mod tests {
             Some(77)
         );
         assert!(suggestion.reason.contains("похожей темой"));
+    }
+
+    #[test]
+    fn build_live_calendar_mail_link_follow_up_suggestion_returns_reply_with_link_handoff() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/review.ics".to_string(),
+            uid: Some("uid-recent".to_string()),
+            summary: Some("Ревью платформы".to_string()),
+            start: Some("2026-03-15T08:00:00Z".to_string()),
+            end: Some("2026-03-15T08:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        let message = MailMessageSummary {
+            uid: 77,
+            subject: Some("Re: Ревью платформы".to_string()),
+            from: Some("organizer@example.com".to_string()),
+            date: None,
+            flags: vec![],
+            size: None,
+        };
+        let item = DiskResourceItem {
+            name: "2026-03-15 Ревью платформы".to_string(),
+            path: "disk:/2026-03-15 Ревью платформы".to_string(),
+            resource_type: "dir".to_string(),
+            mime_type: None,
+            size: None,
+            created: None,
+            modified: None,
+            md5: None,
+            revision: None,
+            public_url: Some("https://disk.yandex.ru/i/review".to_string()),
+            public_key: None,
+        };
+        let suggestion =
+            build_live_calendar_mail_link_follow_up_suggestion("mock", &event, &message, &item);
+        assert_eq!(suggestion.source, "calendar_live");
+        assert_eq!(suggestion.kind, "follow_up");
+        assert_eq!(suggestion.workflow_id, Some("reply-with-context"));
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(suggestion.action.tool_name, Some("yacli.mail.reply"));
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|value| value["text"].as_str()),
+            Some(
+                "Спасибо за встречу \"Ревью платформы\". Отправляю материалы: https://disk.yandex.ru/i/review"
+            )
+        );
+        assert!(suggestion.reason.contains("готовой ссылкой"));
     }
 }
