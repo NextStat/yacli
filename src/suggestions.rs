@@ -4,16 +4,19 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::activity_store::{ActivityEntry, ActivityStore};
+use crate::disk::{DiskResourceItem, PrivateDiskListRequest, fetch_private_resource};
 use crate::doctor::doctor_payload;
 use crate::error::Result;
 use crate::goal_router::goal_route_payload;
 use crate::mail::{MailAttachmentSummary, MailMessage, list_mail_messages, read_mail_message};
-use crate::runtime_context::resolve_mail_private_context;
+use crate::runtime_context::{resolve_disk_private_context, resolve_mail_private_context};
 use crate::workflows;
 
 const LIVE_MAILBOX_NAME: &str = "INBOX";
 const LIVE_MAIL_SCAN_LIMIT: usize = 5;
 const LIVE_MAIL_MAX_BYTES: u64 = 1024 * 1024;
+const LIVE_DISK_SCAN_PATH: &str = "disk:/";
+const LIVE_DISK_SCAN_LIMIT: usize = 50;
 
 #[derive(Clone, Debug, Serialize)]
 struct SuggestionAction {
@@ -73,6 +76,12 @@ pub fn suggestions_payload(requested_account: Option<&str>, goal: Option<&str>) 
         .map(|item| item.command.clone())
         .collect::<BTreeSet<_>>();
     collect_live_mail_suggestions(
+        requested_account.or(current_account),
+        goal_workflow,
+        &mut suggestions,
+        &mut seen_commands,
+    );
+    collect_live_disk_suggestions(
         requested_account.or(current_account),
         goal_workflow,
         &mut suggestions,
@@ -371,6 +380,44 @@ fn collect_live_mail_suggestions(
     }
 }
 
+fn collect_live_disk_suggestions(
+    requested_account: Option<&str>,
+    goal_workflow: Option<&str>,
+    suggestions: &mut Vec<SuggestionItem>,
+    seen: &mut BTreeSet<String>,
+) {
+    let Ok((resolved_account, base_url, access_token)) =
+        resolve_disk_private_context(requested_account)
+    else {
+        return;
+    };
+    let Ok(root) = fetch_private_resource(
+        &base_url,
+        &access_token,
+        &PrivateDiskListRequest {
+            path: LIVE_DISK_SCAN_PATH.to_string(),
+            limit: LIVE_DISK_SCAN_LIMIT,
+            offset: 0,
+        },
+    ) else {
+        return;
+    };
+
+    let Some(public_item) = root
+        .children
+        .as_ref()
+        .and_then(|children| children.items.iter().find(|item| is_public_disk_item(item)))
+    else {
+        return;
+    };
+
+    push_suggestion(
+        suggestions,
+        seen,
+        build_live_disk_public_link_suggestion(&resolved_account, public_item, goal_workflow),
+    );
+}
+
 fn build_live_mail_invite_suggestion(
     context: LiveMailInviteContext<'_>,
     attachment_index: usize,
@@ -420,6 +467,45 @@ fn build_live_mail_invite_suggestion(
     }
 }
 
+fn build_live_disk_public_link_suggestion(
+    account: &str,
+    item: &DiskResourceItem,
+    goal_workflow: Option<&str>,
+) -> SuggestionItem {
+    let command = format!(
+        "yacli disk unpublish --account {} {} --dry-run",
+        shell_quote(account),
+        shell_quote(&item.path)
+    );
+    let public_url = item.public_url.as_deref().unwrap_or("-");
+    SuggestionItem {
+        id: format!("live-disk-public-{}", item.path),
+        title: "Отозвать живую публичную ссылку".to_string(),
+        status: "ready",
+        priority: goal_adjusted_priority(2, "revoke-public-link", goal_workflow),
+        reason: format!(
+            "На Диске уже опубликован ресурс {} ({public_url}). Если ссылка больше не нужна, revoke доступен сразу из live state.",
+            item.path
+        ),
+        command,
+        source: "disk_live",
+        kind: "cleanup",
+        activity_id: format!("disk:{}", item.path),
+        operation: "disk.publish.detected".to_string(),
+        workflow_id: Some("revoke-public-link"),
+        action: open_tool_action(
+            Some("revoke-public-link"),
+            Some("disk.unpublish"),
+            "yacli.disk.unpublish",
+            json!({
+                "account": account,
+                "path": item.path,
+            }),
+            true,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -440,6 +526,10 @@ fn is_calendar_invite_attachment(attachment: &MailAttachmentSummary) -> bool {
             .filename
             .as_deref()
             .is_some_and(|name| name.to_ascii_lowercase().ends_with(".ics"))
+}
+
+fn is_public_disk_item(item: &DiskResourceItem) -> bool {
+    item.public_url.is_some() || item.public_key.is_some()
 }
 
 fn attachment_label(attachment: &MailAttachmentSummary) -> String {
@@ -510,10 +600,12 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveMailInviteContext, build_live_mail_invite_suggestion, collect_suggestions,
-        first_invite_attachment_in_summaries, summary_for_suggestions,
+        LiveMailInviteContext, build_live_disk_public_link_suggestion,
+        build_live_mail_invite_suggestion, collect_suggestions,
+        first_invite_attachment_in_summaries, is_public_disk_item, summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
+    use crate::disk::DiskResourceItem;
     use crate::mail::MailAttachmentSummary;
 
     #[test]
@@ -655,5 +747,63 @@ mod tests {
                 .and_then(|v| v["index"].as_u64()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn public_disk_item_detection_uses_public_url_or_key() {
+        let public_item = DiskResourceItem {
+            name: "report.pdf".to_string(),
+            path: "disk:/docs/report.pdf".to_string(),
+            resource_type: "file".to_string(),
+            mime_type: Some("application/pdf".to_string()),
+            size: Some(1024),
+            created: None,
+            modified: None,
+            md5: None,
+            revision: None,
+            public_url: Some("https://disk.yandex.ru/i/report".to_string()),
+            public_key: None,
+        };
+        let private_item = DiskResourceItem {
+            public_url: None,
+            public_key: None,
+            ..public_item.clone()
+        };
+        assert!(is_public_disk_item(&public_item));
+        assert!(!is_public_disk_item(&private_item));
+    }
+
+    #[test]
+    fn build_live_disk_public_link_suggestion_returns_open_tool_handoff() {
+        let item = DiskResourceItem {
+            name: "report.pdf".to_string(),
+            path: "disk:/docs/report.pdf".to_string(),
+            resource_type: "file".to_string(),
+            mime_type: Some("application/pdf".to_string()),
+            size: Some(1024),
+            created: None,
+            modified: None,
+            md5: None,
+            revision: None,
+            public_url: Some("https://disk.yandex.ru/i/report".to_string()),
+            public_key: Some("public-key-123".to_string()),
+        };
+        let suggestion =
+            build_live_disk_public_link_suggestion("mock", &item, Some("revoke-public-link"));
+        assert_eq!(suggestion.workflow_id, Some("revoke-public-link"));
+        assert_eq!(suggestion.source, "disk_live");
+        assert_eq!(suggestion.kind, "cleanup");
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(suggestion.action.tool_name, Some("yacli.disk.unpublish"));
+        assert_eq!(suggestion.action.primary_tool, Some("yacli.disk.unpublish"));
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|v| v["path"].as_str()),
+            Some("disk:/docs/report.pdf")
+        );
+        assert!(suggestion.command.contains("--dry-run"));
     }
 }
