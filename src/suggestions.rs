@@ -28,6 +28,7 @@ const LIVE_DISK_SCAN_LIMIT: usize = 50;
 const LIVE_CALENDAR_LOOKAHEAD_DAYS: u64 = 14;
 const LIVE_CALENDAR_EVENT_LIMIT: usize = 20;
 const LIVE_CALENDAR_MATERIALS_WINDOW_DAYS: u64 = 3;
+const LIVE_CALENDAR_FOLLOW_UP_LOOKBACK_DAYS: u64 = 2;
 
 #[derive(Clone, Debug, Serialize)]
 struct SuggestionAction {
@@ -485,6 +486,7 @@ fn collect_live_calendar_suggestions(
     let disk_root = fetch_live_disk_root_items(Some(&resolved_account));
     let mut cancelled_suggestion = None;
     let mut materials_suggestion = None;
+    let mut follow_up_suggestion = None;
 
     for calendar in calendars {
         let Ok((resolved_calendar, _, events)) = list_calendar_events(
@@ -527,7 +529,25 @@ fn collect_live_calendar_suggestions(
             ));
         }
 
-        if cancelled_suggestion.is_some() && materials_suggestion.is_some() {
+        if follow_up_suggestion.is_none()
+            && let Some((disk_account, root_items)) = disk_root.as_ref()
+            && disk_account == &resolved_account
+            && let Some(event) = first_recent_follow_up_event(&events, now)
+            && let Some(path) = suggested_calendar_materials_path(event)
+            && let Some(item) = root_items.iter().find(|item| item.path == path)
+            && !is_public_disk_item(item)
+        {
+            follow_up_suggestion = Some(build_live_calendar_publish_materials_suggestion(
+                &resolved_account,
+                event,
+                item,
+            ));
+        }
+
+        if cancelled_suggestion.is_some()
+            && materials_suggestion.is_some()
+            && follow_up_suggestion.is_some()
+        {
             break;
         }
     }
@@ -536,6 +556,9 @@ fn collect_live_calendar_suggestions(
         push_suggestion(suggestions, seen, suggestion);
     }
     if let Some(suggestion) = materials_suggestion {
+        push_suggestion(suggestions, seen, suggestion);
+    }
+    if let Some(suggestion) = follow_up_suggestion {
         push_suggestion(suggestions, seen, suggestion);
     }
 }
@@ -852,6 +875,46 @@ fn build_live_calendar_materials_suggestion(
     }
 }
 
+fn build_live_calendar_publish_materials_suggestion(
+    account: &str,
+    event: &CalendarEvent,
+    item: &DiskResourceItem,
+) -> SuggestionItem {
+    let summary = event.summary.as_deref().unwrap_or("Без названия");
+    let end = event.end.as_deref().unwrap_or("-");
+    let command = format!(
+        "yacli disk publish --account {} {} --dry-run",
+        shell_quote(account),
+        shell_quote(&item.path)
+    );
+    SuggestionItem {
+        id: format!("live-calendar-publish-materials-{}", item.path),
+        title: "Опубликовать материалы для завершившейся встречи".to_string(),
+        status: "ready",
+        priority: 3,
+        reason: format!(
+            "Событие \"{}\" уже завершилось в {}. На Диске есть папка {} без публичной ссылки, её можно сразу опубликовать для follow-up материалов.",
+            summary, end, item.path
+        ),
+        command,
+        source: "calendar_live",
+        kind: "follow_up",
+        activity_id: format!("calendar:{}:{}", event.calendar_id, item.path),
+        operation: "calendar.materials_folder.follow_up".to_string(),
+        workflow_id: Some("publish-file-link"),
+        action: open_tool_action(
+            Some("publish-file-link"),
+            Some("disk.publish"),
+            "yacli.disk.publish",
+            json!({
+                "account": account,
+                "path": item.path,
+            }),
+            true,
+        ),
+    }
+}
+
 fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
     first_invite_attachment_in_summaries(&message.attachments)
 }
@@ -923,6 +986,32 @@ fn first_upcoming_materials_event(
                 .is_some_and(|start| start >= now && start <= latest_start)
         })
         .min_by_key(|event| event.start.clone())
+}
+
+fn first_recent_follow_up_event(
+    events: &[CalendarEvent],
+    now: chrono::DateTime<Utc>,
+) -> Option<&CalendarEvent> {
+    let earliest_end = now
+        .checked_sub_days(Days::new(LIVE_CALENDAR_FOLLOW_UP_LOOKBACK_DAYS))
+        .unwrap_or(now);
+    events
+        .iter()
+        .filter(|event| !is_cancelled_calendar_event(event))
+        .filter(|event| {
+            event
+                .summary
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .filter(|event| {
+            event
+                .end
+                .as_deref()
+                .and_then(parse_calendar_event_start)
+                .is_some_and(|end| end <= now && end >= earliest_end)
+        })
+        .max_by_key(|event| event.end.clone())
 }
 
 fn suggested_calendar_materials_path(event: &CalendarEvent) -> Option<String> {
@@ -1061,17 +1150,18 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         LiveMailMessageContext, build_live_calendar_cancelled_suggestion,
-        build_live_calendar_materials_suggestion, build_live_disk_public_link_suggestion,
-        build_live_disk_send_link_suggestion, build_live_mail_attachment_suggestion,
-        build_live_mail_invite_suggestion, collect_suggestions,
-        first_invite_attachment_in_summaries, first_regular_attachment_in_summaries,
-        is_cancelled_calendar_event, is_public_disk_item, suggested_calendar_materials_path,
-        summary_for_suggestions,
+        build_live_calendar_materials_suggestion, build_live_calendar_publish_materials_suggestion,
+        build_live_disk_public_link_suggestion, build_live_disk_send_link_suggestion,
+        build_live_mail_attachment_suggestion, build_live_mail_invite_suggestion,
+        collect_suggestions, first_invite_attachment_in_summaries, first_recent_follow_up_event,
+        first_regular_attachment_in_summaries, is_cancelled_calendar_event, is_public_disk_item,
+        suggested_calendar_materials_path, summary_for_suggestions,
     };
     use crate::activity_store::ActivityEntry;
     use crate::calendar::CalendarEvent;
     use crate::disk::DiskResourceItem;
     use crate::mail::{MailAttachmentSummary, smtp_safe_message_bytes};
+    use chrono::Utc;
 
     #[test]
     fn collect_suggestions_promotes_partial_send_link_recovery() {
@@ -1515,5 +1605,93 @@ mod tests {
             Some("disk:/2026-03-21 Планирование")
         );
         assert!(suggestion.reason.contains("ближайшее событие"));
+    }
+
+    #[test]
+    fn first_recent_follow_up_event_prefers_recent_finished_event() {
+        let events = vec![
+            CalendarEvent {
+                calendar_id: "team".to_string(),
+                calendar_name: "Команда".to_string(),
+                href: "/cal/team/old.ics".to_string(),
+                uid: Some("uid-old".to_string()),
+                summary: Some("Старое".to_string()),
+                start: Some("2026-03-10T08:00:00Z".to_string()),
+                end: Some("2026-03-10T08:30:00Z".to_string()),
+                description: None,
+                location: None,
+                status: Some("CONFIRMED".to_string()),
+                etag: None,
+                all_day: false,
+            },
+            CalendarEvent {
+                calendar_id: "team".to_string(),
+                calendar_name: "Команда".to_string(),
+                href: "/cal/team/recent.ics".to_string(),
+                uid: Some("uid-recent".to_string()),
+                summary: Some("Ревью".to_string()),
+                start: Some("2026-03-15T08:00:00Z".to_string()),
+                end: Some("2026-03-15T08:30:00Z".to_string()),
+                description: None,
+                location: None,
+                status: Some("CONFIRMED".to_string()),
+                etag: None,
+                all_day: false,
+            },
+        ];
+        let now = chrono::DateTime::parse_from_rfc3339("2026-03-15T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            first_recent_follow_up_event(&events, now).and_then(|event| event.uid.as_deref()),
+            Some("uid-recent")
+        );
+    }
+
+    #[test]
+    fn build_live_calendar_publish_materials_suggestion_returns_publish_handoff() {
+        let event = CalendarEvent {
+            calendar_id: "team".to_string(),
+            calendar_name: "Команда".to_string(),
+            href: "/cal/team/recent.ics".to_string(),
+            uid: Some("uid-recent".to_string()),
+            summary: Some("Ревью".to_string()),
+            start: Some("2026-03-15T08:00:00Z".to_string()),
+            end: Some("2026-03-15T08:30:00Z".to_string()),
+            description: None,
+            location: None,
+            status: Some("CONFIRMED".to_string()),
+            etag: None,
+            all_day: false,
+        };
+        let item = DiskResourceItem {
+            name: "2026-03-15 Ревью".to_string(),
+            path: "disk:/2026-03-15 Ревью".to_string(),
+            resource_type: "dir".to_string(),
+            mime_type: None,
+            size: None,
+            created: None,
+            modified: None,
+            md5: None,
+            revision: None,
+            public_url: None,
+            public_key: None,
+        };
+        let suggestion = build_live_calendar_publish_materials_suggestion("mock", &event, &item);
+        assert_eq!(suggestion.source, "calendar_live");
+        assert_eq!(suggestion.kind, "follow_up");
+        assert_eq!(suggestion.workflow_id, Some("publish-file-link"));
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(suggestion.action.tool_name, Some("yacli.disk.publish"));
+        assert!(suggestion.action.supports_review);
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|value| value["path"].as_str()),
+            Some("disk:/2026-03-15 Ревью")
+        );
+        assert!(suggestion.reason.contains("завершилось"));
     }
 }
