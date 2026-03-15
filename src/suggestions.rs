@@ -7,7 +7,13 @@ use crate::activity_store::{ActivityEntry, ActivityStore};
 use crate::doctor::doctor_payload;
 use crate::error::Result;
 use crate::goal_router::goal_route_payload;
+use crate::mail::{MailAttachmentSummary, MailMessage, list_mail_messages, read_mail_message};
+use crate::runtime_context::resolve_mail_private_context;
 use crate::workflows;
+
+const LIVE_MAILBOX_NAME: &str = "INBOX";
+const LIVE_MAIL_SCAN_LIMIT: usize = 5;
+const LIVE_MAIL_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 struct SuggestionAction {
@@ -18,6 +24,10 @@ struct SuggestionAction {
     primary_tool: Option<&'static str>,
     primary_operation: Option<&'static str>,
     supports_review: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_arguments: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,6 +46,14 @@ struct SuggestionItem {
     action: SuggestionAction,
 }
 
+struct LiveMailInviteContext<'a> {
+    account: &'a str,
+    mailbox_name: &'a str,
+    message_uid: u64,
+    subject: Option<&'a str>,
+    from: Option<&'a str>,
+}
+
 pub fn suggestions_payload(requested_account: Option<&str>, goal: Option<&str>) -> Result<Value> {
     let doctor = doctor_payload(requested_account, goal)?;
     let goal = normalize_goal(goal);
@@ -48,7 +66,20 @@ pub fn suggestions_payload(requested_account: Option<&str>, goal: Option<&str>) 
         .as_ref()
         .and_then(|route| route["best_match"]["workflow"]["id"].as_str());
     let store = ActivityStore::load()?;
-    let suggestions = collect_suggestions(store.entries(), goal_workflow);
+    let current_account = doctor["current_account"].as_str();
+    let mut suggestions = collect_suggestions(store.entries(), goal_workflow);
+    let mut seen_commands = suggestions
+        .iter()
+        .map(|item| item.command.clone())
+        .collect::<BTreeSet<_>>();
+    collect_live_mail_suggestions(
+        requested_account.or(current_account),
+        goal_workflow,
+        &mut suggestions,
+        &mut seen_commands,
+    );
+    suggestions.sort_by_key(|item| item.priority);
+    suggestions.truncate(5);
     let status = if suggestions.is_empty() {
         "idle"
     } else {
@@ -239,6 +270,8 @@ fn workflow_action(workflow_id: &'static str) -> SuggestionAction {
         primary_tool: workflows::workflow_primary_tool(workflow_id),
         primary_operation: Some(workflows::workflow_primary_operation(workflow_id)),
         supports_review: workflows::workflow_supports_review(workflow_id),
+        tool_name: None,
+        tool_arguments: None,
     }
 }
 
@@ -251,7 +284,182 @@ fn undo_activity_action(entry: &ActivityEntry) -> SuggestionAction {
         primary_tool: Some("yacli.activity.undo"),
         primary_operation: Some("activity.undo"),
         supports_review: false,
+        tool_name: None,
+        tool_arguments: None,
     }
+}
+
+fn open_tool_action(
+    workflow_id: Option<&'static str>,
+    primary_operation: Option<&'static str>,
+    tool_name: &'static str,
+    tool_arguments: Value,
+    supports_review: bool,
+) -> SuggestionAction {
+    SuggestionAction {
+        kind: "open_tool",
+        label: "Open tool",
+        workflow_id,
+        activity_id: None,
+        primary_tool: Some(tool_name),
+        primary_operation,
+        supports_review,
+        tool_name: Some(tool_name),
+        tool_arguments: Some(tool_arguments),
+    }
+}
+
+fn collect_live_mail_suggestions(
+    requested_account: Option<&str>,
+    goal_workflow: Option<&str>,
+    suggestions: &mut Vec<SuggestionItem>,
+    seen: &mut BTreeSet<String>,
+) {
+    let Ok((resolved_account, auth, context)) = resolve_mail_private_context(requested_account)
+    else {
+        return;
+    };
+    let Ok(messages) = list_mail_messages(
+        &context.imap_host,
+        context.imap_port,
+        auth.clone(),
+        LIVE_MAILBOX_NAME,
+        LIVE_MAIL_SCAN_LIMIT,
+    ) else {
+        return;
+    };
+
+    for message in messages {
+        if let Some(size) = message.size
+            && size > LIVE_MAIL_MAX_BYTES
+        {
+            continue;
+        }
+
+        let Ok(full_message) = read_mail_message(
+            &context.imap_host,
+            context.imap_port,
+            auth.clone(),
+            LIVE_MAILBOX_NAME,
+            message.uid,
+            LIVE_MAIL_MAX_BYTES,
+        ) else {
+            continue;
+        };
+
+        let Some((attachment_index, attachment)) = first_invite_attachment(&full_message) else {
+            continue;
+        };
+
+        push_suggestion(
+            suggestions,
+            seen,
+            build_live_mail_invite_suggestion(
+                LiveMailInviteContext {
+                    account: &resolved_account,
+                    mailbox_name: LIVE_MAILBOX_NAME,
+                    message_uid: full_message.uid,
+                    subject: full_message.subject.as_deref(),
+                    from: full_message.from.as_deref(),
+                },
+                attachment_index,
+                attachment,
+                goal_workflow,
+            ),
+        );
+        break;
+    }
+}
+
+fn build_live_mail_invite_suggestion(
+    context: LiveMailInviteContext<'_>,
+    attachment_index: usize,
+    attachment: &MailAttachmentSummary,
+    goal_workflow: Option<&str>,
+) -> SuggestionItem {
+    let subject = context.subject.unwrap_or("Без темы");
+    let from = context.from.unwrap_or("-");
+    let command = format!(
+        "yacli mail invite inspect --account {} --folder {} {} --index {}",
+        shell_quote(context.account),
+        shell_quote(context.mailbox_name),
+        context.message_uid,
+        attachment_index
+    );
+    SuggestionItem {
+        id: format!(
+            "live-mail-invite-{}-{}",
+            context.message_uid, attachment_index
+        ),
+        title: "Разобрать свежее календарное приглашение".to_string(),
+        status: "ready",
+        priority: goal_adjusted_priority(2, "invite-to-calendar", goal_workflow),
+        reason: format!(
+            "Письмо \"{subject}\" от {from} в {} содержит calendar invite {}. Можно сразу открыть и разобрать приглашение.",
+            context.mailbox_name,
+            attachment_label(attachment)
+        ),
+        command,
+        source: "mail_live",
+        kind: "discovery",
+        activity_id: format!("mail:{}:{}", context.message_uid, attachment_index),
+        operation: "mail.invite.detected".to_string(),
+        workflow_id: Some("invite-to-calendar"),
+        action: open_tool_action(
+            Some("invite-to-calendar"),
+            Some("mail.invite.inspect"),
+            "yacli.mail.invite.inspect",
+            json!({
+                "account": context.account,
+                "folder": context.mailbox_name,
+                "uid": context.message_uid,
+                "index": attachment_index,
+            }),
+            false,
+        ),
+    }
+}
+
+fn first_invite_attachment(message: &MailMessage) -> Option<(usize, &MailAttachmentSummary)> {
+    first_invite_attachment_in_summaries(&message.attachments)
+}
+
+fn first_invite_attachment_in_summaries(
+    attachments: &[MailAttachmentSummary],
+) -> Option<(usize, &MailAttachmentSummary)> {
+    attachments
+        .iter()
+        .enumerate()
+        .find(|(_, attachment)| is_calendar_invite_attachment(attachment))
+        .map(|(index, attachment)| (index + 1, attachment))
+}
+
+fn is_calendar_invite_attachment(attachment: &MailAttachmentSummary) -> bool {
+    attachment.mime_type.eq_ignore_ascii_case("text/calendar")
+        || attachment
+            .filename
+            .as_deref()
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".ics"))
+}
+
+fn attachment_label(attachment: &MailAttachmentSummary) -> String {
+    attachment
+        .filename
+        .clone()
+        .unwrap_or_else(|| attachment.mime_type.clone())
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if !value
+        .chars()
+        .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\'' | '"' | '\\'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn extract_disk_path(command: &str) -> Option<String> {
@@ -273,19 +481,20 @@ fn summary_for_suggestions(suggestions: &[SuggestionItem], goal: Option<&str>) -
     if suggestions.is_empty() {
         return match goal {
             Some(goal) => format!(
-                "Для цели `{goal}` пока нет proactive suggestions из уже выполненных действий."
+                "Для цели `{goal}` пока нет proactive suggestions из последних действий и live product signals."
             ),
-            None => "Пока нет proactive suggestions из последних действий.".to_string(),
+            None => "Пока нет proactive suggestions из последних действий и live product signals."
+                .to_string(),
         };
     }
 
     match goal {
         Some(goal) => format!(
-            "Для цели `{goal}` найдено {} proactive suggestions из реальной activity history.",
+            "Для цели `{goal}` найдено {} proactive suggestions из activity history и live product signals.",
             suggestions.len()
         ),
         None => format!(
-            "Найдено {} proactive suggestions из реальной activity history.",
+            "Найдено {} proactive suggestions из activity history и live product signals.",
             suggestions.len()
         ),
     }
@@ -300,8 +509,12 @@ fn normalize_goal(value: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::collect_suggestions;
+    use super::{
+        LiveMailInviteContext, build_live_mail_invite_suggestion, collect_suggestions,
+        first_invite_attachment_in_summaries, summary_for_suggestions,
+    };
     use crate::activity_store::ActivityEntry;
+    use crate::mail::MailAttachmentSummary;
 
     #[test]
     fn collect_suggestions_promotes_partial_send_link_recovery() {
@@ -364,5 +577,83 @@ mod tests {
             Some("yacli.mail.invite.create_event")
         );
         assert!(!suggestions[0].action.supports_review);
+    }
+
+    #[test]
+    fn first_invite_attachment_prefers_ics_and_text_calendar() {
+        let attachments = vec![
+            MailAttachmentSummary {
+                filename: Some("report.pdf".to_string()),
+                mime_type: "application/pdf".to_string(),
+                content_id: None,
+                inline: false,
+            },
+            MailAttachmentSummary {
+                filename: Some("invite.ics".to_string()),
+                mime_type: "application/octet-stream".to_string(),
+                content_id: None,
+                inline: false,
+            },
+        ];
+
+        let (index, attachment) =
+            first_invite_attachment_in_summaries(&attachments).expect("invite attachment");
+        assert_eq!(index, 2);
+        assert_eq!(attachment.filename.as_deref(), Some("invite.ics"));
+    }
+
+    #[test]
+    fn suggestions_summary_mentions_live_signals() {
+        let summary = summary_for_suggestions(&[], Some("добавь встречу из письма"));
+        assert!(summary.contains("live product signals"));
+    }
+
+    #[test]
+    fn build_live_mail_invite_suggestion_returns_open_tool_handoff() {
+        let attachments = [MailAttachmentSummary {
+            filename: Some("invite.ics".to_string()),
+            mime_type: "text/calendar".to_string(),
+            content_id: None,
+            inline: false,
+        }];
+        let suggestion = build_live_mail_invite_suggestion(
+            LiveMailInviteContext {
+                account: "mock",
+                mailbox_name: "INBOX",
+                message_uid: 1353,
+                subject: Some("Ревью yacli"),
+                from: Some("organizer@example.com"),
+            },
+            1,
+            &attachments[0],
+            Some("invite-to-calendar"),
+        );
+        assert_eq!(suggestion.workflow_id, Some("invite-to-calendar"));
+        assert_eq!(suggestion.source, "mail_live");
+        assert_eq!(suggestion.action.kind, "open_tool");
+        assert_eq!(
+            suggestion.action.tool_name,
+            Some("yacli.mail.invite.inspect")
+        );
+        assert_eq!(
+            suggestion.action.primary_tool,
+            Some("yacli.mail.invite.inspect")
+        );
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|v| v["uid"].as_u64()),
+            Some(1353)
+        );
+        assert_eq!(
+            suggestion
+                .action
+                .tool_arguments
+                .as_ref()
+                .and_then(|v| v["index"].as_u64()),
+            Some(1)
+        );
     }
 }

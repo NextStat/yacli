@@ -2251,6 +2251,18 @@
             : null;
         }
 
+        function suggestionToolName(action) {
+          return action && typeof action.tool_name === "string" ? action.tool_name : "";
+        }
+
+        function suggestionToolArguments(action) {
+          return action &&
+            action.tool_arguments &&
+            typeof action.tool_arguments === "object"
+            ? action.tool_arguments
+            : {};
+        }
+
         function doctorPayload() {
           const payload = resourceJsonPayload(state.doctorPayload);
           return payload && typeof payload === "object" ? payload : null;
@@ -3726,6 +3738,27 @@
           return true;
         }
 
+        function setExplicitToolRunnerState(toolName, toolArguments, focusRunner) {
+          if (!toolName) {
+            logEvent("tool runner blocked", "suggestion action has no tool name");
+            return false;
+          }
+
+          state.bootstrap.preferredSection = "tools";
+          state.bootstrap.preferredTool = toolName;
+          elements.toolNameInput.value = toolName;
+          elements.toolArgsInput.value = safeStringify(
+            toolArguments && typeof toolArguments === "object" ? toolArguments : {},
+          );
+          selectTool(toolName, true);
+          renderSelectedToolSchema();
+          renderRuntimeState();
+          if (focusRunner) {
+            focusPanel("panel-tools");
+          }
+          return true;
+        }
+
         async function previewSelectedTool() {
           const selectedTool = elements.toolNameInput.value.trim();
           if (!selectedTool || !toolSupportsDryRun(selectedTool)) {
@@ -4764,6 +4797,20 @@
             return;
           }
 
+          if (action.kind === "open_tool") {
+            const toolName = suggestionToolName(action);
+            if (!toolName) {
+              logEvent("suggestion blocked", "tool suggestion has no tool name");
+              return;
+            }
+            setExplicitToolRunnerState(toolName, suggestionToolArguments(action), true);
+            logEvent(
+              "suggestion open",
+              (sourceLabel || "home") + " opened tool " + toolName,
+            );
+            return;
+          }
+
           logEvent("suggestion blocked", "unsupported suggestion action: " + action.kind);
         }
 
@@ -4814,6 +4861,32 @@
             logEvent(
               "suggestion apply",
               (sourceLabel || "suggestions") + " opened runner for " + workflowId,
+            );
+            return;
+          }
+
+          if (action.kind === "open_tool") {
+            const toolName = suggestionToolName(action);
+            if (!toolName) {
+              logEvent("suggestion apply blocked", "tool suggestion has no tool name");
+              return;
+            }
+            const toolArguments = suggestionToolArguments(action);
+            if (!setExplicitToolRunnerState(toolName, toolArguments, true)) {
+              return;
+            }
+            if (toolSupportsDryRun(toolName)) {
+              await previewSelectedTool();
+              logEvent(
+                "suggestion apply",
+                (sourceLabel || "suggestions") + " opened review for " + toolName,
+              );
+              return;
+            }
+            await runTool(toolName, toolArguments);
+            logEvent(
+              "suggestion apply",
+              (sourceLabel || "suggestions") + " ran tool " + toolName,
             );
             return;
           }

@@ -3431,8 +3431,11 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("renderDoctor"));
     assert!(html.contains("renderSuggestions"));
     assert!(html.contains("topSuggestion"));
+    assert!(html.contains("suggestionToolName"));
+    assert!(html.contains("suggestionToolArguments"));
     assert!(html.contains("openTopSuggestion"));
     assert!(html.contains("applyTopSuggestion"));
+    assert!(html.contains("setExplicitToolRunnerState"));
     assert!(html.contains("workflowExecutionPayload"));
     assert!(html.contains("workflowExecutionActions"));
     assert!(html.contains("workflowNextActionPayload"));

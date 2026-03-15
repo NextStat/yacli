@@ -119,7 +119,7 @@ yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude
 - product health-check через `yacli doctor` и `resource://yacli/doctor`, чтобы быстро понять, что ещё мешает readiness.
 - safe remediation через `yacli doctor --apply-safe` и кнопку `Apply safe fixes` в Unified Home, чтобы автоматически закрыть безопасные локальные фиксы.
 - ranked next actions через `yacli next` и `resource://yacli/next-actions`, чтобы сразу видеть самые выгодные следующие шаги.
-- proactive suggestions через `yacli suggest` и `resource://yacli/suggestions`, чтобы получать recovery / cleanup / undo подсказки из реальной activity history.
+- proactive suggestions через `yacli suggest` и `resource://yacli/suggestions`, чтобы получать recovery / cleanup / undo подсказки из реальной activity history и live product signals.
   В `Unified Home` эти suggestions теперь не только видны, но и ведут прямо в `undo` или канонический workflow/review path.
 - `workflow show` и `resource://yacli/workflow/{workflow}` теперь отдают server-driven `execution.state` и `execution.available_actions`, чтобы CLI, MCP и Apps видели один и тот же actionable lifecycle workflow: `needs_input`, `review_ready`, `ready`, `recovery_ready`, `undo_ready`, `applied`, `undone`.
 - Workflow panel в Apps теперь использует server-driven `execution.actions` для `next action`, так что `connect / review / resume / cleanup / undo / replay` идут из одного канонического workflow contract, а не из UI-эвристик.
@@ -553,7 +553,7 @@ MCP Apps доступны через `ui://yacli/dashboard`:
 - Unified Home — стартовый экран с snapshot, workflows, activity и быстрыми переходами
 - Canonical home resources — `resource://yacli/home`, `resource://yacli/home/{account}` и goal-aware варианты с `?goal=...` дают один и тот же summary surface в CLI, MCP и Apps
 - Ranked next actions — `yacli next` и `resource://yacli/next-actions` теперь умеют и goal-aware приоритизацию через `--goal` / `?goal=...`
-- Proactive suggestions — `yacli suggest` и `resource://yacli/suggestions` собирают recovery / cleanup / undo подсказки из реальной activity history и optional goal context
+- Proactive suggestions — `yacli suggest` и `resource://yacli/suggestions` собирают recovery / cleanup / undo подсказки из реальной activity history, optional goal context и live signal'ов вроде свежего письма с calendar invite в `INBOX`
 - Goal Router — `yacli goal "..."` и `yacli.goal.route` маршрутизируют естественную цель в лучший workflow, prompt и MCP tool-path
 - Goal-driven remediation — route сразу показывает, чего не хватает в setup/readiness и какой командой это добить
 - Goal Router в Apps — routed goal можно сразу довести до `Preview action`, `Apply routed action` и `Share goal replay`
