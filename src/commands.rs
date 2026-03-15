@@ -671,7 +671,7 @@ fn execute_workflow(format: OutputFormat, action: WorkflowCommand) -> Result<Ren
             )
         }
         WorkflowCommand::Show { id } => {
-            let workflow = workflows::workflow_resource_detail(&id).ok_or_else(|| {
+            let workflow = workflows::workflow_runtime_detail(&id, None)?.ok_or_else(|| {
                 YacliError::UnsupportedOperation(format!("unknown workflow: {id}"))
             })?;
             let cli_steps = workflow["cli_steps"]
@@ -719,6 +719,20 @@ fn execute_workflow(format: OutputFormat, action: WorkflowCommand) -> Result<Ren
                     (
                         "skill_name",
                         workflow["skill_name"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    (
+                        "execution_state",
+                        workflow["execution"]["state"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    (
+                        "execution_next_action",
+                        workflow["execution"]["next_action"]
                             .as_str()
                             .unwrap_or_default()
                             .to_string(),

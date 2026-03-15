@@ -2454,6 +2454,16 @@
             : "";
         }
 
+        function workflowExecutionPayload(detail) {
+          const source = detail && typeof detail === "object" ? detail : workflowDetailPayload();
+          return source &&
+            source.execution &&
+            typeof source.execution === "object" &&
+            !Array.isArray(source.execution)
+            ? source.execution
+            : null;
+        }
+
         function workflowSupportsReview(detail) {
           const source = detail && typeof detail === "object" ? detail : workflowDetailPayload();
           if (source && typeof source.supports_review === "boolean") {
@@ -2482,6 +2492,14 @@
 
         function latestWorkflowActivity() {
           const detail = workflowDetailPayload();
+          const execution = workflowExecutionPayload(detail);
+          if (
+            execution &&
+            execution.latest_activity &&
+            typeof execution.latest_activity === "object"
+          ) {
+            return execution.latest_activity;
+          }
           const primaryOperation = workflowPrimaryOperation(detail);
           const operations = primaryOperation
             ? [primaryOperation]

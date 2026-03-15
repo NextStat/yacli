@@ -4369,6 +4369,11 @@ rest_base_url = "https://cloud-api.yandex.net"
     .expect("workflow detail payload");
     assert_eq!(workflow_json["id"], "attachment-to-disk");
     assert_eq!(workflow_json["prompt_name"], "attachment-to-disk");
+    assert_eq!(workflow_json["execution"]["state"], "needs_input");
+    assert_eq!(
+        workflow_json["execution"]["next_action"],
+        "connect_services"
+    );
 
     let activity_catalog = post_json(
         &client,

@@ -2345,7 +2345,7 @@ fn skill_resource_contents(uri: &str) -> Result<Vec<Value>> {
 
 fn workflow_resource_contents(uri: &str) -> Result<Vec<Value>> {
     let workflow_id = templated_account_name(uri, "workflow")?;
-    let payload = workflows::workflow_resource_detail(&workflow_id).ok_or_else(|| {
+    let payload = workflows::workflow_runtime_detail(&workflow_id, None)?.ok_or_else(|| {
         YacliError::UnsupportedOperation(format!("unknown workflow resource: {uri}"))
     })?;
     json_resource_contents(uri, payload)

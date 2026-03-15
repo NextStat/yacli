@@ -424,6 +424,8 @@ fn workflow_show_returns_steps_prompt_and_skill() {
         workflow["prompt_resource"],
         "resource://yacli/skill/yacli-attachment-to-disk"
     );
+    assert_eq!(workflow["execution"]["state"], "needs_input");
+    assert_eq!(workflow["execution"]["next_action"], "connect_services");
 }
 
 #[test]

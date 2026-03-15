@@ -1,3 +1,6 @@
+use crate::activity_store::{ActivityEntry, ActivityStore};
+use crate::doctor::doctor_payload;
+use crate::error::Result;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -283,9 +286,192 @@ pub fn workflow_resource_detail(id: &str) -> Option<Value> {
     workflow_definition(id).map(workflow_json)
 }
 
+pub fn workflow_runtime_detail(id: &str, requested_account: Option<&str>) -> Result<Option<Value>> {
+    let Some(definition) = workflow_definition(id) else {
+        return Ok(None);
+    };
+    let doctor = doctor_payload(requested_account, None)?;
+    let store = ActivityStore::load()?;
+    let mut payload = workflow_json(definition);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "execution".to_string(),
+            workflow_execution_payload(definition.id, &doctor, store.entries()),
+        );
+    }
+    Ok(Some(payload))
+}
+
+fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry]) -> Value {
+    let required_services = workflow_required_services(id);
+    let missing_services = required_services
+        .iter()
+        .copied()
+        .filter(|service| !doctor_service_ready(doctor, service))
+        .collect::<Vec<_>>();
+
+    let latest_activity = workflow_latest_activity(id, entries);
+    let supports_review = workflow_supports_review(id);
+    let supports_recovery = workflow_partial_operation(id).is_some();
+    let supports_undo = latest_activity
+        .as_ref()
+        .map(|entry| activity_entry_supports_undo(entry))
+        .unwrap_or(false);
+
+    let (state, summary, next_action) = if !missing_services.is_empty() {
+        (
+            "needs_input",
+            format!(
+                "Workflow ждёт подключения сервисов: {}.",
+                missing_services.join(", ")
+            ),
+            "connect_services",
+        )
+    } else if let Some(entry) = latest_activity.as_ref() {
+        if workflow_activity_is_undo(id, entry) {
+            (
+                "undone",
+                format!("Последний запуск workflow уже откатан: {}.", entry.summary),
+                "open_workflow",
+            )
+        } else if workflow_activity_is_partial_failure(id, entry) {
+            (
+                "partial_failure",
+                format!("Workflow завершился частично: {}.", entry.summary),
+                "resume",
+            )
+        } else if workflow_activity_is_applied(id, entry) {
+            (
+                "applied",
+                format!("Workflow уже выполнялся успешно: {}.", entry.summary),
+                if activity_entry_supports_undo(entry) {
+                    "undo"
+                } else {
+                    "replay"
+                },
+            )
+        } else {
+            (
+                "ready",
+                "Workflow готов к следующему запуску.".to_string(),
+                if supports_review {
+                    "review"
+                } else {
+                    "open_workflow"
+                },
+            )
+        }
+    } else {
+        (
+            "ready",
+            "Workflow готов к первому запуску.".to_string(),
+            if supports_review {
+                "review"
+            } else {
+                "open_workflow"
+            },
+        )
+    };
+
+    json!({
+        "state": state,
+        "summary": summary,
+        "required_services": required_services,
+        "missing_services": missing_services,
+        "supports_review": supports_review,
+        "supports_recovery": supports_recovery,
+        "supports_undo": supports_undo,
+        "next_action": next_action,
+        "latest_activity": latest_activity.map(activity_entry_json),
+    })
+}
+
+fn workflow_required_services(id: &str) -> &'static [&'static str] {
+    match id {
+        "daily-briefing" => &["mail", "calendar"],
+        "reply-with-context" => &["mail", "calendar"],
+        "attachment-to-disk" => &["mail"],
+        "send-file-by-mail" => &["mail"],
+        "send-link-by-mail" => &["mail", "disk"],
+        "publish-file-link" => &["disk"],
+        "revoke-public-link" => &["disk"],
+        "invite-to-calendar" => &["mail", "calendar"],
+        _ => &[],
+    }
+}
+
+fn workflow_partial_operation(id: &str) -> Option<&'static str> {
+    match id {
+        "send-link-by-mail" => Some("mail.send_link.partial"),
+        "invite-to-calendar" => Some("mail.invite.create_event.partial"),
+        _ => None,
+    }
+}
+
+fn doctor_service_ready(doctor: &Value, service: &str) -> bool {
+    matches!(
+        doctor["services"][service]["credential_state"].as_str(),
+        Some("store_present" | "env_present")
+    )
+}
+
+fn workflow_latest_activity<'a>(
+    id: &str,
+    entries: &'a [ActivityEntry],
+) -> Option<&'a ActivityEntry> {
+    let primary_operation = workflow_primary_operation(id);
+    let partial_operation = workflow_partial_operation(id);
+    entries.iter().find(|entry| {
+        workflow_activity_is_undo(id, entry)
+            || entry.operation == primary_operation
+            || Some(entry.operation.as_str()) == partial_operation
+    })
+}
+
+fn workflow_activity_is_applied(id: &str, entry: &ActivityEntry) -> bool {
+    entry.operation == workflow_primary_operation(id)
+}
+
+fn workflow_activity_is_partial_failure(id: &str, entry: &ActivityEntry) -> bool {
+    Some(entry.operation.as_str()) == workflow_partial_operation(id)
+}
+
+fn workflow_activity_is_undo(id: &str, entry: &ActivityEntry) -> bool {
+    if entry.operation != "activity.undo" {
+        return false;
+    }
+
+    match id {
+        "publish-file-link" => entry.replay_command.starts_with("yacli disk unpublish "),
+        _ => false,
+    }
+}
+
+fn activity_entry_supports_undo(entry: &ActivityEntry) -> bool {
+    entry
+        .undo_command
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn activity_entry_json(entry: &ActivityEntry) -> Value {
+    json!({
+        "id": entry.id,
+        "occurred_at": entry.occurred_at,
+        "source": entry.source,
+        "operation": entry.operation,
+        "account": entry.account,
+        "summary": entry.summary,
+        "replay_command": entry.replay_command,
+        "undo_command": entry.undo_command,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity_store::ActivityEntry;
 
     #[test]
     fn workflow_ids_cover_all_definitions() {
@@ -345,5 +531,78 @@ mod tests {
         assert!(workflow_supports_review("revoke-public-link"));
         assert!(!workflow_supports_review("daily-briefing"));
         assert!(!workflow_supports_review("invite-to-calendar"));
+    }
+
+    #[test]
+    fn workflow_execution_marks_send_link_partial_failure() {
+        let doctor = json!({
+            "services": {
+                "mail": { "credential_state": "store_present" },
+                "disk": { "credential_state": "store_present" },
+                "calendar": { "credential_state": "not_configured" }
+            }
+        });
+        let entries = vec![ActivityEntry {
+            id: "act_partial".to_string(),
+            occurred_at: "2026-03-15T12:00:00Z".to_string(),
+            source: "cli".to_string(),
+            operation: "mail.send_link.partial".to_string(),
+            account: "mock".to_string(),
+            summary: "Публичная ссылка создана, но письмо не отправлено".to_string(),
+            replay_command: "yacli mail send-published-link person@example.com 'Материалы' --public-url https://disk.example/public".to_string(),
+            undo: None,
+            undo_command: Some("yacli disk unpublish disk:/docs/archive.zip".to_string()),
+        }];
+
+        let payload = workflow_execution_payload("send-link-by-mail", &doctor, &entries);
+        assert_eq!(payload["state"], "partial_failure");
+        assert_eq!(payload["next_action"], "resume");
+        assert_eq!(
+            payload["latest_activity"]["operation"],
+            "mail.send_link.partial"
+        );
+    }
+
+    #[test]
+    fn workflow_execution_marks_publish_file_link_undone_after_activity_undo() {
+        let doctor = json!({
+            "services": {
+                "mail": { "credential_state": "not_configured" },
+                "disk": { "credential_state": "store_present" },
+                "calendar": { "credential_state": "not_configured" }
+            }
+        });
+        let entries = vec![ActivityEntry {
+            id: "act_undo".to_string(),
+            occurred_at: "2026-03-15T12:00:00Z".to_string(),
+            source: "cli".to_string(),
+            operation: "activity.undo".to_string(),
+            account: "mock".to_string(),
+            summary: "Откат действия act_publish: отозвана публичная ссылка".to_string(),
+            replay_command: "yacli disk unpublish disk:/docs/archive.zip".to_string(),
+            undo: None,
+            undo_command: None,
+        }];
+
+        let payload = workflow_execution_payload("publish-file-link", &doctor, &entries);
+        assert_eq!(payload["state"], "undone");
+        assert_eq!(payload["next_action"], "open_workflow");
+        assert_eq!(payload["latest_activity"]["operation"], "activity.undo");
+    }
+
+    #[test]
+    fn workflow_execution_marks_needs_input_when_required_services_are_missing() {
+        let doctor = json!({
+            "services": {
+                "mail": { "credential_state": "not_configured" },
+                "disk": { "credential_state": "store_present" },
+                "calendar": { "credential_state": "not_configured" }
+            }
+        });
+
+        let payload = workflow_execution_payload("send-link-by-mail", &doctor, &[]);
+        assert_eq!(payload["state"], "needs_input");
+        assert_eq!(payload["missing_services"][0], "mail");
+        assert_eq!(payload["next_action"], "connect_services");
     }
 }

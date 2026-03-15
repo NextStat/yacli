@@ -3433,6 +3433,7 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("topSuggestion"));
     assert!(html.contains("openTopSuggestion"));
     assert!(html.contains("applyTopSuggestion"));
+    assert!(html.contains("workflowExecutionPayload"));
     assert!(html.contains("refreshOnboardingResource"));
     assert!(html.contains("shareOnboarding"));
     assert!(html.contains("resource://yacli/suggestions"));
@@ -4384,6 +4385,26 @@ rest_base_url = "https://cloud-api.yandex.net"
     .expect("suggestions json");
     assert_eq!(suggestions_payload["status"], "idle");
     assert_eq!(suggestions_payload["count"], 0);
+
+    let workflow_response = responses
+        .iter()
+        .find(|response| response["id"] == 8)
+        .expect("workflow response");
+    let workflow_contents = workflow_response["result"]["contents"]
+        .as_array()
+        .expect("workflow contents");
+    let workflow_payload: Value = serde_json::from_str(
+        workflow_contents[0]["text"]
+            .as_str()
+            .expect("workflow text"),
+    )
+    .expect("workflow json");
+    assert_eq!(workflow_payload["id"], "invite-to-calendar");
+    assert_eq!(workflow_payload["execution"]["state"], "needs_input");
+    assert_eq!(
+        workflow_payload["execution"]["next_action"],
+        "connect_services"
+    );
 
     let goal_onboarding_contents = responses[17]["result"]["contents"]
         .as_array()
