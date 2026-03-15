@@ -678,6 +678,31 @@ pub enum MailCommand {
         )]
         dry_run: bool,
     },
+    /// Отправить письмо с уже опубликованной публичной ссылкой.
+    SendPublishedLink {
+        #[arg(long, value_name = "АККАУНТ")]
+        account: Option<String>,
+        #[arg(value_name = "EMAIL")]
+        to: String,
+        #[arg(value_name = "ТЕМА")]
+        subject: String,
+        #[arg(value_name = "ТЕКСТ")]
+        body: Option<String>,
+        #[arg(long, value_name = "EMAIL")]
+        cc: Vec<String>,
+        #[arg(long, value_name = "EMAIL")]
+        bcc: Vec<String>,
+        #[arg(long, value_name = "HTML")]
+        html: Option<String>,
+        #[arg(long = "public-url", value_name = "URL")]
+        public_url: String,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Только проверить mail-step с уже опубликованной ссылкой без реальной отправки"
+        )]
+        dry_run: bool,
+    },
     /// Работа с вложениями писем.
     Attachment {
         #[command(subcommand)]

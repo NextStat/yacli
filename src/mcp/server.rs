@@ -31,7 +31,11 @@ use crate::doctor::doctor_payload;
 use crate::error::{Result, YacliError};
 use crate::goal_router::goal_route_payload;
 use crate::home::home_payload;
-use crate::mail_link::{MailSendLinkRequest, review_mail_send_link, send_link_via_mail};
+use crate::mail_link::{
+    MailSendLinkOutcome, MailSendLinkRequest, MailSendPublishedLinkRequest, review_mail_send_link,
+    review_mail_send_published_link, send_link_via_mail, send_published_link_command,
+    send_published_link_via_mail,
+};
 use crate::next_actions::next_actions_payload;
 use crate::onboarding::onboarding_resource_payload;
 use crate::runtime_context::{
@@ -154,6 +158,17 @@ struct MailSendLinkToolRequest {
     source_path: String,
     disk_path: String,
     overwrite: bool,
+    dry_run: bool,
+}
+
+struct MailSendPublishedLinkToolRequest {
+    to: String,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+    subject: String,
+    text: Option<String>,
+    html: Option<String>,
+    public_url: String,
     dry_run: bool,
 }
 
@@ -1308,6 +1323,34 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Vec<Value> {
             ui_enabled,
         ),
         tool(
+            "yacli.mail.send_published_link",
+            "Send one email that includes an already published Yandex Disk public URL.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "to": { "type": "string" },
+                    "cc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "bcc": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "subject": { "type": "string" },
+                    "text": { "type": "string" },
+                    "html": { "type": "string" },
+                    "public_url": { "type": "string" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["to", "subject", "public_url"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
             "yacli.mail.reply",
             "Reply to one message by UID.",
             json!({
@@ -1721,6 +1764,19 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
                 source_path: required_string(&arguments, "source_path")?.to_string(),
                 disk_path: required_string(&arguments, "disk_path")?.to_string(),
                 overwrite: optional_bool(&arguments, "overwrite").unwrap_or(false),
+                dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
+            },
+        )?,
+        "yacli.mail.send_published_link" => mail_send_published_link(
+            arguments.get("account").and_then(Value::as_str),
+            MailSendPublishedLinkToolRequest {
+                to: required_string(&arguments, "to")?.to_string(),
+                cc: string_list(&arguments, "cc")?,
+                bcc: string_list(&arguments, "bcc")?,
+                subject: required_string(&arguments, "subject")?.to_string(),
+                text: optional_string_owned(&arguments, "text"),
+                html: optional_string_owned(&arguments, "html"),
+                public_url: required_string(&arguments, "public_url")?.to_string(),
                 dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
             },
         )?,
@@ -2535,7 +2591,7 @@ fn mail_send_link(account: Option<&str>, request: MailSendLinkToolRequest) -> Re
             }
         }))
     } else {
-        let result = send_link_via_mail(
+        let outcome = send_link_via_mail(
             &disk_base_url,
             &access_token,
             &context.smtp_host,
@@ -2543,32 +2599,108 @@ fn mail_send_link(account: Option<&str>, request: MailSendLinkToolRequest) -> Re
             auth,
             &send_link_request,
         )?;
-        let mut replay = format!(
-            "yacli mail send-link {} {} {} --source {} --path {} --dry-run",
-            shell_quote(result.sent.to.first().map(String::as_str).unwrap_or("")),
-            shell_quote(&result.sent.subject),
-            shell_quote("<текст письма>"),
-            shell_quote(&request.source_path),
-            shell_quote(&result.resource.path)
-        );
-        if request.overwrite {
-            replay.push_str(" --overwrite");
+        match outcome {
+            MailSendLinkOutcome::Sent { result } => {
+                let mut replay = format!(
+                    "yacli mail send-link {} {} {} --source {} --path {} --dry-run",
+                    shell_quote(result.sent.to.first().map(String::as_str).unwrap_or("")),
+                    shell_quote(&result.sent.subject),
+                    shell_quote("<текст письма>"),
+                    shell_quote(&request.source_path),
+                    shell_quote(&result.resource.path)
+                );
+                if request.overwrite {
+                    replay.push_str(" --overwrite");
+                }
+                record_activity_mcp(NewActivityEntry {
+                    source: "mcp".to_string(),
+                    operation: "mail.send_link".to_string(),
+                    account: resolved_account.clone(),
+                    summary: format!(
+                        "Отправлена публичная ссылка на файл: {} -> {}",
+                        result.resource.path,
+                        result.resource.public_url.as_deref().unwrap_or("-")
+                    ),
+                    replay_command: replay,
+                    undo: None,
+                });
+                Ok(json!({
+                    "account": resolved_account,
+                    "status": "completed",
+                    "result": result,
+                }))
+            }
+            MailSendLinkOutcome::Partial { partial } => {
+                record_activity_mcp(NewActivityEntry {
+                    source: "mcp".to_string(),
+                    operation: "mail.send_link.partial".to_string(),
+                    account: resolved_account.clone(),
+                    summary: format!(
+                        "Публичная ссылка создана, но письмо не отправлено: {} -> {}",
+                        partial.resource.path, partial.recovery.share_public_link.public_url
+                    ),
+                    replay_command: partial.recovery.retry_mail_step.command.clone(),
+                    undo: Some(disk_publish_undo(&partial.resource)),
+                });
+                Ok(json!({
+                    "account": resolved_account,
+                    "status": "partial",
+                    "partial": partial,
+                }))
+            }
         }
+    }
+}
+
+fn mail_send_published_link(
+    account: Option<&str>,
+    request: MailSendPublishedLinkToolRequest,
+) -> Result<Value> {
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let send_request = MailSendPublishedLinkRequest {
+        to: vec![request.to],
+        cc: request.cc,
+        bcc: request.bcc,
+        subject: request.subject,
+        text: request.text,
+        html: request.html,
+        public_url: request.public_url,
+    };
+
+    if request.dry_run {
+        let review = review_mail_send_published_link(auth, &send_request)?;
+        Ok(json!({
+            "account": resolved_account,
+            "dry_run": true,
+            "review": review,
+            "smtp": {
+                "host": context.smtp_host,
+                "port": context.smtp_port
+            }
+        }))
+    } else {
+        let sent = send_published_link_via_mail(
+            &context.smtp_host,
+            context.smtp_port,
+            auth,
+            &send_request,
+        )?;
         record_activity_mcp(NewActivityEntry {
             source: "mcp".to_string(),
-            operation: "mail.send_link".to_string(),
+            operation: "mail.send_published_link".to_string(),
             account: resolved_account.clone(),
             summary: format!(
-                "Отправлена публичная ссылка на файл: {} -> {}",
-                result.resource.path,
-                result.resource.public_url.as_deref().unwrap_or("-")
+                "Отправлена уже опубликованная ссылка: {}",
+                send_request.public_url
             ),
-            replay_command: replay,
+            replay_command: send_published_link_command(&send_request, true),
             undo: None,
         });
         Ok(json!({
             "account": resolved_account,
-            "result": result,
+            "status": "completed",
+            "public_url": send_request.public_url,
+            "sent": sent,
         }))
     }
 }

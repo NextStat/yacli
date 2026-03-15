@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::disk::{
     DiskResource, DiskUploadReview, PrivateDiskPublishRequest, PrivateDiskUploadRequest,
@@ -28,6 +29,17 @@ pub struct MailSendLinkRequest {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct MailSendPublishedLinkRequest {
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    pub public_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct MailSendLinkReview {
     pub upload: DiskUploadReview,
     pub mail_review: MailSendReview,
@@ -35,10 +47,66 @@ pub struct MailSendLinkReview {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct MailSendPublishedLinkReview {
+    pub mail_review: MailSendReview,
+    pub public_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct MailSendLinkResult {
     pub upload: UploadedFile,
     pub resource: DiskResource,
     pub sent: SentMail,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MailSendLinkOutcome {
+    Sent { result: MailSendLinkResult },
+    Partial { partial: MailSendLinkPartialFailure },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MailSendLinkPartialFailure {
+    pub upload: UploadedFile,
+    pub resource: DiskResource,
+    pub failed_stage: String,
+    pub error: MailSendLinkPartialError,
+    pub recovery: MailSendLinkRecovery,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MailSendLinkPartialError {
+    pub code: &'static str,
+    pub message: String,
+    pub exit_code: i32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MailSendLinkRecovery {
+    pub share_public_link: SharePublicLinkRecovery,
+    pub retry_mail_step: RetryMailStepRecovery,
+    pub cleanup_public_link: CleanupPublicLinkRecovery,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SharePublicLinkRecovery {
+    pub public_url: String,
+    pub public_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RetryMailStepRecovery {
+    pub tool: String,
+    pub command: String,
+    pub arguments: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CleanupPublicLinkRecovery {
+    pub tool: String,
+    pub command: String,
+    pub arguments: Value,
 }
 
 pub fn review_mail_send_link(
@@ -79,6 +147,66 @@ pub fn review_mail_send_link(
     })
 }
 
+pub fn review_mail_send_published_link(
+    auth: MailSessionAuth,
+    request: &MailSendPublishedLinkRequest,
+) -> Result<MailSendPublishedLinkReview> {
+    let mail_review = review_mail_submission(
+        auth,
+        MailSendRequest {
+            to: request.to.clone(),
+            cc: request.cc.clone(),
+            bcc: request.bcc.clone(),
+            subject: request.subject.clone(),
+            text: compose_text_body(
+                request.text.as_deref(),
+                request.html.as_deref(),
+                &request.public_url,
+            ),
+            html: compose_html_body(
+                request.text.as_deref(),
+                request.html.as_deref(),
+                &request.public_url,
+            ),
+            attachments: Vec::new(),
+            thread_headers: None,
+        },
+    )?;
+
+    Ok(MailSendPublishedLinkReview {
+        mail_review,
+        public_url: request.public_url.clone(),
+    })
+}
+
+pub fn send_published_link_via_mail(
+    smtp_host: &str,
+    smtp_port: u16,
+    auth: MailSessionAuth,
+    request: &MailSendPublishedLinkRequest,
+) -> Result<SentMail> {
+    let send_request = MailSendRequest {
+        to: request.to.clone(),
+        cc: request.cc.clone(),
+        bcc: request.bcc.clone(),
+        subject: request.subject.clone(),
+        text: compose_text_body(
+            request.text.as_deref(),
+            request.html.as_deref(),
+            &request.public_url,
+        ),
+        html: compose_html_body(
+            request.text.as_deref(),
+            request.html.as_deref(),
+            &request.public_url,
+        ),
+        attachments: Vec::new(),
+        thread_headers: None,
+    };
+
+    send_mail_message(smtp_host, smtp_port, auth, send_request)
+}
+
 pub fn send_link_via_mail(
     disk_base_url: &str,
     access_token: &str,
@@ -86,7 +214,7 @@ pub fn send_link_via_mail(
     smtp_port: u16,
     auth: MailSessionAuth,
     request: &MailSendLinkRequest,
-) -> Result<MailSendLinkResult> {
+) -> Result<MailSendLinkOutcome> {
     let (_, upload) = upload_private_resource(
         disk_base_url,
         access_token,
@@ -110,24 +238,31 @@ pub fn send_link_via_mail(
         ))
     })?;
 
-    let send_request = MailSendRequest {
+    let send_request = MailSendPublishedLinkRequest {
         to: request.to.clone(),
         cc: request.cc.clone(),
         bcc: request.bcc.clone(),
         subject: request.subject.clone(),
-        text: compose_text_body(request.text.as_deref(), request.html.as_deref(), public_url),
-        html: compose_html_body(request.text.as_deref(), request.html.as_deref(), public_url),
-        attachments: Vec::new(),
-        thread_headers: None,
+        text: request.text.clone(),
+        html: request.html.clone(),
+        public_url: public_url.to_string(),
     };
 
-    let sent = send_mail_message(smtp_host, smtp_port, auth, send_request)
-        .map_err(|err| wrap_partial_failure(err, &resource))?;
+    let sent = match send_published_link_via_mail(smtp_host, smtp_port, auth, &send_request) {
+        Ok(sent) => sent,
+        Err(err) => {
+            return Ok(MailSendLinkOutcome::Partial {
+                partial: partial_failure(&upload, &resource, &send_request, err),
+            });
+        }
+    };
 
-    Ok(MailSendLinkResult {
-        upload,
-        resource,
-        sent,
+    Ok(MailSendLinkOutcome::Sent {
+        result: MailSendLinkResult {
+            upload,
+            resource,
+            sent,
+        },
     })
 }
 
@@ -162,28 +297,104 @@ fn escape_html(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn wrap_partial_failure(err: YacliError, resource: &DiskResource) -> YacliError {
-    let message = format!(
-        "mail send-link already uploaded and published `{}`; public_url: {}; sending email then failed: {}",
-        resource.path,
-        resource.public_url.as_deref().unwrap_or("-"),
-        err
-    );
-    match err {
-        YacliError::AccountExists(_) => YacliError::AccountExists(message),
-        YacliError::AccountNotFound(_) => YacliError::AccountNotFound(message),
-        YacliError::CurrentAccountMissing => YacliError::Config(message),
-        YacliError::Validation(_) => YacliError::Validation(message),
-        YacliError::Config(_) => YacliError::Config(message),
-        YacliError::Io(_) => YacliError::Io(message),
-        YacliError::Serialization(_) => YacliError::Serialization(message),
-        YacliError::Network(_) => YacliError::Network(message),
-        YacliError::Api(_) => YacliError::Api(message),
-        YacliError::Auth(_) => YacliError::Auth(message),
-        YacliError::OutputExists(_) => YacliError::OutputExists(message),
-        YacliError::UnsupportedOperation(_) => YacliError::UnsupportedOperation(message),
-        YacliError::Integrity(_) => YacliError::Integrity(message),
+fn partial_failure(
+    upload: &UploadedFile,
+    resource: &DiskResource,
+    request: &MailSendPublishedLinkRequest,
+    err: YacliError,
+) -> MailSendLinkPartialFailure {
+    let public_url = resource.public_url.as_deref().unwrap_or("-").to_string();
+    MailSendLinkPartialFailure {
+        upload: upload.clone(),
+        resource: resource.clone(),
+        failed_stage: "mail_send".to_string(),
+        error: MailSendLinkPartialError {
+            code: err.code(),
+            message: err.to_string(),
+            exit_code: err.exit_code(),
+        },
+        recovery: MailSendLinkRecovery {
+            share_public_link: SharePublicLinkRecovery {
+                public_url: public_url.clone(),
+                public_key: resource.public_key.clone(),
+            },
+            retry_mail_step: RetryMailStepRecovery {
+                tool: "yacli.mail.send_published_link".to_string(),
+                command: send_published_link_command(request, true),
+                arguments: json!({
+                    "to": request.to.first().cloned().unwrap_or_default(),
+                    "cc": request.cc,
+                    "bcc": request.bcc,
+                    "subject": request.subject,
+                    "text": request.text,
+                    "html": request.html,
+                    "public_url": request.public_url,
+                    "dry_run": true,
+                }),
+            },
+            cleanup_public_link: CleanupPublicLinkRecovery {
+                tool: "yacli.disk.unpublish".to_string(),
+                command: format!(
+                    "yacli disk unpublish {} --dry-run",
+                    shell_quote(&resource.path)
+                ),
+                arguments: json!({
+                    "path": resource.path,
+                    "dry_run": true,
+                }),
+            },
+        },
     }
+}
+
+pub fn send_published_link_command(
+    request: &MailSendPublishedLinkRequest,
+    dry_run: bool,
+) -> String {
+    let mut command = format!(
+        "yacli mail send-published-link {} {}",
+        shell_quote(request.to.first().map(String::as_str).unwrap_or("")),
+        shell_quote(&request.subject)
+    );
+    if let Some(text) = request.text.as_deref() {
+        command.push(' ');
+        command.push_str(&shell_quote(text));
+    }
+    if !request.cc.is_empty() {
+        for cc in &request.cc {
+            command.push_str(" --cc ");
+            command.push_str(&shell_quote(cc));
+        }
+    }
+    if !request.bcc.is_empty() {
+        for bcc in &request.bcc {
+            command.push_str(" --bcc ");
+            command.push_str(&shell_quote(bcc));
+        }
+    }
+    if let Some(html) = request.html.as_deref() {
+        command.push_str(" --html ");
+        command.push_str(&shell_quote(html));
+    }
+    command.push_str(" --public-url ");
+    command.push_str(&shell_quote(&request.public_url));
+    if dry_run {
+        command.push_str(" --dry-run");
+    }
+    command
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '.' | ':' | '@'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 #[cfg(test)]
@@ -224,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_partial_failure_keeps_public_url_context() {
+    fn partial_failure_keeps_public_url_context_and_recovery_actions() {
         let resource = DiskResource {
             name: "report.txt".to_string(),
             path: "disk:/docs/report.txt".to_string(),
@@ -239,10 +450,37 @@ mod tests {
             public_key: Some("key".to_string()),
             children: None,
         };
-        let err = wrap_partial_failure(YacliError::Network("smtp failed".to_string()), &resource);
-        assert!(
-            err.to_string()
-                .contains("public_url: https://disk.yandex.ru/i/report")
+        let upload = UploadedFile {
+            source_path: "/tmp/report.txt".to_string(),
+            remote_path: "disk:/docs/report.txt".to_string(),
+            overwrite: false,
+            bytes_written: 12,
+            sha256: "abc".to_string(),
+            attempts: 1,
+            elapsed_ms: 10,
+        };
+        let partial = partial_failure(
+            &upload,
+            &resource,
+            &MailSendPublishedLinkRequest {
+                to: vec!["person@example.com".to_string()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Отчёт".to_string(),
+                text: Some("Отправляю ссылку".to_string()),
+                html: None,
+                public_url: "https://disk.yandex.ru/i/report".to_string(),
+            },
+            YacliError::Network("smtp failed".to_string()),
+        );
+        assert_eq!(partial.error.code, "NETWORK_ERROR");
+        assert_eq!(
+            partial.recovery.share_public_link.public_url,
+            "https://disk.yandex.ru/i/report"
+        );
+        assert_eq!(
+            partial.recovery.cleanup_public_link.tool,
+            "yacli.disk.unpublish"
         );
     }
 }

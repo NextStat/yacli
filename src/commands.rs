@@ -53,8 +53,10 @@ use crate::mail::{
     send_mail_message,
 };
 use crate::mail_link::{
-    MailSendLinkRequest, MailSendLinkResult, MailSendLinkReview, review_mail_send_link,
-    send_link_via_mail,
+    MailSendLinkOutcome, MailSendLinkPartialFailure, MailSendLinkRequest, MailSendLinkResult,
+    MailSendLinkReview, MailSendPublishedLinkRequest, MailSendPublishedLinkReview,
+    review_mail_send_link, review_mail_send_published_link, send_link_via_mail,
+    send_published_link_command, send_published_link_via_mail,
 };
 use crate::mcp::install::execute_install;
 use crate::model::{AccountConfig, CalendarAuthMode, DiskAuthMode, MailAuthMode, NewAccountInput};
@@ -2560,7 +2562,7 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     render_mail_send_link_review_table(&resolved_account, &review),
                 )
             } else {
-                let result = send_link_via_mail(
+                let outcome = send_link_via_mail(
                     &disk_base_url,
                     &access_token,
                     &context.smtp_host,
@@ -2568,44 +2570,148 @@ fn execute_mail(format: OutputFormat, action: MailCommand) -> Result<RenderedOut
                     auth,
                     &request,
                 )?;
+                match outcome {
+                    MailSendLinkOutcome::Sent { result } => ok_output(
+                        format,
+                        "mail.send_link",
+                        json!({
+                            "account": resolved_account,
+                            "status": "completed",
+                            "result": result,
+                        }),
+                        render_mail_send_link_table(&resolved_account, &result),
+                    )
+                    .inspect(|_| {
+                        let mut replay = format!(
+                            "yacli mail send-link {} {} {} --source {} --path {} --dry-run",
+                            shell_quote(
+                                result
+                                    .sent
+                                    .to
+                                    .first()
+                                    .map(String::as_str)
+                                    .unwrap_or_default()
+                            ),
+                            shell_quote(&result.sent.subject),
+                            shell_quote("<текст письма>"),
+                            shell_quote(&request.source.display().to_string()),
+                            shell_quote(&request.disk_path)
+                        );
+                        if request.overwrite {
+                            replay.push_str(" --overwrite");
+                        }
+                        record_activity_best_effort(NewActivityEntry {
+                            source: "cli".to_string(),
+                            operation: "mail.send_link".to_string(),
+                            account: resolved_account.clone(),
+                            summary: format!(
+                                "Отправлена публичная ссылка на файл: {} -> {}",
+                                result.resource.path,
+                                result.resource.public_url.as_deref().unwrap_or("-")
+                            ),
+                            replay_command: replay,
+                            undo: None,
+                        });
+                    }),
+                    MailSendLinkOutcome::Partial { partial } => {
+                        record_activity_best_effort(NewActivityEntry {
+                            source: "cli".to_string(),
+                            operation: "mail.send_link.partial".to_string(),
+                            account: resolved_account.clone(),
+                            summary: format!(
+                                "Публичная ссылка создана, но письмо не отправлено: {} -> {}",
+                                partial.resource.path,
+                                partial.recovery.share_public_link.public_url
+                            ),
+                            replay_command: partial.recovery.retry_mail_step.command.clone(),
+                            undo: Some(disk_publish_undo(&partial.resource)),
+                        });
+                        non_ok_output(
+                            format,
+                            "mail.send_link",
+                            json!({
+                                "account": resolved_account,
+                                "status": "partial",
+                                "partial": partial,
+                            }),
+                            render_mail_send_link_partial_table(&resolved_account, &partial),
+                            partial.error.exit_code,
+                        )
+                    }
+                }
+            }
+        }
+        MailCommand::SendPublishedLink {
+            account,
+            to,
+            cc,
+            bcc,
+            subject,
+            body,
+            html,
+            public_url,
+            dry_run,
+        } => {
+            let (resolved_account, auth, context) =
+                resolve_mail_private_context(account.as_deref())?;
+            let request = MailSendPublishedLinkRequest {
+                to: vec![to],
+                cc,
+                bcc,
+                subject,
+                text: body,
+                html,
+                public_url,
+            };
+
+            if dry_run {
+                let review = review_mail_send_published_link(auth, &request)?;
                 ok_output(
                     format,
-                    "mail.send_link",
+                    "mail.send_published_link.review",
                     json!({
                         "account": resolved_account,
-                        "result": result,
+                        "smtp": {
+                            "host": context.smtp_host,
+                            "port": context.smtp_port,
+                        },
+                        "dry_run": true,
+                        "review": review,
                     }),
-                    render_mail_send_link_table(&resolved_account, &result),
+                    render_mail_send_published_link_review_table(&resolved_account, &review),
+                )
+            } else {
+                let sent = send_published_link_via_mail(
+                    &context.smtp_host,
+                    context.smtp_port,
+                    auth,
+                    &request,
+                )?;
+                ok_output(
+                    format,
+                    "mail.send_published_link",
+                    json!({
+                        "account": resolved_account,
+                        "status": "completed",
+                        "public_url": request.public_url,
+                        "sent": sent,
+                    }),
+                    render_mail_send_published_link_table(
+                        &resolved_account,
+                        &request.public_url,
+                        &sent,
+                    ),
                 )
                 .inspect(|_| {
-                    let mut replay = format!(
-                        "yacli mail send-link {} {} {} --source {} --path {} --dry-run",
-                        shell_quote(
-                            result
-                                .sent
-                                .to
-                                .first()
-                                .map(String::as_str)
-                                .unwrap_or_default()
-                        ),
-                        shell_quote(&result.sent.subject),
-                        shell_quote("<текст письма>"),
-                        shell_quote(&request.source.display().to_string()),
-                        shell_quote(&request.disk_path)
-                    );
-                    if request.overwrite {
-                        replay.push_str(" --overwrite");
-                    }
                     record_activity_best_effort(NewActivityEntry {
                         source: "cli".to_string(),
-                        operation: "mail.send_link".to_string(),
+                        operation: "mail.send_published_link".to_string(),
                         account: resolved_account.clone(),
                         summary: format!(
-                            "Отправлена публичная ссылка на файл: {} -> {}",
-                            result.resource.path,
-                            result.resource.public_url.as_deref().unwrap_or("-")
+                            "Отправлена уже опубликованная ссылка: {}",
+                            request.public_url
                         ),
-                        replay_command: replay,
+                        replay_command: send_published_link_command(&request, true),
                         undo: None,
                     });
                 })
@@ -3041,6 +3147,29 @@ fn ok_output(
     })
 }
 
+fn non_ok_output(
+    format: OutputFormat,
+    operation: &'static str,
+    payload: serde_json::Value,
+    table: String,
+    exit_code: i32,
+) -> Result<RenderedOutput> {
+    let Some(mut object) = payload.as_object().cloned() else {
+        return Err(YacliError::Serialization(
+            "expected object payload".to_string(),
+        ));
+    };
+    object.insert("ok".to_string(), json!(false));
+    object.insert("operation".to_string(), json!(operation));
+
+    Ok(RenderedOutput {
+        format,
+        json: serde_json::Value::Object(object),
+        table,
+        exit_code,
+    })
+}
+
 fn cli_transfer_progress(
     direction: &'static str,
     target: &str,
@@ -3369,6 +3498,16 @@ fn all_guide_commands() -> Vec<GuideCommandEntry> {
             examples: vec![
                 "yacli mail send-link person@example.com \"Материалы\" \"Отправляю ссылку\" --source ./archive.zip --path disk:/docs/archive/archive.zip",
                 "yacli mail send-link person@example.com \"Материалы\" \"Отправляю ссылку\" --source ./archive.zip --path disk:/docs/archive/archive.zip --dry-run",
+            ],
+        },
+        GuideCommandEntry {
+            path: "mail send-published-link",
+            topic: "mail",
+            summary: "Повторно отправить письмо с уже опубликованной ссылкой без повторного upload/publish.",
+            requires_account: true,
+            examples: vec![
+                "yacli mail send-published-link person@example.com \"Материалы\" \"Отправляю ссылку\" --public-url https://disk.yandex.ru/i/archive-link",
+                "yacli mail send-published-link person@example.com \"Материалы\" \"Отправляю ссылку\" --public-url https://disk.yandex.ru/i/archive-link --dry-run",
             ],
         },
         GuideCommandEntry {
@@ -4967,6 +5106,31 @@ fn render_mail_send_link_review_table(account: &str, review: &MailSendLinkReview
     lines.join("\n")
 }
 
+fn render_mail_send_published_link_review_table(
+    account: &str,
+    review: &MailSendPublishedLinkReview,
+) -> String {
+    let lines = [
+        format!("account\t{account}"),
+        format!("public_url\t{}", review.public_url),
+        format!("to\t{}", review.mail_review.sent.to.join(", ")),
+        format!(
+            "cc\t{}",
+            if review.mail_review.sent.cc.is_empty() {
+                "-".to_string()
+            } else {
+                review.mail_review.sent.cc.join(", ")
+            }
+        ),
+        format!("bcc_count\t{}", review.mail_review.sent.bcc_count),
+        format!("subject\t{}", review.mail_review.sent.subject),
+        format!("body_kind\t{}", review.mail_review.sent.body_kind),
+        format!("attachment_count\t{}", review.mail_review.attachment_count),
+    ];
+
+    lines.join("\n")
+}
+
 fn render_mail_send_link_table(account: &str, result: &MailSendLinkResult) -> String {
     render_key_value_table(&[
         ("account", account.to_string()),
@@ -5007,6 +5171,67 @@ fn render_mail_send_link_table(account: &str, result: &MailSendLinkResult) -> St
         ("subject", result.sent.subject.clone()),
         ("message_id", result.sent.message_id.clone()),
         ("body_kind", result.sent.body_kind.clone()),
+    ])
+}
+
+fn render_mail_send_published_link_table(
+    account: &str,
+    public_url: &str,
+    sent: &SentMail,
+) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("public_url", public_url.to_string()),
+        ("to", sent.to.join(", ")),
+        (
+            "cc",
+            if sent.cc.is_empty() {
+                "-".to_string()
+            } else {
+                sent.cc.join(", ")
+            },
+        ),
+        ("bcc_count", sent.bcc_count.to_string()),
+        ("subject", sent.subject.clone()),
+        ("message_id", sent.message_id.clone()),
+        ("body_kind", sent.body_kind.clone()),
+    ])
+}
+
+fn render_mail_send_link_partial_table(
+    account: &str,
+    partial: &MailSendLinkPartialFailure,
+) -> String {
+    render_key_value_table(&[
+        ("account", account.to_string()),
+        ("status", "partial".to_string()),
+        ("failed_stage", partial.failed_stage.clone()),
+        ("source_path", partial.upload.source_path.clone()),
+        ("remote_path", partial.upload.remote_path.clone()),
+        (
+            "public_url",
+            partial.recovery.share_public_link.public_url.clone(),
+        ),
+        (
+            "public_key",
+            partial
+                .recovery
+                .share_public_link
+                .public_key
+                .as_deref()
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        ("error_code", partial.error.code.to_string()),
+        ("error_message", partial.error.message.clone()),
+        (
+            "retry_mail_command",
+            partial.recovery.retry_mail_step.command.clone(),
+        ),
+        (
+            "cleanup_public_link_command",
+            partial.recovery.cleanup_public_link.command.clone(),
+        ),
     ])
 }
 

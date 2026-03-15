@@ -1103,6 +1103,177 @@ client_id = "client-123"
 }
 
 #[test]
+fn mcp_stdio_mail_send_link_returns_partial_recovery_when_smtp_fails_after_publish() {
+    let temp = tempdir().expect("tempdir");
+    let mut server = Server::new();
+    let source_path = temp.path().join("archive.zip");
+    fs::write(&source_path, "archive body").expect("source");
+    write_accounts_file(
+        temp.path(),
+        &format!(
+            r#"
+version = 1
+
+[accounts.mock]
+email = "me@yandex.ru"
+default = true
+
+[accounts.mock.mail]
+enabled = true
+auth_mode = "oauth_xoauth2"
+imap_host = "imap.yandex.com"
+imap_port = 993
+smtp_host = "127.0.0.1"
+smtp_port = 9
+credential_ref = "store:mail"
+
+[accounts.mock.calendar]
+enabled = true
+auth_mode = "app_password"
+caldav_base_url = "https://caldav.yandex.ru"
+
+[accounts.mock.disk]
+enabled = true
+auth_mode = "oauth"
+rest_base_url = "{}"
+credential_ref = "store:disk"
+"#,
+            server.url()
+        ),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:imap_full", "mail:smtp"]
+client_id = "client-123"
+
+[accounts.mock.services.disk]
+kind = "oauth_pkce"
+access_token = "disk-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["cloud_api:disk.write"]
+client_id = "client-123"
+"#,
+    );
+
+    let _ticket = server
+        .mock("GET", "/v1/disk/resources/upload")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/archive.zip".into()),
+            Matcher::UrlEncoded("overwrite".into(), "false".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"{{"href":"{}/upload-target/archive.zip","method":"PUT","templated":false}}"#,
+            server.url()
+        ))
+        .create();
+    let _upload = server
+        .mock("PUT", "/upload-target/archive.zip")
+        .match_body(Matcher::Exact("archive body".to_string()))
+        .with_status(201)
+        .create();
+    let _publish = server
+        .mock("PUT", "/v1/disk/resources/publish")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::UrlEncoded(
+            "path".into(),
+            "disk:/docs/archive.zip".into(),
+        ))
+        .with_status(200)
+        .create();
+    let _metadata = server
+        .mock("GET", "/v1/disk/resources")
+        .match_header("authorization", "OAuth disk-token")
+        .match_query(Matcher::AllOf(vec![
+            Matcher::UrlEncoded("path".into(), "disk:/docs/archive.zip".into()),
+            Matcher::UrlEncoded("limit".into(), "100".into()),
+            Matcher::UrlEncoded("offset".into(), "0".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+  "name": "archive.zip",
+  "path": "disk:/docs/archive.zip",
+  "type": "file",
+  "size": 12,
+  "mime_type": "application/zip",
+  "public_url": "https://disk.yandex.ru/i/archive-link",
+  "public_key": "archive-link-key",
+  "revision": 7
+}"#,
+        )
+        .create();
+
+    let input = [
+        initialize_request(true),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(
+            2,
+            "tools/call",
+            json!({
+                "name": "yacli.mail.send_link",
+                "arguments": {
+                    "account": "mock",
+                    "to": "person@example.com",
+                    "subject": "Материалы",
+                    "text": "Отправляю ссылку",
+                    "source_path": source_path.display().to_string(),
+                    "disk_path": "disk:/docs/archive.zip"
+                }
+            }),
+        ),
+    ]
+    .concat();
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let responses = parse_responses(&output);
+    let structured = &responses[1]["result"]["structuredContent"];
+    assert_eq!(structured["status"], "partial");
+    assert_eq!(
+        structured["partial"]["recovery"]["share_public_link"]["public_url"],
+        "https://disk.yandex.ru/i/archive-link"
+    );
+    assert_eq!(
+        structured["partial"]["recovery"]["retry_mail_step"]["tool"],
+        "yacli.mail.send_published_link"
+    );
+
+    let activity = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items[0]["operation"], "mail.send_link.partial");
+    assert_eq!(items[0]["source"], "mcp");
+}
+
+#[test]
 fn mcp_stdio_mail_send_dry_run_recommends_send_link_for_oversized_attachment() {
     let temp = tempdir().expect("tempdir");
     let attachment_path = temp.path().join("archive.zip");

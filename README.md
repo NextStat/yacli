@@ -200,6 +200,8 @@ yacli mail send person@example.com "Счёт" "Во вложении файл" -
 yacli mail send person@example.com "Счёт" "Во вложении файл" --attach ./invoice.pdf --dry-run
 yacli mail send-link person@example.com "Материалы" "Отправляю ссылку" --source ./archive.zip --path disk:/docs/archive/archive.zip
 yacli mail send-link person@example.com "Материалы" "Отправляю ссылку" --source ./archive.zip --path disk:/docs/archive/archive.zip --dry-run
+yacli mail send-published-link person@example.com "Материалы" "Отправляю ссылку" --public-url https://disk.yandex.ru/i/archive-link
+yacli mail send-published-link person@example.com "Материалы" "Отправляю ссылку" --public-url https://disk.yandex.ru/i/archive-link --dry-run
 yacli disk upload-link --source ./archive.zip --path disk:/docs/archive/archive.zip
 yacli disk upload-link --source ./archive.zip --path disk:/docs/archive/archive.zip --dry-run
 ```
@@ -219,6 +221,8 @@ yacli mail invite create-event 1353 --index 1
 - `--dry-run` показывает review отправки без реального SMTP-вызова.
 - Если собранное письмо уже слишком тяжёлое для безопасной SMTP-отправки, `mail send --dry-run` честно рекомендует workflow `send-link-by-mail`, а реальный `mail send` блокируется до сетевого шага с той же подсказкой.
 - `mail send-link` — правильный flow для больших файлов: upload на Диск, publish ссылки и письмо со ссылкой в одном шаге.
+- Если у `mail send-link` уже случился `upload + publish`, а SMTP упал, команда возвращает `status=partial` с готовыми recovery actions: повторить только mail-step через `mail send-published-link`, вручную поделиться ссылкой или отозвать её.
+- `mail send-published-link` — честный retry mail-step для уже опубликованной ссылки без повторного upload/publish.
 - `disk upload-link` — правильный flow, когда нужно просто получить публичную ссылку без отправки письма.
 
 <details>

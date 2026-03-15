@@ -1204,6 +1204,17 @@ fn mail_send_link_help_uses_source_and_path_flags() {
 }
 
 #[test]
+fn mail_send_published_link_help_uses_public_url_flag() {
+    yacli()
+        .args(["mail", "send-published-link", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "yacli mail send-published-link [OPTIONS] --public-url <URL> <EMAIL> <ТЕМА> [ТЕКСТ]",
+        ));
+}
+
+#[test]
 fn disk_upload_link_help_uses_source_and_path_flags() {
     yacli()
         .args(["disk", "upload-link", "--help"])
@@ -3931,7 +3942,7 @@ client_id = "client-123"
 }
 
 #[test]
-fn mail_send_link_surfaces_public_url_when_smtp_fails_after_publish() {
+fn mail_send_link_surfaces_partial_recovery_when_smtp_fails_after_publish() {
     let temp = tempdir().expect("tempdir");
     let mut server = Server::new();
     let source_path = temp.path().join("archive.zip");
@@ -4049,7 +4060,7 @@ client_id = "client-123"
         )
         .create();
 
-    yacli()
+    let output = yacli()
         .env("YACLI_CONFIG_DIR", temp.path())
         .args([
             "mail",
@@ -4066,12 +4077,103 @@ client_id = "client-123"
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "mail send-link already uploaded and published `disk:/docs/archive.zip`",
-        ))
-        .stderr(predicate::str::contains(
-            "public_url: https://disk.yandex.ru/i/archive-link",
-        ));
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "mail.send_link");
+    assert_eq!(value["status"], "partial");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["partial"]["failed_stage"], "mail_send");
+    assert_eq!(
+        value["partial"]["recovery"]["share_public_link"]["public_url"],
+        "https://disk.yandex.ru/i/archive-link"
+    );
+    assert_eq!(
+        value["partial"]["recovery"]["retry_mail_step"]["tool"],
+        "yacli.mail.send_published_link"
+    );
+    assert_eq!(
+        value["partial"]["recovery"]["cleanup_public_link"]["tool"],
+        "yacli.disk.unpublish"
+    );
+
+    let activity_output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args(["activity", "list", "--limit", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let activity_value: Value = serde_json::from_slice(&activity_output).expect("activity json");
+    let items = activity_value["items"].as_array().expect("items");
+    assert_eq!(items[0]["operation"], "mail.send_link.partial");
+    assert_eq!(items[0]["undo"]["kind"], "disk_unpublish");
+    assert!(
+        items[0]["replay_command"]
+            .as_str()
+            .expect("replay command")
+            .contains("mail send-published-link")
+    );
+}
+
+#[test]
+fn mail_send_published_link_dry_run_reviews_mail_without_network() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_account_with_refs(
+        temp.path(),
+        "https://cloud-api.yandex.net",
+        "oauth_xoauth2",
+        Some("store:mail"),
+        Some("store:disk"),
+    );
+    write_credentials_file(
+        temp.path(),
+        r#"
+version = 1
+
+[accounts.mock.services.mail]
+kind = "oauth_pkce"
+access_token = "mail-token"
+token_type = "bearer"
+expires_at_epoch_secs = 4102444800
+scope = ["mail:smtp", "mail:imap_full"]
+client_id = "client-123"
+"#,
+    );
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .args([
+            "mail",
+            "send-published-link",
+            "--account",
+            "mock",
+            "--public-url",
+            "https://disk.yandex.ru/i/archive-link",
+            "person@example.com",
+            "Материалы",
+            "Отправляю ссылку",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("valid json");
+    assert_eq!(value["operation"], "mail.send_published_link.review");
+    assert_eq!(
+        value["review"]["public_url"],
+        "https://disk.yandex.ru/i/archive-link"
+    );
+    assert_eq!(
+        value["review"]["mail_review"]["sent"]["subject"],
+        "Материалы"
+    );
 }
 
 #[test]
