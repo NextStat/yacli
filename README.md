@@ -93,7 +93,7 @@ yacli update --check                   # проверить без устано�
 Для private release mirror:
 
 ```bash
-export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.5.1'
+export YACLI_UPDATE_BASE_URL='https://mirror.example.test/releases/download/v0.5.2'
 yacli update --check
 ```
 
