@@ -122,6 +122,7 @@ yacli setup me@yandex.ru --calendar-app-password <пароль> --client claude
 - proactive suggestions через `yacli suggest` и `resource://yacli/suggestions`, чтобы получать recovery / cleanup / undo подсказки из реальной activity history.
   В `Unified Home` эти suggestions теперь не только видны, но и ведут прямо в `undo` или канонический workflow/review path.
 - `workflow show` и `resource://yacli/workflow/{workflow}` теперь отдают server-driven `execution.state` и `execution.available_actions`, чтобы CLI, MCP и Apps видели один и тот же actionable lifecycle workflow: `needs_input`, `review_ready`, `ready`, `recovery_ready`, `undo_ready`, `applied`, `undone`.
+- Workflow panel в Apps теперь использует server-driven `execution.actions` для `next action`, так что `connect / review / resume / cleanup / undo / replay` идут из одного канонического workflow contract, а не из UI-эвристик.
 
 ### С чего начать
 

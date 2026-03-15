@@ -430,6 +430,7 @@ fn workflow_show_returns_steps_prompt_and_skill() {
         workflow["execution"]["available_actions"][0],
         "connect_services"
     );
+    assert_eq!(workflow["execution"]["actions"][0]["kind"], "open_doctor");
 }
 
 #[test]

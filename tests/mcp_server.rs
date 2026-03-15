@@ -3434,6 +3434,12 @@ fn mcp_stdio_apps_capable_clients_receive_ui_metadata_and_resources() {
     assert!(html.contains("openTopSuggestion"));
     assert!(html.contains("applyTopSuggestion"));
     assert!(html.contains("workflowExecutionPayload"));
+    assert!(html.contains("workflowExecutionActions"));
+    assert!(html.contains("workflowNextActionPayload"));
+    assert!(html.contains("action-open-workflow-next"));
+    assert!(html.contains("action-apply-workflow-next"));
+    assert!(html.contains("openWorkflowNextAction"));
+    assert!(html.contains("applyWorkflowNextAction"));
     assert!(html.contains("refreshOnboardingResource"));
     assert!(html.contains("shareOnboarding"));
     assert!(html.contains("resource://yacli/suggestions"));
@@ -4408,6 +4414,10 @@ rest_base_url = "https://cloud-api.yandex.net"
     assert_eq!(
         workflow_payload["execution"]["available_actions"][0],
         "connect_services"
+    );
+    assert_eq!(
+        workflow_payload["execution"]["actions"][0]["kind"],
+        "open_doctor"
     );
 
     let goal_onboarding_contents = responses[17]["result"]["contents"]

@@ -722,6 +722,8 @@
                 <button id="action-open-workflow-prompt" class="secondary">Open workflow prompt</button>
                 <button id="action-open-workflow-skill" class="secondary">Open workflow skill</button>
                 <button id="action-open-workflow-runner" class="secondary">Open workflow runner</button>
+                <button id="action-open-workflow-next" class="secondary">Open workflow next action</button>
+                <button id="action-apply-workflow-next" class="secondary">Apply workflow next action</button>
                 <button id="action-preview-workflow" class="secondary">Preview workflow action</button>
                 <button id="action-apply-workflow" class="secondary">Apply workflow action</button>
                 <button id="action-share-workflow-replay" class="secondary">Share workflow replay</button>
@@ -1250,6 +1252,8 @@
           actionOpenWorkflowPrompt: document.getElementById("action-open-workflow-prompt"),
           actionOpenWorkflowSkill: document.getElementById("action-open-workflow-skill"),
           actionOpenWorkflowRunner: document.getElementById("action-open-workflow-runner"),
+          actionOpenWorkflowNext: document.getElementById("action-open-workflow-next"),
+          actionApplyWorkflowNext: document.getElementById("action-apply-workflow-next"),
           actionShareWorkflowReplay: document.getElementById("action-share-workflow-replay"),
           actionShareActivityReplay: document.getElementById("action-share-activity-replay"),
           actionShareAuthContext: document.getElementById("action-share-auth-context"),
@@ -2474,6 +2478,11 @@
             : null;
         }
 
+        function workflowExecutionActions(detail) {
+          const execution = workflowExecutionPayload(detail);
+          return execution && Array.isArray(execution.actions) ? execution.actions : [];
+        }
+
         function workflowExecutionHasAction(action, detail) {
           const execution = workflowExecutionPayload(detail);
           const actions =
@@ -2531,6 +2540,13 @@
               return operations.includes(String(entry.operation || ""));
             }) || null
           );
+        }
+
+        function workflowNextActionPayload(detail) {
+          const actions = workflowExecutionActions(detail);
+          return actions.length > 0 && actions[0] && typeof actions[0] === "object"
+            ? actions[0]
+            : null;
         }
 
         function fallbackGoalTextHints() {
@@ -3264,6 +3280,10 @@
             disposed ||
             !workflowDryRunToolName() ||
             (workflowDetailPayload() && !workflowExecutionHasAction("review"));
+          elements.actionOpenWorkflowNext.disabled =
+            disposed || !workflowNextActionPayload();
+          elements.actionApplyWorkflowNext.disabled =
+            disposed || !workflowNextActionPayload();
           elements.actionApplyWorkflow.disabled =
             disposed ||
             !state.reviewedToolName ||
@@ -5516,8 +5536,88 @@
 
           if (preferredActivity) {
             focusPanel("panel-activity");
-            await readActivityResource();
+          await readActivityResource();
+        }
+
+        async function openWorkflowNextAction() {
+          if (!workflowDetailPayload()) {
+            await readWorkflowResource();
           }
+          const action = workflowNextActionPayload();
+          if (!action || typeof action !== "object") {
+            logEvent("workflow next blocked", "workflow has no next action");
+            return;
+          }
+
+          switch (action.kind) {
+            case "open_doctor":
+              state.bootstrap.preferredSection = "home";
+              focusPanel("panel-home");
+              await refreshDoctorResource();
+              break;
+            case "review_workflow":
+              await previewWorkflowAction();
+              break;
+            case "open_workflow_runner":
+              await openWorkflowRunner();
+              break;
+            case "open_activity":
+              if (!action.activity_id) {
+                logEvent("workflow next blocked", "workflow activity action has no activity id");
+                return;
+              }
+              elements.activityIdInput.value = String(action.activity_id);
+              state.bootstrap.preferredActivity = String(action.activity_id);
+              state.bootstrap.preferredSection = "activity";
+              focusPanel("panel-activity");
+              await readActivityResource();
+              break;
+            case "undo_activity":
+              if (!action.activity_id) {
+                logEvent("workflow next blocked", "workflow undo action has no activity id");
+                return;
+              }
+              elements.activityIdInput.value = String(action.activity_id);
+              state.bootstrap.preferredActivity = String(action.activity_id);
+              state.bootstrap.preferredSection = "activity";
+              focusPanel("panel-activity");
+              await readActivityResource();
+              break;
+            case "share_replay":
+              await shareWorkflowReplay();
+              break;
+            default:
+              logEvent("workflow next blocked", "unknown workflow next action: " + action.kind);
+              break;
+          }
+        }
+
+        async function applyWorkflowNextAction() {
+          if (!workflowDetailPayload()) {
+            await readWorkflowResource();
+          }
+          const action = workflowNextActionPayload();
+          if (!action || typeof action !== "object") {
+            logEvent("workflow apply-next blocked", "workflow has no next action");
+            return;
+          }
+
+          switch (action.kind) {
+            case "undo_activity":
+              if (!action.activity_id) {
+                logEvent("workflow apply-next blocked", "workflow undo action has no activity id");
+                return;
+              }
+              await undoActivityById(String(action.activity_id), "workflow");
+              break;
+            case "review_workflow":
+              await applyWorkflowAction();
+              break;
+            default:
+              await openWorkflowNextAction();
+              break;
+          }
+        }
 
           const preferredPrompt =
             typeof state.bootstrap.preferredPrompt === "string"
@@ -5805,6 +5905,8 @@
             elements.actionOpenWorkflowPrompt.addEventListener("click", openWorkflowPrompt);
             elements.actionOpenWorkflowSkill.addEventListener("click", openWorkflowSkill);
             elements.actionOpenWorkflowRunner.addEventListener("click", openWorkflowRunner);
+            elements.actionOpenWorkflowNext.addEventListener("click", openWorkflowNextAction);
+            elements.actionApplyWorkflowNext.addEventListener("click", applyWorkflowNextAction);
             elements.actionShareWorkflowReplay.addEventListener("click", shareWorkflowReplay);
             elements.actionShareActivityReplay.addEventListener("click", shareActivityReplay);
             elements.actionReadAccountResource.addEventListener("click", readAccountResource);

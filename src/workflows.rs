@@ -430,6 +430,8 @@ fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry
         )
     };
 
+    let actions = workflow_execution_actions(id, next_action, &available_actions, latest_activity);
+
     json!({
         "state": state,
         "summary": summary,
@@ -441,8 +443,85 @@ fn workflow_execution_payload(id: &str, doctor: &Value, entries: &[ActivityEntry
         "supports_replay": can_replay,
         "next_action": next_action,
         "available_actions": available_actions,
+        "actions": actions,
         "latest_activity": latest_activity.map(activity_entry_json),
     })
+}
+
+fn workflow_execution_actions(
+    id: &str,
+    next_action: &str,
+    available_actions: &[&str],
+    latest_activity: Option<&ActivityEntry>,
+) -> Vec<Value> {
+    let mut actions = Vec::new();
+
+    for action in available_actions {
+        match *action {
+            "connect_services" => actions.push(json!({
+                "kind": "open_doctor",
+                "label": "Connect services",
+            })),
+            "review" => actions.push(json!({
+                "kind": "review_workflow",
+                "label": "Preview workflow",
+                "workflow_id": id,
+            })),
+            "open_workflow" => actions.push(json!({
+                "kind": "open_workflow_runner",
+                "label": "Open workflow",
+                "workflow_id": id,
+            })),
+            "resume" => {
+                if let Some(entry) = latest_activity {
+                    actions.push(json!({
+                        "kind": "open_activity",
+                        "label": "Resume workflow",
+                        "workflow_id": id,
+                        "activity_id": entry.id,
+                        "operation": entry.operation,
+                    }));
+                }
+            }
+            "undo" => {
+                if let Some(entry) = latest_activity {
+                    actions.push(json!({
+                        "kind": "undo_activity",
+                        "label": "Undo workflow result",
+                        "workflow_id": id,
+                        "activity_id": entry.id,
+                        "operation": entry.operation,
+                    }));
+                }
+            }
+            "share_replay" => {
+                if let Some(entry) = latest_activity {
+                    actions.push(json!({
+                        "kind": "share_replay",
+                        "label": "Share replay",
+                        "workflow_id": id,
+                        "activity_id": entry.id,
+                        "operation": entry.operation,
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if next_action == "resume" && latest_activity.is_some() {
+        if let Some(entry) = latest_activity.filter(|entry| activity_entry_supports_undo(entry)) {
+            actions.push(json!({
+                "kind": "undo_activity",
+                "label": "Cleanup workflow result",
+                "workflow_id": id,
+                "activity_id": entry.id,
+                "operation": entry.operation,
+            }));
+        }
+    }
+
+    actions
 }
 
 fn workflow_required_services(id: &str) -> &'static [&'static str] {
@@ -617,6 +696,9 @@ mod tests {
         assert_eq!(payload["state"], "recovery_ready");
         assert_eq!(payload["next_action"], "resume");
         assert_eq!(payload["available_actions"][0], "resume");
+        assert_eq!(payload["actions"][0]["kind"], "open_activity");
+        assert_eq!(payload["actions"][1]["kind"], "share_replay");
+        assert_eq!(payload["actions"][2]["kind"], "undo_activity");
         assert_eq!(
             payload["latest_activity"]["operation"],
             "mail.send_link.partial"
@@ -709,5 +791,6 @@ mod tests {
         assert_eq!(payload["state"], "undo_ready");
         assert_eq!(payload["next_action"], "undo");
         assert_eq!(payload["available_actions"][0], "undo");
+        assert_eq!(payload["actions"][0]["kind"], "undo_activity");
     }
 }
