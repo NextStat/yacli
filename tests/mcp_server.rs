@@ -303,6 +303,11 @@ fn devcat_publishes_contacts_tools_only_with_explicit_read_capability() {
             .iter()
             .any(|tool| tool["name"] == "yacli.contacts.search")
     );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.contacts.export")
+    );
 
     let input = [
         initialize_request(false),
@@ -347,6 +352,35 @@ fn devcat_publishes_contacts_tools_only_with_explicit_read_capability() {
             .len(),
         64
     );
+
+    let vcard_path = temp.path().join("import.vcf");
+    fs::write(
+        &vcard_path,
+        "BEGIN:VCARD\nVERSION:3.0\nFN:Fixture\nEMAIL:fixture@example.test\nEND:VCARD\n",
+    )
+    .unwrap();
+    let input = [
+        initialize_request(false),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+        mcp_request(3, "tools/call", json!({"name":"yacli.contacts.import","arguments":{"account":"mock","source_path":vcard_path,"dry_run":true}})),
+    ].concat();
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_DEVCAT_MODE", "1")
+        .env("YACLI_DEVCAT_ACCOUNT", "mock")
+        .env("YACLI_DEVCAT_CAPABILITIES", "contacts.write")
+        .env("YACLI_DEVCAT_UPLOAD_ROOTS", temp.path())
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = parse_responses(&output);
+    assert_eq!(responses[2]["result"]["structuredContent"]["dry_run"], true);
+    assert_eq!(responses[2]["result"]["structuredContent"]["count"], 1);
 }
 
 fn write_mock_calendar_account(config_dir: &std::path::Path, caldav_base_url: &str) {

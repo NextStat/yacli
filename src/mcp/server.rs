@@ -1314,6 +1314,8 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             None,
             ui_enabled,
         ),
+        tool("yacli.contacts.export", "Export a bounded set of contacts as vCard data.", json!({"type":"object","properties":{"account":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.import", "Import up to 50 contacts from an allowed local vCard file.", json!({"type":"object","properties":{"account":{"type":"string"},"source_path":{"type":"string"}},"required":["source_path"],"additionalProperties":false}), None, ui_enabled),
         tool("yacli.contacts.create", "Create a contact from a vCard (dry-run plus review digest required in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"vcard":{"type":"string"}},"required":["vcard"],"additionalProperties":false}), None, ui_enabled),
         tool("yacli.contacts.update", "Conditionally update a CardDAV contact using its href and strong ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"},"vcard":{"type":"string"}},"required":["href","etag","vcard"],"additionalProperties":false}), None, ui_enabled),
         tool("yacli.contacts.delete", "Conditionally delete a CardDAV contact using its href and strong ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"}},"required":["href","etag"],"additionalProperties":false}), None, ui_enabled),
@@ -1909,6 +1911,11 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
         "yacli.contacts.create" => contacts_create(&arguments)?,
         "yacli.contacts.update" => contacts_update(&arguments)?,
         "yacli.contacts.delete" => contacts_delete(&arguments)?,
+        "yacli.contacts.export" => contacts_export(
+            arguments.get("account").and_then(Value::as_str),
+            optional_usize(&arguments, "limit").unwrap_or(50),
+        )?,
+        "yacli.contacts.import" => contacts_import(&arguments)?,
         "yacli.mail.list" => mail_list(
             arguments.get("account").and_then(Value::as_str),
             optional_string(&arguments, "folder").unwrap_or("INBOX"),
@@ -2793,6 +2800,83 @@ fn contacts_delete(args: &Value) -> Result<Value> {
         resolve_contacts_private_context(args.get("account").and_then(Value::as_str))?;
     delete_contact(&ctx.carddav_base_url, &ctx.email, &password, href, etag)?;
     Ok(json!({"account":account,"href":href,"deleted":true}))
+}
+
+fn contacts_export(account: Option<&str>, limit: usize) -> Result<Value> {
+    if limit == 0 || limit > 50 {
+        return Err(YacliError::Validation(
+            "contacts export limit must be between 1 and 50".into(),
+        ));
+    }
+    let (name, password, ctx) = resolve_contacts_private_context(account)?;
+    let contacts = fetch_contacts(&ctx.carddav_base_url, &ctx.email, &password)?;
+    let count = contacts.len().min(limit);
+    let mut output = contacts
+        .into_iter()
+        .take(limit)
+        .map(|contact| contact.vcard)
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    if output.len() > 1024 * 1024 {
+        return Err(YacliError::Validation(
+            "contacts export exceeds 1 MiB; reduce limit".into(),
+        ));
+    }
+    output.push_str("\r\n");
+    Ok(json!({"account":name,"count":count,"format":"text/vcard","data":output}))
+}
+
+fn contacts_import(args: &Value) -> Result<Value> {
+    let path = required_string(args, "source_path")?;
+    let bytes = std::fs::read(path)?;
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(YacliError::Validation(
+            "contacts import file exceeds 5 MiB".into(),
+        ));
+    }
+    let input = String::from_utf8(bytes)
+        .map_err(|_| YacliError::Validation("contacts import file must be UTF-8 vCard".into()))?;
+    let contacts = crate::contacts::parse_vcards(&input);
+    if contacts.is_empty() || contacts.len() > 50 {
+        return Err(YacliError::Validation(
+            "contacts import requires 1 to 50 vCards".into(),
+        ));
+    }
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.contacts.import", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"dry_run":true,"operation":"contacts.import","count":contacts.len(),"review_sha256":digest}),
+        );
+    }
+    if devcat::enabled()
+        && optional_string(args, "review_sha256")
+            != Some(devcat::review_hash("yacli.contacts.import", args)?.as_str())
+    {
+        return Err(YacliError::Auth(
+            "contacts import source changed after review".into(),
+        ));
+    }
+    let (account, password, ctx) =
+        resolve_contacts_private_context(args.get("account").and_then(Value::as_str))?;
+    let mut created = Vec::new();
+    for contact in contacts {
+        let vcard = contact
+            .vcard
+            .lines()
+            .filter(|line| !line.to_ascii_uppercase().starts_with("UID:"))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        match create_contact(&ctx.carddav_base_url, &ctx.email, &password, &vcard) {
+            Ok(uid) => created.push(uid),
+            Err(error) => {
+                return Ok(
+                    json!({"account":account,"status":"partial","created_uids":created,"error":error.to_string()}),
+                );
+            }
+        }
+    }
+    Ok(json!({"account":account,"status":"success","created_uids":created}))
 }
 
 fn mail_list(account: Option<&str>, folder: &str, limit: usize) -> Result<Value> {

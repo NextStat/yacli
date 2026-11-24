@@ -154,10 +154,13 @@ fn required_capabilities(name: &str) -> Option<&'static [&'static str]> {
         "yacli.mail.folder.create" | "yacli.mail.copy" | "yacli.mail.move" => {
             Some(&["mail.mutate"])
         }
-        "yacli.contacts.list" | "yacli.contacts.search" => Some(&["contacts.read"]),
-        "yacli.contacts.create" | "yacli.contacts.update" | "yacli.contacts.delete" => {
-            Some(&["contacts.write"])
+        "yacli.contacts.list" | "yacli.contacts.search" | "yacli.contacts.export" => {
+            Some(&["contacts.read"])
         }
+        "yacli.contacts.create"
+        | "yacli.contacts.update"
+        | "yacli.contacts.delete"
+        | "yacli.contacts.import" => Some(&["contacts.write"]),
         "yacli.disk.info" | "yacli.disk.list" | "yacli.disk.read" => Some(&["disk.read"]),
         "yacli.disk.mkdir" | "yacli.disk.upload" => Some(&["disk.write"]),
         "yacli.disk.publish" | "yacli.disk.unpublish" => Some(&["disk.publish"]),
@@ -293,6 +296,7 @@ pub fn is_risky(name: &str) -> bool {
             | "yacli.contacts.create"
             | "yacli.contacts.update"
             | "yacli.contacts.delete"
+            | "yacli.contacts.import"
             | "yacli.disk.mkdir"
             | "yacli.disk.upload"
             | "yacli.disk.publish"
