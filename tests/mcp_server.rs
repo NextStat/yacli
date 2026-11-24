@@ -303,6 +303,50 @@ fn devcat_publishes_contacts_tools_only_with_explicit_read_capability() {
             .iter()
             .any(|tool| tool["name"] == "yacli.contacts.search")
     );
+
+    let input = [
+        initialize_request(false),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+        mcp_request(3, "tools/call", json!({
+            "name":"yacli.contacts.delete",
+            "arguments":{"account":"mock","href":"/addressbook/mock/person.vcf","etag":"\"v1\"","dry_run":true}
+        })),
+    ].concat();
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_DEVCAT_MODE", "1")
+        .env("YACLI_DEVCAT_ACCOUNT", "mock")
+        .env("YACLI_DEVCAT_CAPABILITIES", "contacts.read,contacts.write")
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"].as_array().unwrap();
+    for name in [
+        "yacli.contacts.create",
+        "yacli.contacts.update",
+        "yacli.contacts.delete",
+    ] {
+        assert!(tools.iter().any(|tool| tool["name"] == name));
+        assert_eq!(
+            tools.iter().find(|tool| tool["name"] == name).unwrap()["inputSchema"]["properties"]["review_sha256"]
+                ["type"],
+            "string"
+        );
+    }
+    assert_eq!(responses[2]["result"]["structuredContent"]["dry_run"], true);
+    assert_eq!(
+        responses[2]["result"]["structuredContent"]["review_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
 }
 
 fn write_mock_calendar_account(config_dir: &std::path::Path, caldav_base_url: &str) {

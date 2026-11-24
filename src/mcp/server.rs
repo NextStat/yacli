@@ -56,7 +56,9 @@ use crate::{
         calendar_create_request_from_invites, create_calendar_event, delete_calendar_event,
         list_calendar_events, list_calendars, parse_event_window, review_calendar_event_creation,
     },
-    contacts::{fetch_contacts, search as search_contacts},
+    contacts::{
+        create_contact, delete_contact, fetch_contacts, search as search_contacts, update_contact,
+    },
     disk::{
         DownloadedFile, PrivateDiskDownloadRequest, PrivateDiskListRequest,
         PrivateDiskMkdirRequest, PrivateDiskPublishRequest, PrivateDiskUnpublishRequest,
@@ -1312,6 +1314,9 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             None,
             ui_enabled,
         ),
+        tool("yacli.contacts.create", "Create a contact from a vCard (dry-run plus review digest required in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"vcard":{"type":"string"}},"required":["vcard"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.update", "Conditionally update a CardDAV contact using its href and strong ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"},"vcard":{"type":"string"}},"required":["href","etag","vcard"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.delete", "Conditionally delete a CardDAV contact using its href and strong ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"}},"required":["href","etag"],"additionalProperties":false}), None, ui_enabled),
         tool(
             "yacli.mail.list",
             "List messages from a folder.",
@@ -1901,6 +1906,9 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             arguments.get("account").and_then(Value::as_str),
             required_string(&arguments, "query")?,
         )?,
+        "yacli.contacts.create" => contacts_create(&arguments)?,
+        "yacli.contacts.update" => contacts_update(&arguments)?,
+        "yacli.contacts.delete" => contacts_delete(&arguments)?,
         "yacli.mail.list" => mail_list(
             arguments.get("account").and_then(Value::as_str),
             optional_string(&arguments, "folder").unwrap_or("INBOX"),
@@ -2730,6 +2738,61 @@ fn contacts_search(account: Option<&str>, query: &str) -> Result<Value> {
     let (name, password, context) = resolve_contacts_private_context(account)?;
     let contacts = fetch_contacts(&context.carddav_base_url, &context.email, &password)?;
     Ok(json!({"account": name, "query": query, "items": search_contacts(&contacts, query)}))
+}
+
+fn contacts_create(args: &Value) -> Result<Value> {
+    let vcard = required_string(args, "vcard")?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.contacts.create", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"dry_run":true,"operation":"contacts.create","vcard_bytes":vcard.len(),"review_sha256":digest}),
+        );
+    }
+    let (account, password, ctx) =
+        resolve_contacts_private_context(args.get("account").and_then(Value::as_str))?;
+    let uid = create_contact(&ctx.carddav_base_url, &ctx.email, &password, vcard)?;
+    Ok(json!({"account":account,"uid":uid,"created":true}))
+}
+
+fn contacts_update(args: &Value) -> Result<Value> {
+    let href = required_string(args, "href")?;
+    let etag = required_string(args, "etag")?;
+    let vcard = required_string(args, "vcard")?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.contacts.update", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"dry_run":true,"operation":"contacts.update","href":href,"etag":etag,"vcard_bytes":vcard.len(),"review_sha256":digest}),
+        );
+    }
+    let (account, password, ctx) =
+        resolve_contacts_private_context(args.get("account").and_then(Value::as_str))?;
+    update_contact(
+        &ctx.carddav_base_url,
+        &ctx.email,
+        &password,
+        href,
+        etag,
+        vcard,
+    )?;
+    Ok(json!({"account":account,"href":href,"updated":true}))
+}
+
+fn contacts_delete(args: &Value) -> Result<Value> {
+    let href = required_string(args, "href")?;
+    let etag = required_string(args, "etag")?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.contacts.delete", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"dry_run":true,"operation":"contacts.delete","href":href,"etag":etag,"review_sha256":digest}),
+        );
+    }
+    let (account, password, ctx) =
+        resolve_contacts_private_context(args.get("account").and_then(Value::as_str))?;
+    delete_contact(&ctx.carddav_base_url, &ctx.email, &password, href, etag)?;
+    Ok(json!({"account":account,"href":href,"deleted":true}))
 }
 
 fn mail_list(account: Option<&str>, folder: &str, limit: usize) -> Result<Value> {

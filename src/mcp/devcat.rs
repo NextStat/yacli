@@ -155,6 +155,9 @@ fn required_capabilities(name: &str) -> Option<&'static [&'static str]> {
             Some(&["mail.mutate"])
         }
         "yacli.contacts.list" | "yacli.contacts.search" => Some(&["contacts.read"]),
+        "yacli.contacts.create" | "yacli.contacts.update" | "yacli.contacts.delete" => {
+            Some(&["contacts.write"])
+        }
         "yacli.disk.info" | "yacli.disk.list" | "yacli.disk.read" => Some(&["disk.read"]),
         "yacli.disk.mkdir" | "yacli.disk.upload" => Some(&["disk.write"]),
         "yacli.disk.publish" | "yacli.disk.unpublish" => Some(&["disk.publish"]),
@@ -287,6 +290,9 @@ pub fn is_risky(name: &str) -> bool {
             | "yacli.mail.folder.create"
             | "yacli.mail.copy"
             | "yacli.mail.move"
+            | "yacli.contacts.create"
+            | "yacli.contacts.update"
+            | "yacli.contacts.delete"
             | "yacli.disk.mkdir"
             | "yacli.disk.upload"
             | "yacli.disk.publish"
@@ -456,6 +462,21 @@ mod tests {
             required_capabilities("yacli.contacts.search"),
             Some(["contacts.read"].as_slice())
         );
+    }
+
+    #[test]
+    fn contact_writes_require_contacts_write_and_are_review_gated() {
+        for name in [
+            "yacli.contacts.create",
+            "yacli.contacts.update",
+            "yacli.contacts.delete",
+        ] {
+            assert_eq!(
+                required_capabilities(name),
+                Some(["contacts.write"].as_slice())
+            );
+            assert!(is_risky(name));
+        }
     }
 
     #[test]
