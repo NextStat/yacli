@@ -15,7 +15,7 @@
 | Диск: папка, загрузка, скачивание, публикация | Да | `disk.mkdir/upload/download/publish/unpublish/upload_link` | Нет подтверждения | Write/publish scopes; публикация выключена без `disk.publish`; операции записи требуют review |
 | Диск: права, восстановление, крупные файлы | Права доступны только через текущую публичную публикацию; отдельные права и восстановление не реализованы. Частные read/download/upload имеют ограничения по размеру | `disk.publish/unpublish` требует отсутствующую в production capability; больших потоковых MCP transfers нет | Нет | Нужны granular permissions/trash API и ограниченная потоковая передача с проверкой review |
 | Аккаунты dedts / ykkareliadom / dvabobra2014 | Конфигурация поддерживает точный allowlist аккаунтов | Только конфигурируемые аккаунты | Сводка #642 подтверждает Mail canary ранее; #551 подтверждает базовые read-only Mail/Disk для DevCat. Приёмка полной матрицы #723 не выполнена | Нужны текущие account entries, точные OAuth scopes и отдельные ключи; новый OAuth ykkareliadom — owner-only |
-| ChatGPT и Secure MCP Tunnel | Есть конфигурационные примеры и DevCat режим | Живой каталог в ChatGPT не проверен | Нет | Нужны доступ к рабочей среде, состояние туннеля и успешные `tools/list` |
+| ChatGPT и Secure MCP Tunnel | Есть конфигурационные примеры и DevCat режим | У loopback production `initialize` и `tools/list` успешны: опубликовано 14 инструментов старой версии, без `mail.mutate`, Contacts и Disk download/publish | Это не проверка каталога ChatGPT через туннель | Нужна приемка каталога ChatGPT, проверка Secure MCP Tunnel и установка нового релиза штатным процессом |
 | Hosted Yandex 360 MCP (резерв только для dedts) | Подготовленный безопасный путь: два отдельных HTTP stream endpoint, `Authorization: OAuth <секрет из защищенной настройки>`; токены не записываются в репозиторий или сообщения | Не подключен в ChatGPT | OAuth и `tools/list` не выполнялись | Mail: `https://mcp.360.yandex.net/v1/mail/mcp`; Disk: `https://mcp.360.yandex.net/v1/disk/mcp`; нужны OAuth владельца для dedts и успешный tools/list; см. operator guide |
 
 ## Зависимые задачи
@@ -36,6 +36,8 @@
 | `dvabobra2014` | enabled, `oauth_xoauth2`, credential reference указан | disabled | секции нет, значит новый default `enabled=false` | Диск не включен |
 
 `yacli-devcat.service` был `active`, listener — `127.0.0.1:8797`, `GET /healthz` вернул HTTP 200. Это не проверяет Secure MCP Tunnel readiness, ChatGPT tool catalog или account credentials.
+
+Read-only production MCP canary, 2026-11-24: a fresh loopback MCP session returned successful `initialize` and `tools/list` with 14 published tools. Read-only `yacli.mail.folders` returned 64 folders for `dedts` (7.9 s) and 24 for `dvabobra2014` (6.4 s). `ykkareliadom` returned JSON-RPC error `-32000` in 6.0 s; the response did not establish whether the cause was account authorization, provider behavior, or another service error. No folder names or message contents were retained in the audit output. This confirms folder-list access only for `dedts` and `dvabobra2014`; it does not verify ChatGPT through the managed tunnel or any message/Disk operation.
 
 ## Основание
 
