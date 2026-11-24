@@ -60,12 +60,15 @@ use crate::{
         create_contact, delete_contact, fetch_contacts, search as search_contacts, update_contact,
     },
     disk::{
-        DownloadedFile, PrivateDiskDownloadRequest, PrivateDiskListRequest,
-        PrivateDiskMkdirRequest, PrivateDiskPublishRequest, PrivateDiskUnpublishRequest,
-        PrivateDiskUploadRequest, create_private_directory, download_private_resource,
-        fetch_disk_info, fetch_private_resource, publish_private_resource, review_private_publish,
-        review_private_unpublish, review_private_upload, unpublish_private_resource,
-        upload_private_resource,
+        DownloadedFile, PrivateDiskCopyMoveRequest, PrivateDiskDownloadRequest,
+        PrivateDiskListRequest, PrivateDiskMkdirRequest, PrivateDiskPublishRequest,
+        PrivateDiskTrashListRequest, PrivateDiskTrashRestoreRequest, PrivateDiskUnpublishRequest,
+        PrivateDiskUploadRequest, copy_private_resource, create_private_directory,
+        download_private_resource, fetch_disk_info, fetch_private_resource, list_private_trash,
+        move_private_resource, move_private_resource_to_trash, publish_private_resource,
+        restore_private_trash_resource, review_private_publish, review_private_unpublish,
+        review_private_upload, unpublish_private_resource, upload_private_resource,
+        validate_private_trash_path, validate_trash_restore_name,
     },
     mail::{
         MailAttachmentExportRequest, MailAttachmentSelector, MailFlagUpdate,
@@ -1297,29 +1300,29 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             None,
             ui_enabled,
         ),
-        tool("yacli.mail.folder.create", "Create a mailbox folder (requires dry-run review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"}},"required":["folder"],"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.mail.copy", "Copy one message by stable UID to another folder (requires review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.mail.move", "Move one message by stable UID to another folder (requires review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.mail.flags", "Set read/unread and starred flags on one message by stable UID (requires review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"seen":{"type":"boolean"},"flagged":{"type":"boolean"}},"required":["uid"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.folder.create", "Создать папку почтового ящика; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"}},"required":["folder"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.copy", "Скопировать одно письмо по постоянному UID в другую папку; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.move", "Переместить одно письмо по постоянному UID в другую папку; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.flags", "Установить состояние прочитанности и отметку избранного для одного письма по постоянному UID; в DevCat требуется проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"seen":{"type":"boolean"},"flagged":{"type":"boolean"}},"required":["uid"],"additionalProperties":false}), None, ui_enabled),
         tool(
             "yacli.contacts.list",
-            "List contacts from the separately configured Yandex CardDAV address book.",
+            "Получить список контактов из отдельно настроенной адресной книги Яндекс CardDAV.",
             json!({"type":"object","properties":{"account":{"type":"string"}},"additionalProperties":false}),
             None,
             ui_enabled,
         ),
         tool(
             "yacli.contacts.search",
-            "Search the separately configured Yandex CardDAV address book.",
+            "Найти контакты в отдельно настроенной адресной книге Яндекс CardDAV.",
             json!({"type":"object","properties":{"account":{"type":"string"},"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
             None,
             ui_enabled,
         ),
-        tool("yacli.contacts.export", "Export a bounded set of contacts as vCard data.", json!({"type":"object","properties":{"account":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.contacts.import", "Import up to 50 contacts from an allowed local vCard file.", json!({"type":"object","properties":{"account":{"type":"string"},"source_path":{"type":"string"}},"required":["source_path"],"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.contacts.create", "Create a contact from a vCard (dry-run plus review digest required in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"vcard":{"type":"string"}},"required":["vcard"],"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.contacts.update", "Conditionally update a CardDAV contact using its href and strong ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"},"vcard":{"type":"string"}},"required":["href","etag","vcard"],"additionalProperties":false}), None, ui_enabled),
-        tool("yacli.contacts.delete", "Conditionally delete a CardDAV contact using its href and strong ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"}},"required":["href","etag"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.export", "Экспортировать ограниченный набор контактов в формате vCard.", json!({"type":"object","properties":{"account":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.import", "Импортировать до 50 контактов из разрешенного локального файла vCard.", json!({"type":"object","properties":{"account":{"type":"string"},"source_path":{"type":"string"}},"required":["source_path"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.create", "Создать контакт из vCard; в DevCat требуется предварительная проверка и одноразовый digest.", json!({"type":"object","properties":{"account":{"type":"string"},"vcard":{"type":"string"}},"required":["vcard"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.update", "Условно обновить контакт CardDAV по href и сильному ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"},"vcard":{"type":"string"}},"required":["href","etag","vcard"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.contacts.delete", "Условно удалить контакт CardDAV по href и сильному ETag.", json!({"type":"object","properties":{"account":{"type":"string"},"href":{"type":"string"},"etag":{"type":"string"}},"required":["href","etag"],"additionalProperties":false}), None, ui_enabled),
         tool(
             "yacli.mail.list",
             "List messages from a folder.",
@@ -1373,7 +1376,7 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
         ),
         tool(
             "yacli.mail.draft.create",
-            "Create an unsent draft in the mailbox (requires dry-run review in DevCat).",
+            "Создать неотправленный черновик в почтовом ящике; в DevCat требуется предварительная проверка.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1689,12 +1692,106 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             ui_enabled,
         ),
         tool(
+            "yacli.disk.trash.list",
+            "Просмотреть элементы в Корзине Диска с постраничной навигацией.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "path": { "type": "string", "default": "trash:/" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "offset": { "type": "integer", "minimum": 0 }
+                },
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.copy",
+            "Скопировать файл или папку Диска в указанное место; операция требует предварительной проверки.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "from_path": { "type": "string" },
+                    "to_path": { "type": "string" },
+                    "overwrite": { "type": "boolean" }
+                },
+                "required": ["from_path", "to_path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.move",
+            "Переместить или переименовать файл или папку Диска; операция требует предварительной проверки.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "from_path": { "type": "string" },
+                    "to_path": { "type": "string" },
+                    "overwrite": { "type": "boolean" }
+                },
+                "required": ["from_path", "to_path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.trash.move",
+            "Переместить файл или папку Диска в Корзину без безвозвратного удаления; требуется отдельное разрешение и предварительная проверка.",
+            json!({
+                "type": "object",
+                "properties": {"account": {"type":"string"},"path": {"type":"string"}},
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.trash.restore",
+            "Восстановить файл или папку из Корзины; перезапись назначения по умолчанию отключена.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "trash_path": { "type": "string" },
+                    "restore_name": { "type": "string" },
+                    "overwrite": { "type": "boolean" }
+                },
+                "required": ["trash_path"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
             "yacli.disk.read",
             "Read a Yandex Disk file up to 1 MiB as base64.",
             json!({
                 "type": "object",
                 "properties": { "account": {"type":"string"}, "path": {"type":"string"} },
                 "required": ["path"], "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.disk.permissions",
+            "Проверить, опубликован ли файл или папка по публичной ссылке; персональные права пользователей не включены.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "path": { "type": "string" }
+                },
+                "required": ["path"],
+                "additionalProperties": false
             }),
             None,
             ui_enabled,
@@ -1752,7 +1849,7 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
         ),
         tool(
             "yacli.disk.download",
-            "Download one private Yandex Disk file to a local path on the MCP server host.",
+            "Скачать личный файл с Диска в разрешенную локальную папку сервера; в DevCat требуется предварительная проверка.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1835,7 +1932,7 @@ fn tool(
         {
             properties.insert(
                 "review_sha256".into(),
-                json!({"type":"string", "description":"SHA-256 returned by the matching dry run"}),
+                json!({"type":"string", "description":"SHA-256, возвращенный соответствующей предварительной проверкой"}),
             );
             properties.insert("dry_run".into(), json!({"type":"boolean"}));
         }
@@ -1853,7 +1950,7 @@ fn tool(
             "annotations".into(),
             json!({
                 "readOnlyHint": read_only,
-            "destructiveHint": name == "yacli.disk.upload" || name == "yacli.disk.upload_link",
+            "destructiveHint": devcat::is_risky(name),
                 "idempotentHint": read_only,
             "openWorldHint": name.starts_with("yacli.mail.send")
             }),
@@ -2108,7 +2205,21 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             optional_usize(&arguments, "limit").unwrap_or(100),
             optional_u64(&arguments, "offset").unwrap_or(0),
         )?,
+        "yacli.disk.trash.list" => disk_trash_list(
+            arguments.get("account").and_then(Value::as_str),
+            optional_string(&arguments, "path").unwrap_or("trash:/"),
+            optional_usize(&arguments, "limit").unwrap_or(100),
+            optional_u64(&arguments, "offset").unwrap_or(0),
+        )?,
+        "yacli.disk.copy" => disk_copy_move(&arguments, false)?,
+        "yacli.disk.move" => disk_copy_move(&arguments, true)?,
+        "yacli.disk.trash.move" => disk_trash_move(&arguments)?,
+        "yacli.disk.trash.restore" => disk_trash_restore(&arguments)?,
         "yacli.disk.read" => disk_read(
+            arguments.get("account").and_then(Value::as_str),
+            required_string(&arguments, "path")?,
+        )?,
+        "yacli.disk.permissions" => disk_permissions(
             arguments.get("account").and_then(Value::as_str),
             required_string(&arguments, "path")?,
         )?,
@@ -2135,14 +2246,7 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
                 dry_run: optional_bool(&arguments, "dry_run").unwrap_or(false),
             },
         )?,
-        "yacli.disk.download" => disk_download(
-            arguments.get("account").and_then(Value::as_str),
-            DiskDownloadToolRequest {
-                path: required_string(&arguments, "path")?.to_string(),
-                output_path: required_string(&arguments, "output_path")?.to_string(),
-                force: optional_bool(&arguments, "force").unwrap_or(false),
-            },
-        )?,
+        "yacli.disk.download" => disk_download(&arguments)?,
         "yacli.disk.publish" => disk_publish(
             arguments.get("account").and_then(Value::as_str),
             DiskPublishToolRequest {
@@ -2767,7 +2871,7 @@ fn mail_flags(args: &Value) -> Result<Value> {
     };
     if update.seen.is_none() && update.flagged.is_none() {
         return Err(YacliError::Validation(
-            "mail flag update must include seen or flagged".into(),
+            "Для изменения флагов укажите seen и/или flagged".into(),
         ));
     }
     if optional_bool(args, "dry_run") == Some(true) {
@@ -3619,6 +3723,86 @@ fn disk_list(account: Option<&str>, path: &str, limit: usize, offset: u64) -> Re
     }))
 }
 
+fn disk_trash_list(account: Option<&str>, path: &str, limit: usize, offset: u64) -> Result<Value> {
+    if limit == 0 || limit > 1000 {
+        return Err(YacliError::Validation(
+            "Лимит списка Корзины должен быть от 1 до 1000".into(),
+        ));
+    }
+    validate_private_trash_path(path)?;
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let resource = list_private_trash(
+        &base_url,
+        &access_token,
+        &PrivateDiskTrashListRequest {
+            path: Some(path.to_string()),
+            limit,
+            offset,
+        },
+    )?;
+    Ok(json!({"account":resolved_account,"path":path,"resource":resource}))
+}
+
+fn disk_copy_move(args: &Value, is_move: bool) -> Result<Value> {
+    let request = PrivateDiskCopyMoveRequest {
+        source_path: required_string(args, "from_path")?.to_string(),
+        destination_path: required_string(args, "to_path")?.to_string(),
+        overwrite: optional_bool(args, "overwrite").unwrap_or(false),
+    };
+    let operation = if is_move { "disk.move" } else { "disk.copy" };
+    if optional_bool(args, "dry_run") == Some(true) {
+        return Ok(
+            json!({"dry_run":true,"operation":operation,"from_path":request.source_path,"to_path":request.destination_path,"overwrite":request.overwrite}),
+        );
+    }
+    let (account, base_url, access_token) =
+        resolve_disk_private_context(args.get("account").and_then(Value::as_str))?;
+    let receipt = if is_move {
+        move_private_resource(&base_url, &access_token, &request)?
+    } else {
+        copy_private_resource(&base_url, &access_token, &request)?
+    };
+    Ok(
+        json!({"account":account,"operation":operation,"from_path":request.source_path,"to_path":request.destination_path,"result":receipt}),
+    )
+}
+
+fn disk_trash_move(args: &Value) -> Result<Value> {
+    let path = required_string(args, "path")?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        return Ok(
+            json!({"dry_run":true,"operation":"disk.trash.move","path":path,"permanently":false}),
+        );
+    }
+    let (account, base_url, access_token) =
+        resolve_disk_private_context(args.get("account").and_then(Value::as_str))?;
+    let receipt = move_private_resource_to_trash(&base_url, &access_token, path)?;
+    Ok(json!({"account":account,"path":path,"moved_to_trash":true,"result":receipt}))
+}
+
+fn disk_trash_restore(args: &Value) -> Result<Value> {
+    let request = PrivateDiskTrashRestoreRequest {
+        trash_path: required_string(args, "trash_path")?.to_string(),
+        restore_name: optional_string(args, "restore_name").map(str::to_string),
+        overwrite: optional_bool(args, "overwrite").unwrap_or(false),
+    };
+    validate_private_trash_path(&request.trash_path)?;
+    if let Some(name) = &request.restore_name {
+        validate_trash_restore_name(name)?;
+    }
+    if optional_bool(args, "dry_run") == Some(true) {
+        return Ok(
+            json!({"dry_run":true,"operation":"disk.trash.restore","trash_path":request.trash_path,"restore_name":request.restore_name,"overwrite":request.overwrite}),
+        );
+    }
+    let (account, base_url, access_token) =
+        resolve_disk_private_context(args.get("account").and_then(Value::as_str))?;
+    let receipt = restore_private_trash_resource(&base_url, &access_token, &request)?;
+    Ok(
+        json!({"account":account,"trash_path":request.trash_path,"restore_name":request.restore_name,"restored":true,"result":receipt}),
+    )
+}
+
 fn disk_read(account: Option<&str>, path: &str) -> Result<Value> {
     let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
     let resource = fetch_private_resource(
@@ -3652,6 +3836,31 @@ fn disk_read(account: Option<&str>, path: &str) -> Result<Value> {
     Ok(json!({"account": resolved_account, "path": path,
         "encoding": "base64", "bytes": bytes.len(),
         "data": base64::engine::general_purpose::STANDARD.encode(bytes)}))
+}
+
+fn disk_permissions(account: Option<&str>, path: &str) -> Result<Value> {
+    let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    let resource = fetch_private_resource(
+        &base_url,
+        &access_token,
+        &PrivateDiskListRequest {
+            path: path.to_string(),
+            limit: 1,
+            offset: 0,
+        },
+    )?;
+    let is_public = resource.public_url.is_some() || resource.public_key.is_some();
+    Ok(json!({
+        "account": resolved_account,
+        "path": resource.path,
+        "resource_type": resource.resource_type,
+        "public_access": {
+            "enabled": is_public,
+            "url": resource.public_url,
+            "key": resource.public_key
+        },
+        "scope": "public_link_only"
+    }))
 }
 
 fn disk_mkdir(account: Option<&str>, path: &str, dry_run: bool) -> Result<Value> {
@@ -3770,8 +3979,33 @@ fn disk_upload_link(account: Option<&str>, request: DiskUploadLinkToolRequest) -
     }
 }
 
-fn disk_download(account: Option<&str>, request: DiskDownloadToolRequest) -> Result<Value> {
+fn disk_download(args: &Value) -> Result<Value> {
+    let account = args.get("account").and_then(Value::as_str);
+    let request = DiskDownloadToolRequest {
+        path: required_string(args, "path")?.to_string(),
+        output_path: required_string(args, "output_path")?.to_string(),
+        force: optional_bool(args, "force").unwrap_or(false),
+    };
     let (resolved_account, base_url, access_token) = resolve_disk_private_context(account)?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        let resource = fetch_private_resource(
+            &base_url,
+            &access_token,
+            &PrivateDiskListRequest {
+                path: request.path.clone(),
+                limit: 1,
+                offset: 0,
+            },
+        )?;
+        if resource.resource_type != "file" {
+            return Err(YacliError::UnsupportedOperation(
+                "Скачивать можно только файл, а не папку".into(),
+            ));
+        }
+        return Ok(
+            json!({"account":resolved_account,"path":request.path,"output_path":request.output_path,"force":request.force,"dry_run":true,"resource":resource}),
+        );
+    }
     let download_request = PrivateDiskDownloadRequest {
         path: request.path,
         output: PathBuf::from(request.output_path),

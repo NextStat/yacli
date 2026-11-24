@@ -163,8 +163,18 @@ fn required_capabilities(name: &str) -> Option<&'static [&'static str]> {
         | "yacli.contacts.update"
         | "yacli.contacts.delete"
         | "yacli.contacts.import" => Some(&["contacts.write"]),
-        "yacli.disk.info" | "yacli.disk.list" | "yacli.disk.read" => Some(&["disk.read"]),
-        "yacli.disk.mkdir" | "yacli.disk.upload" => Some(&["disk.write"]),
+        "yacli.disk.info"
+        | "yacli.disk.list"
+        | "yacli.disk.read"
+        | "yacli.disk.permissions"
+        | "yacli.disk.download"
+        | "yacli.disk.trash.list" => Some(&["disk.read"]),
+        "yacli.disk.mkdir"
+        | "yacli.disk.upload"
+        | "yacli.disk.copy"
+        | "yacli.disk.move"
+        | "yacli.disk.trash.restore" => Some(&["disk.write"]),
+        "yacli.disk.trash.move" => Some(&["disk.delete"]),
         "yacli.disk.publish" | "yacli.disk.unpublish" => Some(&["disk.publish"]),
         "yacli.disk.upload_link" => Some(&["disk.write", "disk.publish"]),
         "yacli.mail.send_link" => Some(&["mail.send", "disk.write", "disk.publish"]),
@@ -205,7 +215,14 @@ pub fn check_tool(name: &str, arguments: &serde_json::Value) -> Result<()> {
         }
     }
     if name.starts_with("yacli.disk.")
-        && name != "yacli.disk.info"
+        && !matches!(
+            name,
+            "yacli.disk.info"
+                | "yacli.disk.trash.list"
+                | "yacli.disk.copy"
+                | "yacli.disk.move"
+                | "yacli.disk.trash.restore"
+        )
         && arguments
             .get("path")
             .and_then(serde_json::Value::as_str)
@@ -225,12 +242,37 @@ pub fn check_tool(name: &str, arguments: &serde_json::Value) -> Result<()> {
             "DevCat send_link requires disk_path".into(),
         ));
     }
-    for field in ["path", "disk_path"] {
+    for field in ["path", "disk_path", "from_path", "to_path"] {
         if let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) {
             if name.starts_with("yacli.disk.") || name == "yacli.mail.send_link" {
-                check_disk_path(path)?;
+                if name == "yacli.disk.trash.list" {
+                    crate::disk::validate_private_trash_path(path)?;
+                } else {
+                    check_disk_path(path)?;
+                }
             }
         }
+    }
+    if name == "yacli.disk.trash.restore" {
+        crate::disk::validate_private_trash_path(
+            arguments
+                .get("trash_path")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| YacliError::Validation("Параметр trash_path обязателен".into()))?,
+        )?;
+        if let Some(name) = arguments
+            .get("restore_name")
+            .and_then(serde_json::Value::as_str)
+        {
+            crate::disk::validate_trash_restore_name(name)?;
+        }
+    }
+    if matches!(name, "yacli.disk.download" | "yacli.mail.attachment.export")
+        && let Some(path) = arguments
+            .get("output_path")
+            .and_then(serde_json::Value::as_str)
+    {
+        check_local_download(path)?;
     }
     for field in ["source", "source_path"] {
         if let Some(path) = arguments.get(field).and_then(serde_json::Value::as_str) {
@@ -306,6 +348,11 @@ pub fn is_risky(name: &str) -> bool {
             | "yacli.disk.publish"
             | "yacli.disk.unpublish"
             | "yacli.disk.upload_link"
+            | "yacli.disk.download"
+            | "yacli.disk.copy"
+            | "yacli.disk.move"
+            | "yacli.disk.trash.move"
+            | "yacli.disk.trash.restore"
     )
 }
 
@@ -375,6 +422,51 @@ fn check_local_upload(path: &str) -> Result<()> {
     } else {
         Err(YacliError::Auth(
             "upload source is outside allowed roots".into(),
+        ))
+    }
+}
+
+fn check_local_download(path: &str) -> Result<()> {
+    let roots = std::env::var("YACLI_DEVCAT_DOWNLOAD_ROOTS")
+        .map_err(|_| YacliError::Auth("Не настроены разрешенные папки для скачивания".into()))?;
+    validate_local_download_path(path, &roots)
+}
+
+fn validate_local_download_path(path: &str, roots: &str) -> Result<()> {
+    let output = Path::new(path);
+    let file_name = output
+        .file_name()
+        .ok_or_else(|| YacliError::Validation("Для сохранения скачивания укажите файл".into()))?;
+    if file_name.is_empty() || file_name == "." || file_name == ".." {
+        return Err(YacliError::Validation(
+            "Имя файла для скачивания недопустимо".into(),
+        ));
+    }
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_parent = std::fs::canonicalize(parent)?;
+    match std::fs::symlink_metadata(output) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(YacliError::Validation(
+                "Путь сохранения скачивания не должен быть символической ссылкой".into(),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if roots
+        .split(',')
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+        .any(|root| {
+            std::fs::canonicalize(Path::new(root))
+                .is_ok_and(|root| canonical_parent.starts_with(root))
+        })
+    {
+        Ok(())
+    } else {
+        Err(YacliError::Auth(
+            "Папка сохранения находится вне разрешенных корневых папок".into(),
         ))
     }
 }
@@ -501,6 +593,73 @@ mod tests {
                 Some(["mail.mutate"].as_slice())
             );
             assert!(is_risky(name));
+        }
+    }
+
+    #[test]
+    fn disk_resource_mutations_use_scoped_capabilities_and_review() {
+        for name in [
+            "yacli.disk.copy",
+            "yacli.disk.move",
+            "yacli.disk.trash.restore",
+        ] {
+            assert_eq!(required_capabilities(name), Some(["disk.write"].as_slice()));
+            assert!(is_risky(name));
+        }
+        assert_eq!(
+            required_capabilities("yacli.disk.trash.move"),
+            Some(["disk.delete"].as_slice())
+        );
+        assert!(is_risky("yacli.disk.trash.move"));
+        assert_eq!(
+            required_capabilities("yacli.disk.trash.list"),
+            Some(["disk.read"].as_slice())
+        );
+        assert!(!is_risky("yacli.disk.trash.list"));
+        assert_eq!(
+            required_capabilities("yacli.disk.download"),
+            Some(["disk.read"].as_slice())
+        );
+        assert!(is_risky("yacli.disk.download"));
+        assert_eq!(
+            required_capabilities("yacli.disk.permissions"),
+            Some(["disk.read"].as_slice())
+        );
+        assert!(!is_risky("yacli.disk.permissions"));
+    }
+
+    #[test]
+    fn local_download_outputs_stay_in_configured_roots_and_reject_symlinks() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let inside_output = root.path().join("download.bin");
+        assert!(
+            validate_local_download_path(
+                inside_output.to_str().expect("path"),
+                root.path().to_str().expect("root path")
+            )
+            .is_ok()
+        );
+        let outside_output = outside.path().join("download.bin");
+        assert!(
+            validate_local_download_path(
+                outside_output.to_str().expect("path"),
+                root.path().to_str().expect("root path")
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = root.path().join("link.bin");
+            symlink(outside.path().join("target.bin"), &link).expect("symlink");
+            assert!(
+                validate_local_download_path(
+                    link.to_str().expect("path"),
+                    root.path().to_str().expect("root path")
+                )
+                .is_err()
+            );
         }
     }
 

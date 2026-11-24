@@ -2322,6 +2322,28 @@ client_id = "client-123"
         .expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.disk.mkdir"));
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.disk.upload"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.disk.download")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.disk.permissions")
+    );
+    for name in [
+        "yacli.disk.copy",
+        "yacli.disk.move",
+        "yacli.disk.trash.list",
+        "yacli.disk.trash.move",
+        "yacli.disk.trash.restore",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "missing {name}"
+        );
+    }
     let disk_upload_tool = tools
         .iter()
         .find(|tool| tool["name"] == "yacli.disk.upload")

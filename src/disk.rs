@@ -82,6 +82,34 @@ pub struct PrivateDiskUploadRequest {
     pub overwrite: bool,
 }
 
+#[derive(Debug)]
+pub struct PrivateDiskCopyMoveRequest {
+    pub source_path: String,
+    pub destination_path: String,
+    pub overwrite: bool,
+}
+
+#[derive(Debug)]
+pub struct PrivateDiskTrashListRequest {
+    pub path: Option<String>,
+    pub limit: usize,
+    pub offset: u64,
+}
+
+#[derive(Debug)]
+pub struct PrivateDiskTrashRestoreRequest {
+    pub trash_path: String,
+    pub restore_name: Option<String>,
+    pub overwrite: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DiskMutationReceipt {
+    pub status_code: u16,
+    pub accepted: bool,
+    pub asynchronous: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct DiskUploadReview {
     pub source_path: String,
@@ -432,6 +460,220 @@ pub fn create_private_directory(
             offset: 0,
         },
     )
+}
+
+pub fn list_private_trash(
+    base_url: &str,
+    access_token: &str,
+    request: &PrivateDiskTrashListRequest,
+) -> Result<DiskResource> {
+    if request.limit == 0 {
+        return Err(YacliError::Validation(
+            "Лимит списка Корзины должен быть больше нуля".into(),
+        ));
+    }
+    if let Some(path) = &request.path {
+        validate_private_trash_path(path)?;
+    }
+    let client = build_read_http_client(base_url)?;
+    let endpoint = disk_trash_endpoint(base_url)?;
+    let mut query = vec![
+        ("limit", request.limit.to_string()),
+        ("offset", request.offset.to_string()),
+    ];
+    if let Some(path) = &request.path {
+        query.push(("path", path.clone()));
+    }
+    let response = client
+        .get(endpoint)
+        .header("Authorization", format!("OAuth {access_token}"))
+        .query(&query)
+        .send()?;
+    let status = response.status();
+    let body = response.text()?;
+    if !status.is_success() {
+        return Err(provider_error(status, &body, "Корзина Диска", "просмотр"));
+    }
+    let raw = serde_json::from_str::<RawDiskResource>(&body)
+        .map_err(|err| YacliError::Serialization(format!("invalid provider response: {err}")))?;
+    Ok(raw.into_disk_resource())
+}
+
+pub fn copy_private_resource(
+    base_url: &str,
+    access_token: &str,
+    request: &PrivateDiskCopyMoveRequest,
+) -> Result<DiskMutationReceipt> {
+    mutate_private_resource(base_url, access_token, request, false)
+}
+
+pub fn move_private_resource(
+    base_url: &str,
+    access_token: &str,
+    request: &PrivateDiskCopyMoveRequest,
+) -> Result<DiskMutationReceipt> {
+    mutate_private_resource(base_url, access_token, request, true)
+}
+
+fn mutate_private_resource(
+    base_url: &str,
+    access_token: &str,
+    request: &PrivateDiskCopyMoveRequest,
+    is_move: bool,
+) -> Result<DiskMutationReceipt> {
+    validate_nonempty_disk_path(&request.source_path, "исходный путь")?;
+    validate_nonempty_disk_path(&request.destination_path, "путь назначения")?;
+    let client = build_http_client()?;
+    let endpoint =
+        disk_resource_mutation_endpoint(base_url, if is_move { "move" } else { "copy" })?;
+    let response = client
+        .post(endpoint)
+        .header("Authorization", format!("OAuth {access_token}"))
+        .query(&[
+            ("from", request.source_path.as_str()),
+            ("path", request.destination_path.as_str()),
+            (
+                "overwrite",
+                if request.overwrite { "true" } else { "false" },
+            ),
+        ])
+        .send()?;
+    let status = response.status();
+    let body = response.text()?;
+    if !matches!(status, StatusCode::CREATED | StatusCode::ACCEPTED) {
+        return Err(provider_error(
+            status,
+            &body,
+            "ресурс Диска",
+            if is_move {
+                "перемещение"
+            } else {
+                "копирование"
+            },
+        ));
+    }
+    Ok(DiskMutationReceipt {
+        status_code: status.as_u16(),
+        accepted: true,
+        asynchronous: status == StatusCode::ACCEPTED,
+    })
+}
+
+pub fn move_private_resource_to_trash(
+    base_url: &str,
+    access_token: &str,
+    path: &str,
+) -> Result<DiskMutationReceipt> {
+    validate_nonempty_disk_path(path, "путь")?;
+    let client = build_http_client()?;
+    let endpoint = disk_resources_endpoint(base_url)?;
+    let response = client
+        .delete(endpoint)
+        .header("Authorization", format!("OAuth {access_token}"))
+        .query(&[("path", path), ("permanently", "false")])
+        .send()?;
+    let status = response.status();
+    let body = response.text()?;
+    if !matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
+        return Err(provider_error(
+            status,
+            &body,
+            "ресурс Диска",
+            "перенос в Корзину",
+        ));
+    }
+    Ok(DiskMutationReceipt {
+        status_code: status.as_u16(),
+        accepted: true,
+        asynchronous: status == StatusCode::ACCEPTED,
+    })
+}
+
+pub fn restore_private_trash_resource(
+    base_url: &str,
+    access_token: &str,
+    request: &PrivateDiskTrashRestoreRequest,
+) -> Result<DiskMutationReceipt> {
+    validate_private_trash_path(&request.trash_path)?;
+    if let Some(name) = &request.restore_name {
+        validate_trash_restore_name(name)?;
+    }
+    let client = build_http_client()?;
+    let endpoint = disk_trash_restore_endpoint(base_url)?;
+    let mut query = vec![
+        ("path", request.trash_path.as_str()),
+        (
+            "overwrite",
+            if request.overwrite { "true" } else { "false" },
+        ),
+    ];
+    if let Some(name) = &request.restore_name {
+        query.push(("name", name));
+    }
+    let response = client
+        .put(endpoint)
+        .header("Authorization", format!("OAuth {access_token}"))
+        .query(&query)
+        .send()?;
+    let status = response.status();
+    let body = response.text()?;
+    if !matches!(status, StatusCode::CREATED | StatusCode::ACCEPTED) {
+        return Err(provider_error(
+            status,
+            &body,
+            "ресурс Корзины",
+            "восстановление",
+        ));
+    }
+    Ok(DiskMutationReceipt {
+        status_code: status.as_u16(),
+        accepted: true,
+        asynchronous: status == StatusCode::ACCEPTED,
+    })
+}
+
+fn validate_nonempty_disk_path(path: &str, label: &str) -> Result<()> {
+    if path.trim().is_empty() || path.chars().any(char::is_control) {
+        return Err(YacliError::Validation(format!(
+            "Путь Диска ({label}) пуст или недопустим"
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_private_trash_path(path: &str) -> Result<()> {
+    let tail = path
+        .strip_prefix("trash:/")
+        .ok_or_else(|| YacliError::Validation("Путь Корзины должен начинаться с trash:/".into()))?;
+    if path != "trash:/"
+        && (path.contains('%')
+            || path.contains('\\')
+            || path.chars().any(char::is_control)
+            || tail
+                .split('/')
+                .any(|segment| segment.is_empty() || segment == "." || segment == ".."))
+    {
+        return Err(YacliError::Validation(
+            "Путь Корзины содержит небезопасный сегмент".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_trash_restore_name(name: &str) -> Result<()> {
+    if name.trim().is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('%')
+        || name.chars().any(char::is_control)
+    {
+        return Err(YacliError::Validation(
+            "Имя при восстановлении должно быть одним безопасным сегментом пути".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn publish_private_resource(
@@ -1273,6 +1515,30 @@ fn disk_resources_endpoint(base_url: &str) -> Result<Url> {
         .map_err(|err| YacliError::Config(format!("invalid disk endpoint: {err}")))
 }
 
+fn disk_trash_endpoint(base_url: &str) -> Result<Url> {
+    Url::parse(base_url)
+        .map_err(|err| YacliError::Config(format!("invalid disk base URL: {err}")))?
+        .join("/v1/disk/trash/resources")
+        .map_err(|err| YacliError::Config(format!("invalid disk endpoint: {err}")))
+}
+
+fn disk_trash_restore_endpoint(base_url: &str) -> Result<Url> {
+    Url::parse(base_url)
+        .map_err(|err| YacliError::Config(format!("invalid disk base URL: {err}")))?
+        .join("/v1/disk/trash/resources/restore")
+        .map_err(|err| YacliError::Config(format!("invalid disk endpoint: {err}")))
+}
+
+fn disk_resource_mutation_endpoint(base_url: &str, action: &str) -> Result<Url> {
+    if !matches!(action, "copy" | "move") {
+        return Err(YacliError::Validation("unsupported disk operation".into()));
+    }
+    Url::parse(base_url)
+        .map_err(|err| YacliError::Config(format!("invalid disk base URL: {err}")))?
+        .join(&format!("/v1/disk/resources/{action}"))
+        .map_err(|err| YacliError::Config(format!("invalid disk endpoint: {err}")))
+}
+
 fn disk_upload_endpoint(base_url: &str) -> Result<Url> {
     Url::parse(base_url)
         .map_err(|err| YacliError::Config(format!("invalid disk base URL: {err}")))?
@@ -1417,10 +1683,126 @@ mod tests {
 
     use super::{
         DISK_DOWNLOAD_TIMEOUT_ENV, DISK_UPLOAD_TIMEOUT_ENV, DiskPublishReview, DiskUnpublishReview,
-        PrivateDiskUploadRequest, ProgressReader, TransferProgress, is_retryable_transfer_error,
-        parse_transfer_timeout_env, review_private_upload,
+        PrivateDiskUploadRequest, ProgressReader, TransferProgress,
+        disk_resource_mutation_endpoint, disk_trash_endpoint, disk_trash_restore_endpoint,
+        is_retryable_transfer_error, parse_transfer_timeout_env, review_private_upload,
+        validate_private_trash_path, validate_trash_restore_name,
     };
     use crate::error::YacliError;
+
+    #[test]
+    fn disk_recovery_and_resource_mutation_endpoints_are_fixed() {
+        assert_eq!(
+            disk_trash_endpoint("https://cloud-api.yandex.net")
+                .expect("trash endpoint")
+                .as_str(),
+            "https://cloud-api.yandex.net/v1/disk/trash/resources"
+        );
+        assert_eq!(
+            disk_trash_restore_endpoint("https://cloud-api.yandex.net")
+                .expect("restore endpoint")
+                .as_str(),
+            "https://cloud-api.yandex.net/v1/disk/trash/resources/restore"
+        );
+        assert_eq!(
+            disk_resource_mutation_endpoint("https://cloud-api.yandex.net", "move")
+                .expect("move endpoint")
+                .as_str(),
+            "https://cloud-api.yandex.net/v1/disk/resources/move"
+        );
+        assert!(disk_resource_mutation_endpoint("https://cloud-api.yandex.net", "delete").is_err());
+    }
+
+    #[test]
+    fn disk_trash_paths_and_restore_names_reject_traversal() {
+        assert!(validate_private_trash_path("trash:/").is_ok());
+        assert!(validate_private_trash_path("trash:/folder/item.txt").is_ok());
+        assert!(validate_private_trash_path("trash:/folder/../item.txt").is_err());
+        assert!(validate_private_trash_path("trash:/folder%2fitem.txt").is_err());
+        assert!(validate_private_trash_path("disk:/folder/item.txt").is_err());
+        assert!(validate_trash_restore_name("restored.txt").is_ok());
+        assert!(validate_trash_restore_name("../restored.txt").is_err());
+        assert!(validate_trash_restore_name("dir/restored.txt").is_err());
+    }
+
+    #[test]
+    fn disk_copy_and_trash_mutations_use_single_reviewed_provider_request() {
+        let (base_url, server) = disk_read_retry_fixture(vec![Some(
+            "HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )]);
+        let receipt = super::copy_private_resource(
+            &base_url,
+            "test-token",
+            &super::PrivateDiskCopyMoveRequest {
+                source_path: "disk:/safe/source.txt".into(),
+                destination_path: "disk:/safe/copy.txt".into(),
+                overwrite: false,
+            },
+        )
+        .expect("copy");
+        assert!(receipt.accepted);
+        assert!(!receipt.asynchronous);
+        let requests = server.join().expect("server");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("POST /v1/disk/resources/copy?"));
+        assert!(requests[0].contains("overwrite=false"));
+
+        let (base_url, server) = disk_read_retry_fixture(vec![Some(
+            "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )]);
+        let receipt = super::move_private_resource_to_trash(
+            &base_url,
+            "test-token",
+            "disk:/safe/test-object.txt",
+        )
+        .expect("move to trash");
+        assert!(receipt.accepted && receipt.asynchronous);
+        let requests = server.join().expect("server");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("DELETE /v1/disk/resources?"));
+        assert!(requests[0].contains("permanently=false"));
+    }
+
+    #[test]
+    fn disk_trash_list_and_restore_use_safe_api_requests() {
+        let (base_url, server) = disk_read_retry_fixture(vec![Some(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 98\r\nConnection: close\r\n\r\n{\"name\":\"\",\"path\":\"trash:/\",\"type\":\"dir\",\"_embedded\":{\"limit\":10,\"offset\":0,\"total\":0,\"items\":[]}}",
+        )]);
+        let resource = super::list_private_trash(
+            &base_url,
+            "test-token",
+            &super::PrivateDiskTrashListRequest {
+                path: Some("trash:/".into()),
+                limit: 10,
+                offset: 0,
+            },
+        )
+        .expect("list trash");
+        assert_eq!(resource.path, "trash:/");
+        let requests = server.join().expect("server");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /v1/disk/trash/resources?"));
+
+        let (base_url, server) = disk_read_retry_fixture(vec![Some(
+            "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )]);
+        let receipt = super::restore_private_trash_resource(
+            &base_url,
+            "test-token",
+            &super::PrivateDiskTrashRestoreRequest {
+                trash_path: "trash:/folder/item.txt".into(),
+                restore_name: Some("item-restored.txt".into()),
+                overwrite: false,
+            },
+        )
+        .expect("restore");
+        assert!(receipt.accepted && receipt.asynchronous);
+        let requests = server.join().expect("server");
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("PUT /v1/disk/trash/resources/restore?"));
+        assert!(requests[0].contains("overwrite=false"));
+        assert!(requests[0].contains("name=item-restored.txt"));
+    }
 
     fn disk_read_retry_fixture(
         responses: Vec<Option<&'static str>>,

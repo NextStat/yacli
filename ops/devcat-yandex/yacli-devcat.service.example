@@ -14,6 +14,9 @@ Environment=YACLI_DEVCAT_ACCOUNT=devcat
 # Environment=YACLI_DEVCAT_ALLOWED_ACCOUNTS=devcat,second-account
 Environment=YACLI_DEVCAT_CAPABILITIES=mail.read,mail.send,disk.read,disk.write
 Environment=YACLI_DEVCAT_DISK_ROOTS=disk:/DevCat
+Environment=YACLI_DEVCAT_DOWNLOAD_ROOTS=/var/lib/yacli-devcat/downloads
+Environment=YACLI_DEVCAT_UPLOAD_ROOTS=/var/lib/yacli-devcat/uploads
+ExecStartPre=/usr/bin/install -d -m 0700 /var/lib/yacli-devcat/downloads /var/lib/yacli-devcat/uploads
 # Managed Secure MCP Tunnel mode. DevCat still refuses non-loopback listeners.
 Environment=YACLI_DEVCAT_TRUST_SECURE_TUNNEL=1
 # For direct bearer-protected loopback mode instead, omit the line above and use:
