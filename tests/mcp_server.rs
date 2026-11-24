@@ -970,6 +970,26 @@ client_id = "client-123"
         .as_array()
         .expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.send"));
+    let mail_list = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.list")
+        .expect("mail list tool");
+    assert_eq!(
+        mail_list["inputSchema"]["properties"]["offset"]["minimum"],
+        0
+    );
+    assert_eq!(
+        mail_list["inputSchema"]["properties"]["offset"]["maximum"],
+        1_000_000
+    );
+    let mail_search = tools
+        .iter()
+        .find(|tool| tool["name"] == "yacli.mail.search")
+        .expect("mail search tool");
+    assert_eq!(
+        mail_search["inputSchema"]["properties"]["offset"]["minimum"],
+        0
+    );
     assert!(
         tools
             .iter()

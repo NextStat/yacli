@@ -70,8 +70,8 @@ use crate::{
     mail::{
         MailAttachmentExportRequest, MailAttachmentSelector, MailInviteInspectRequest,
         copy_mail_message, create_mail_folder, export_mail_attachment, inspect_mail_invite,
-        list_mail_folders, list_mail_messages, load_mail_attachments, move_mail_message,
-        read_mail_message, review_mail_submission, search_mail_messages,
+        list_mail_folders, list_mail_messages_page, load_mail_attachments, move_mail_message,
+        read_mail_message, review_mail_submission, search_mail_messages_page,
         send_mail_message_with_sent_copy,
     },
 };
@@ -1327,7 +1327,8 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
                 "properties": {
                     "account": { "type": "string" },
                     "folder": { "type": "string" },
-                    "limit": { "type": "integer", "minimum": 1 }
+                    "limit": { "type": "integer", "minimum": 1 },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": 1000000 }
                 },
                 "additionalProperties": false
             }),
@@ -1343,7 +1344,8 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
                     "account": { "type": "string" },
                     "folder": { "type": "string" },
                     "query": { "type": "string" },
-                    "limit": { "type": "integer", "minimum": 1 }
+                    "limit": { "type": "integer", "minimum": 1 },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": 1000000 }
                 },
                 "required": ["query"],
                 "additionalProperties": false
@@ -1920,12 +1922,14 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             arguments.get("account").and_then(Value::as_str),
             optional_string(&arguments, "folder").unwrap_or("INBOX"),
             optional_usize(&arguments, "limit").unwrap_or(20),
+            optional_usize(&arguments, "offset").unwrap_or(0),
         )?,
         "yacli.mail.search" => mail_search(
             arguments.get("account").and_then(Value::as_str),
             optional_string(&arguments, "folder").unwrap_or("INBOX"),
             required_string(&arguments, "query")?,
             optional_usize(&arguments, "limit").unwrap_or(20),
+            optional_usize(&arguments, "offset").unwrap_or(0),
         )?,
         "yacli.mail.read" => mail_read(
             arguments.get("account").and_then(Value::as_str),
@@ -2879,30 +2883,46 @@ fn contacts_import(args: &Value) -> Result<Value> {
     Ok(json!({"account":account,"status":"success","created_uids":created}))
 }
 
-fn mail_list(account: Option<&str>, folder: &str, limit: usize) -> Result<Value> {
+fn mail_list(account: Option<&str>, folder: &str, limit: usize, offset: usize) -> Result<Value> {
     let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
-    let messages = list_mail_messages(&context.imap_host, context.imap_port, auth, folder, limit)?;
+    let messages = list_mail_messages_page(
+        &context.imap_host,
+        context.imap_port,
+        auth,
+        folder,
+        limit,
+        offset,
+    )?;
     Ok(json!({
         "account": resolved_account,
         "folder": folder,
+        "offset": offset,
         "items": messages,
     }))
 }
 
-fn mail_search(account: Option<&str>, folder: &str, query: &str, limit: usize) -> Result<Value> {
+fn mail_search(
+    account: Option<&str>,
+    folder: &str,
+    query: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Value> {
     let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
-    let messages = search_mail_messages(
+    let messages = search_mail_messages_page(
         &context.imap_host,
         context.imap_port,
         auth,
         folder,
         query,
         limit,
+        offset,
     )?;
     Ok(json!({
         "account": resolved_account,
         "folder": folder,
         "query": query,
+        "offset": offset,
         "items": messages,
     }))
 }

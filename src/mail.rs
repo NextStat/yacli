@@ -538,7 +538,19 @@ pub fn list_mail_messages(
     mailbox_name: &str,
     limit: usize,
 ) -> Result<Vec<MailMessageSummary>> {
+    list_mail_messages_page(imap_host, imap_port, auth, mailbox_name, limit, 0)
+}
+
+pub fn list_mail_messages_page(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    mailbox_name: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<MailMessageSummary>> {
     validate_mail_summary_limit("mail list", limit)?;
+    validate_mail_page_offset(offset)?;
 
     let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
 
@@ -550,7 +562,12 @@ pub fn list_mail_messages(
         return Ok(Vec::new());
     }
 
-    let selected_uids = uids.into_iter().rev().take(limit).collect::<Vec<_>>();
+    let selected_uids = uids
+        .into_iter()
+        .rev()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
     let messages = session.fetch_message_summaries(&selected_uids)?;
     let _ = session.logout();
     Ok(messages)
@@ -564,7 +581,20 @@ pub fn search_mail_messages(
     query: &str,
     limit: usize,
 ) -> Result<Vec<MailMessageSummary>> {
+    search_mail_messages_page(imap_host, imap_port, auth, mailbox_name, query, limit, 0)
+}
+
+pub fn search_mail_messages_page(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    mailbox_name: &str,
+    query: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<MailMessageSummary>> {
     validate_mail_summary_limit("mail search", limit)?;
+    validate_mail_page_offset(offset)?;
     let query = normalize_search_query(query)?;
 
     let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
@@ -577,10 +607,24 @@ pub fn search_mail_messages(
         return Ok(Vec::new());
     }
 
-    let selected_uids = uids.into_iter().rev().take(limit).collect::<Vec<_>>();
+    let selected_uids = uids
+        .into_iter()
+        .rev()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
     let messages = session.fetch_message_summaries(&selected_uids)?;
     let _ = session.logout();
     Ok(messages)
+}
+
+fn validate_mail_page_offset(offset: usize) -> Result<()> {
+    if offset > 1_000_000 {
+        return Err(YacliError::Validation(
+            "mail page offset must not exceed 1000000".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn read_mail_message(
@@ -3225,7 +3269,7 @@ mod tests {
         normalize_search_query, parse_fetch_metadata, parse_imap_token, parse_list_line,
         parse_search_uids, prepare_mail_submission, quote_imap_string, review_mail_submission,
         send_mail_message, validate_folder_name, validate_mail_attachment_export_request,
-        validate_mail_attachment_read_request, validate_mail_uid,
+        validate_mail_attachment_read_request, validate_mail_page_offset, validate_mail_uid,
     };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -3427,6 +3471,13 @@ mod tests {
         assert!(validate_folder_name(" \t ").is_err());
         assert!(validate_folder_name("folder\r\nUID STORE 1 +FLAGS (\\Deleted)").is_err());
         assert!(validate_mail_uid(0).is_err());
+    }
+
+    #[test]
+    fn mail_pagination_offset_is_bounded() {
+        assert!(validate_mail_page_offset(0).is_ok());
+        assert!(validate_mail_page_offset(1_000_000).is_ok());
+        assert!(validate_mail_page_offset(1_000_001).is_err());
     }
 
     #[test]
