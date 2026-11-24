@@ -151,7 +151,7 @@ fn required_capabilities(name: &str) -> Option<&'static [&'static str]> {
             Some(&["mail.read"])
         }
         "yacli.mail.send" | "yacli.mail.send_published_link" => Some(&["mail.send"]),
-        "yacli.mail.folder.create" | "yacli.mail.copy" | "yacli.mail.move" => {
+        "yacli.mail.folder.create" | "yacli.mail.copy" | "yacli.mail.move" | "yacli.mail.flags" => {
             Some(&["mail.mutate"])
         }
         "yacli.contacts.list" | "yacli.contacts.search" | "yacli.contacts.export" => {
@@ -293,6 +293,7 @@ pub fn is_risky(name: &str) -> bool {
             | "yacli.mail.folder.create"
             | "yacli.mail.copy"
             | "yacli.mail.move"
+            | "yacli.mail.flags"
             | "yacli.contacts.create"
             | "yacli.contacts.update"
             | "yacli.contacts.delete"
@@ -489,6 +490,7 @@ mod tests {
             "yacli.mail.folder.create",
             "yacli.mail.copy",
             "yacli.mail.move",
+            "yacli.mail.flags",
         ] {
             assert_eq!(
                 required_capabilities(name),

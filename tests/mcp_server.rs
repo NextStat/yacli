@@ -970,6 +970,7 @@ client_id = "client-123"
         .as_array()
         .expect("tools array");
     assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.send"));
+    assert!(tools.iter().any(|tool| tool["name"] == "yacli.mail.flags"));
     let mail_list = tools
         .iter()
         .find(|tool| tool["name"] == "yacli.mail.list")

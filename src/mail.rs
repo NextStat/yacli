@@ -350,6 +350,12 @@ pub enum MailSessionAuth {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MailFlagUpdate {
+    pub seen: Option<bool>,
+    pub flagged: Option<bool>,
+}
+
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct RepliedMail {
     pub original_uid: u64,
@@ -509,6 +515,49 @@ pub fn move_mail_message(
     session.uid_move(uid, &encode_modified_utf7(destination_folder))?;
     let _ = session.logout();
     Ok(())
+}
+
+pub fn update_mail_flags(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    mailbox_name: &str,
+    uid: u64,
+    update: MailFlagUpdate,
+) -> Result<()> {
+    validate_mail_uid(uid)?;
+    validate_folder_name(mailbox_name)?;
+    validate_mail_flag_update(update)?;
+    let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
+    session.select_mailbox(&encode_modified_utf7(mailbox_name))?;
+    if let Some(enabled) = update.seen {
+        session.uid_store_flag(uid, "\\Seen", enabled)?;
+    }
+    if let Some(enabled) = update.flagged {
+        session.uid_store_flag(uid, "\\Flagged", enabled)?;
+    }
+    let _ = session.logout();
+    Ok(())
+}
+
+fn validate_mail_flag_update(update: MailFlagUpdate) -> Result<()> {
+    if update.seen.is_none() && update.flagged.is_none() {
+        return Err(YacliError::Validation(
+            "mail flag update must include seen or flagged".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn format_uid_store_flag(uid: u64, flag: &str, enabled: bool) -> Result<String> {
+    validate_mail_uid(uid)?;
+    if !matches!(flag, "\\Seen" | "\\Flagged") {
+        return Err(YacliError::Validation("unsupported mail flag".into()));
+    }
+    Ok(format!(
+        "UID STORE {uid} {}FLAGS.SILENT ({flag})",
+        if enabled { "+" } else { "-" }
+    ))
 }
 
 fn validate_mail_uid(uid: u64) -> Result<()> {
@@ -1227,6 +1276,17 @@ impl<S: Read + Write> ImapSession<S> {
             &self.current_tag(),
             &tagged,
             "IMAP UID MOVE",
+            TaggedErrorKind::Api,
+        )
+    }
+
+    fn uid_store_flag(&mut self, uid: u64, flag: &str, enabled: bool) -> Result<()> {
+        let command = format_uid_store_flag(uid, flag, enabled)?;
+        let (_, tagged) = self.run_command(&command)?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP UID STORE",
             TaggedErrorKind::Api,
         )
     }
@@ -3259,17 +3319,19 @@ struct ExportedBytes {
 mod tests {
     use super::{
         FetchMetadata, ImapSession, MailAttachmentExportRequest, MailAttachmentPart,
-        MailAttachmentPayload, MailAttachmentSelector, MailAttachmentSummary, MailMessage,
-        MailSendRequest, MailSessionAuth, MailSmtpAuth, MailThreadHeaders, OutgoingMessage,
-        SMTP_SAFE_MESSAGE_BYTES, SentMail, SmtpSession, build_forward_body, build_message_summary,
-        build_outgoing_message, build_read_message, build_reply_target, build_xoauth2_payload,
-        decode_modified_utf7, encode_modified_utf7, export_attachment_from_message,
-        extract_message_content, finish_sent_copy, inspect_invite_from_message,
-        load_mail_attachments, normalize_forward_subject, normalize_reply_subject,
-        normalize_search_query, parse_fetch_metadata, parse_imap_token, parse_list_line,
-        parse_search_uids, prepare_mail_submission, quote_imap_string, review_mail_submission,
-        send_mail_message, validate_folder_name, validate_mail_attachment_export_request,
-        validate_mail_attachment_read_request, validate_mail_page_offset, validate_mail_uid,
+        MailAttachmentPayload, MailAttachmentSelector, MailAttachmentSummary, MailFlagUpdate,
+        MailMessage, MailSendRequest, MailSessionAuth, MailSmtpAuth, MailThreadHeaders,
+        OutgoingMessage, SMTP_SAFE_MESSAGE_BYTES, SentMail, SmtpSession, build_forward_body,
+        build_message_summary, build_outgoing_message, build_read_message, build_reply_target,
+        build_xoauth2_payload, decode_modified_utf7, encode_modified_utf7,
+        export_attachment_from_message, extract_message_content, finish_sent_copy,
+        format_uid_store_flag, inspect_invite_from_message, load_mail_attachments,
+        normalize_forward_subject, normalize_reply_subject, normalize_search_query,
+        parse_fetch_metadata, parse_imap_token, parse_list_line, parse_search_uids,
+        prepare_mail_submission, quote_imap_string, review_mail_submission, send_mail_message,
+        validate_folder_name, validate_mail_attachment_export_request,
+        validate_mail_attachment_read_request, validate_mail_flag_update,
+        validate_mail_page_offset, validate_mail_uid,
     };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -3478,6 +3540,28 @@ mod tests {
         assert!(validate_mail_page_offset(0).is_ok());
         assert!(validate_mail_page_offset(1_000_000).is_ok());
         assert!(validate_mail_page_offset(1_000_001).is_err());
+    }
+
+    #[test]
+    fn mail_flag_commands_only_accept_supported_flags() {
+        assert_eq!(
+            format_uid_store_flag(42, "\\Seen", true).expect("set seen"),
+            "UID STORE 42 +FLAGS.SILENT (\\Seen)"
+        );
+        assert_eq!(
+            format_uid_store_flag(42, "\\Flagged", false).expect("clear flagged"),
+            "UID STORE 42 -FLAGS.SILENT (\\Flagged)"
+        );
+        assert!(format_uid_store_flag(42, "\\Deleted", true).is_err());
+        assert!(format_uid_store_flag(0, "\\Seen", true).is_err());
+        assert!(validate_mail_flag_update(MailFlagUpdate::default()).is_err());
+        assert!(
+            validate_mail_flag_update(MailFlagUpdate {
+                seen: Some(false),
+                flagged: None,
+            })
+            .is_ok()
+        );
     }
 
     #[test]
