@@ -22,6 +22,18 @@
 - Закрытая #642 подтверждает базовую эксплуатацию и сохранение Sent на трёх аккаунтах, но её завершение не доказывает приёмку полного функционала #723.
 - Официальная справка Yandex ID перечисляет отдельный пароль приложения для CardDAV; OAuth scope приложения нельзя считать разрешением на контакты. Ссылки: [синхронизация контактов CardDAV](https://www.yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others), [пароли приложений](https://www.yandex.ru/support/id/ru/authorization/app-passwords.html).
 
+## Read-only production preflight (2026-11-24)
+
+Проверены только account metadata и состояние процесса; секретные значения не читались, пользовательские письма/файлы/контакты не запрашивались.
+
+| Account | Mail metadata | Disk metadata | Contacts metadata | Что доказано |
+|---|---|---|---|---|
+| `dedts` | enabled, `oauth_xoauth2`, credential reference указан | enabled, `oauth`, credential reference указан | секции нет, значит новый default `enabled=false` | конфигурация службы, но не наличие/валидность OAuth token и не успешный provider read |
+| `ykkareliadom` | enabled, `oauth_xoauth2`, credential reference указан | disabled | секции нет, значит новый default `enabled=false` | OAuth Disk требуется отдельная авторизация владельца, если включать целевой Disk |
+| `dvabobra2014` | enabled, `oauth_xoauth2`, credential reference указан | disabled | секции нет, значит новый default `enabled=false` | Диск не включен |
+
+`yacli-devcat.service` был `active`, listener — `127.0.0.1:8797`, `GET /healthz` вернул HTTP 200. Это не проверяет Secure MCP Tunnel readiness, ChatGPT tool catalog или account credentials.
+
 ## Основание
 
 - Реестр инструментов и диспетчер: `src/mcp/server.rs`.
