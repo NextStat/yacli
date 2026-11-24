@@ -6,6 +6,7 @@
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde::Serialize;
+use std::io::Read;
 use std::time::Duration;
 
 use crate::error::{Result, YacliError};
@@ -73,15 +74,17 @@ pub fn fetch_contacts(base_url: &str, email: &str, app_password: &str) -> Result
             response.status().as_u16()
         )));
     }
-    let bytes = response
-        .bytes()
+    let mut bytes = Vec::new();
+    response
+        .take((MAX_CARDDAV_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
         .map_err(|_| YacliError::UnsupportedOperation("CardDAV response read failed".into()))?;
     if bytes.len() > MAX_CARDDAV_RESPONSE_BYTES {
         return Err(YacliError::UnsupportedOperation(
             "CardDAV response exceeds 8 MiB limit".into(),
         ));
     }
-    let xml = String::from_utf8(bytes.to_vec()).map_err(|_| {
+    let xml = String::from_utf8(bytes).map_err(|_| {
         YacliError::UnsupportedOperation("CardDAV response is not UTF-8 XML".into())
     })?;
     parse_carddav_multistatus(&xml)
