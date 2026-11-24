@@ -67,8 +67,9 @@ use crate::{
     },
     mail::{
         MailAttachmentExportRequest, MailAttachmentSelector, MailInviteInspectRequest,
-        export_mail_attachment, inspect_mail_invite, list_mail_folders, list_mail_messages,
-        load_mail_attachments, read_mail_message, review_mail_submission, search_mail_messages,
+        copy_mail_message, create_mail_folder, export_mail_attachment, inspect_mail_invite,
+        list_mail_folders, list_mail_messages, load_mail_attachments, move_mail_message,
+        read_mail_message, review_mail_submission, search_mail_messages,
         send_mail_message_with_sent_copy,
     },
 };
@@ -1294,6 +1295,9 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             None,
             ui_enabled,
         ),
+        tool("yacli.mail.folder.create", "Create a mailbox folder (requires dry-run review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"}},"required":["folder"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.copy", "Copy one message by stable UID to another folder (requires review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.move", "Move one message by stable UID to another folder (requires review in DevCat).", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
         tool(
             "yacli.contacts.list",
             "List contacts from the separately configured Yandex CardDAV address book.",
@@ -1889,6 +1893,9 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             structured
         }
         "yacli.mail.folders" => mail_folders(arguments.get("account").and_then(Value::as_str))?,
+        "yacli.mail.folder.create" => mail_folder_create(&arguments)?,
+        "yacli.mail.copy" => mail_copy_move(&arguments, false)?,
+        "yacli.mail.move" => mail_copy_move(&arguments, true)?,
         "yacli.contacts.list" => contacts_list(arguments.get("account").and_then(Value::as_str))?,
         "yacli.contacts.search" => contacts_search(
             arguments.get("account").and_then(Value::as_str),
@@ -2651,6 +2658,61 @@ fn mail_folders(account: Option<&str>) -> Result<Value> {
         "account": resolved_account,
         "items": folders,
     }))
+}
+
+fn mail_folder_create(args: &Value) -> Result<Value> {
+    let name = required_string(args, "folder")?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.mail.folder.create", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(json!({"folder":name,"dry_run":true,"review_sha256":digest}));
+    }
+    let (account, auth, ctx) =
+        resolve_mail_private_context(args.get("account").and_then(Value::as_str))?;
+    create_mail_folder(&ctx.imap_host, ctx.imap_port, auth, name)?;
+    Ok(json!({"account":account,"folder":name,"created":true}))
+}
+
+fn mail_copy_move(args: &Value, is_move: bool) -> Result<Value> {
+    let uid = required_u64(args, "uid")?;
+    let source = optional_string(args, "source_folder").unwrap_or("INBOX");
+    let destination = required_string(args, "destination_folder")?;
+    let tool_name = if is_move {
+        "yacli.mail.move"
+    } else {
+        "yacli.mail.copy"
+    };
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash(tool_name, args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"uid":uid,"source_folder":source,"destination_folder":destination,"operation":if is_move {"move"} else {"copy"},"dry_run":true,"review_sha256":digest}),
+        );
+    }
+    let (account, auth, ctx) =
+        resolve_mail_private_context(args.get("account").and_then(Value::as_str))?;
+    if is_move {
+        move_mail_message(
+            &ctx.imap_host,
+            ctx.imap_port,
+            auth,
+            source,
+            uid,
+            destination,
+        )?;
+    } else {
+        copy_mail_message(
+            &ctx.imap_host,
+            ctx.imap_port,
+            auth,
+            source,
+            uid,
+            destination,
+        )?;
+    }
+    Ok(
+        json!({"account":account,"uid":uid,"source_folder":source,"destination_folder":destination,"moved":is_move,"copied":!is_move}),
+    )
 }
 
 fn contacts_list(account: Option<&str>) -> Result<Value> {

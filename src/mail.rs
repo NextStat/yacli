@@ -462,6 +462,75 @@ pub fn list_mail_folders(
     Ok(folders)
 }
 
+pub fn create_mail_folder(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    folder: &str,
+) -> Result<()> {
+    let folder = validate_folder_name(folder)?;
+    let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
+    session.create_mailbox(&encode_modified_utf7(folder))?;
+    let _ = session.logout();
+    Ok(())
+}
+
+pub fn copy_mail_message(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    source_folder: &str,
+    uid: u64,
+    destination_folder: &str,
+) -> Result<()> {
+    validate_mail_uid(uid)?;
+    validate_folder_name(source_folder)?;
+    validate_folder_name(destination_folder)?;
+    let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
+    session.select_mailbox(&encode_modified_utf7(source_folder))?;
+    session.uid_copy(uid, &encode_modified_utf7(destination_folder))?;
+    let _ = session.logout();
+    Ok(())
+}
+
+pub fn move_mail_message(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    source_folder: &str,
+    uid: u64,
+    destination_folder: &str,
+) -> Result<()> {
+    validate_mail_uid(uid)?;
+    validate_folder_name(source_folder)?;
+    validate_folder_name(destination_folder)?;
+    let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
+    session.select_mailbox(&encode_modified_utf7(source_folder))?;
+    session.uid_move(uid, &encode_modified_utf7(destination_folder))?;
+    let _ = session.logout();
+    Ok(())
+}
+
+fn validate_mail_uid(uid: u64) -> Result<()> {
+    if uid == 0 {
+        Err(YacliError::Validation(
+            "mail UID must be greater than zero".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_folder_name(folder: &str) -> Result<&str> {
+    let folder = folder.trim();
+    if folder.is_empty() || folder.chars().any(char::is_control) {
+        return Err(YacliError::Validation(
+            "mail folder name is empty or contains control characters".into(),
+        ));
+    }
+    Ok(folder)
+}
+
 pub fn list_mail_messages(
     imap_host: &str,
     imap_port: u16,
@@ -1079,6 +1148,43 @@ impl<S: Read + Write> ImapSession<S> {
         }
 
         Ok(folders)
+    }
+
+    fn create_mailbox(&mut self, mailbox_name: &str) -> Result<()> {
+        let (_, tagged) =
+            self.run_command(&format!("CREATE {}", quote_imap_string(mailbox_name)))?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP CREATE",
+            TaggedErrorKind::Api,
+        )
+    }
+
+    fn uid_copy(&mut self, uid: u64, mailbox_name: &str) -> Result<()> {
+        let (_, tagged) = self.run_command(&format!(
+            "UID COPY {uid} {}",
+            quote_imap_string(mailbox_name)
+        ))?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP UID COPY",
+            TaggedErrorKind::Api,
+        )
+    }
+
+    fn uid_move(&mut self, uid: u64, mailbox_name: &str) -> Result<()> {
+        let (_, tagged) = self.run_command(&format!(
+            "UID MOVE {uid} {}",
+            quote_imap_string(mailbox_name)
+        ))?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP UID MOVE",
+            TaggedErrorKind::Api,
+        )
     }
 
     fn select_mailbox(&mut self, mailbox_name: &str) -> Result<()> {

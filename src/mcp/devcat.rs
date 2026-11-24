@@ -151,6 +151,9 @@ fn required_capabilities(name: &str) -> Option<&'static [&'static str]> {
             Some(&["mail.read"])
         }
         "yacli.mail.send" | "yacli.mail.send_published_link" => Some(&["mail.send"]),
+        "yacli.mail.folder.create" | "yacli.mail.copy" | "yacli.mail.move" => {
+            Some(&["mail.mutate"])
+        }
         "yacli.contacts.list" | "yacli.contacts.search" => Some(&["contacts.read"]),
         "yacli.disk.info" | "yacli.disk.list" | "yacli.disk.read" => Some(&["disk.read"]),
         "yacli.disk.mkdir" | "yacli.disk.upload" => Some(&["disk.write"]),
@@ -281,6 +284,9 @@ pub fn is_risky(name: &str) -> bool {
         "yacli.mail.send"
             | "yacli.mail.send_link"
             | "yacli.mail.send_published_link"
+            | "yacli.mail.folder.create"
+            | "yacli.mail.copy"
+            | "yacli.mail.move"
             | "yacli.disk.mkdir"
             | "yacli.disk.upload"
             | "yacli.disk.publish"
@@ -450,6 +456,21 @@ mod tests {
             required_capabilities("yacli.contacts.search"),
             Some(["contacts.read"].as_slice())
         );
+    }
+
+    #[test]
+    fn mail_mutations_require_capability_and_review() {
+        for name in [
+            "yacli.mail.folder.create",
+            "yacli.mail.copy",
+            "yacli.mail.move",
+        ] {
+            assert_eq!(
+                required_capabilities(name),
+                Some(["mail.mutate"].as_slice())
+            );
+            assert!(is_risky(name));
+        }
     }
 
     #[test]
