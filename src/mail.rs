@@ -356,6 +356,16 @@ pub struct MailFlagUpdate {
     pub flagged: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MailBulkAction {
+    MarkRead,
+    MarkUnread,
+    Flag,
+    Unflag,
+    Copy,
+    Move,
+}
+
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct CreatedMailDraft {
     pub folder: String,
@@ -490,6 +500,37 @@ pub fn create_mail_folder(
     Ok(())
 }
 
+pub fn rename_mail_folder(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    current_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    let (current_name, new_name) = validate_mail_folder_rename(current_name, new_name)?;
+    let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
+    session.rename_mailbox(
+        &encode_modified_utf7(current_name),
+        &encode_modified_utf7(new_name),
+    )?;
+    let _ = session.logout();
+    Ok(())
+}
+
+pub fn validate_mail_folder_rename<'a, 'b>(
+    current_name: &'a str,
+    new_name: &'b str,
+) -> Result<(&'a str, &'b str)> {
+    let current_name = validate_folder_name(current_name)?;
+    let new_name = validate_folder_name(new_name)?;
+    if current_name == new_name {
+        return Err(YacliError::Validation(
+            "Новое имя папки должно отличаться от исходного".into(),
+        ));
+    }
+    Ok((current_name, new_name))
+}
+
 pub fn copy_mail_message(
     imap_host: &str,
     imap_port: u16,
@@ -547,6 +588,81 @@ pub fn update_mail_flags(
     }
     let _ = session.logout();
     Ok(())
+}
+
+pub fn apply_mail_bulk_action(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    mailbox_name: &str,
+    uids: &[u64],
+    action: MailBulkAction,
+    destination_folder: Option<&str>,
+) -> Result<()> {
+    let uid_set = format_mail_uid_set(uids)?;
+    validate_folder_name(mailbox_name)?;
+    let destination = match action {
+        MailBulkAction::Copy | MailBulkAction::Move => Some(validate_folder_name(
+            destination_folder.ok_or_else(|| {
+                YacliError::Validation(
+                    "Для копирования или перемещения нужна папка назначения".into(),
+                )
+            })?,
+        )?),
+        _ => {
+            if destination_folder.is_some() {
+                return Err(YacliError::Validation(
+                    "Папка назначения допустима только для copy/move".into(),
+                ));
+            }
+            None
+        }
+    };
+
+    let mut session = open_authenticated_session(imap_host, imap_port, auth)?;
+    session.select_mailbox(&encode_modified_utf7(mailbox_name))?;
+    match action {
+        MailBulkAction::MarkRead => session.uid_store_flags(&uid_set, "\\Seen", true)?,
+        MailBulkAction::MarkUnread => session.uid_store_flags(&uid_set, "\\Seen", false)?,
+        MailBulkAction::Flag => session.uid_store_flags(&uid_set, "\\Flagged", true)?,
+        MailBulkAction::Unflag => session.uid_store_flags(&uid_set, "\\Flagged", false)?,
+        MailBulkAction::Copy => session.uid_copy_set(
+            &uid_set,
+            &encode_modified_utf7(destination.ok_or_else(|| {
+                YacliError::Validation("Для копирования нужна папка назначения".into())
+            })?),
+        )?,
+        MailBulkAction::Move => session.uid_move_set(
+            &uid_set,
+            &encode_modified_utf7(destination.ok_or_else(|| {
+                YacliError::Validation("Для перемещения нужна папка назначения".into())
+            })?),
+        )?,
+    }
+    let _ = session.logout();
+    Ok(())
+}
+
+fn format_mail_uid_set(uids: &[u64]) -> Result<String> {
+    if uids.is_empty() || uids.len() > 50 {
+        return Err(YacliError::Validation(
+            "Массовое действие требует от 1 до 50 UID".into(),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for uid in uids {
+        validate_mail_uid(*uid)?;
+        if !seen.insert(*uid) {
+            return Err(YacliError::Validation(
+                "Список UID не должен содержать повторов".into(),
+            ));
+        }
+    }
+    Ok(seen
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(","))
 }
 
 pub fn create_mail_draft(
@@ -1296,9 +1412,36 @@ impl<S: Read + Write> ImapSession<S> {
         )
     }
 
+    fn rename_mailbox(&mut self, current_name: &str, new_name: &str) -> Result<()> {
+        let (_, tagged) = self.run_command(&format!(
+            "RENAME {} {}",
+            quote_imap_string(current_name),
+            quote_imap_string(new_name)
+        ))?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP RENAME",
+            TaggedErrorKind::Api,
+        )
+    }
+
     fn uid_copy(&mut self, uid: u64, mailbox_name: &str) -> Result<()> {
         let (_, tagged) = self.run_command(&format!(
             "UID COPY {uid} {}",
+            quote_imap_string(mailbox_name)
+        ))?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP UID COPY",
+            TaggedErrorKind::Api,
+        )
+    }
+
+    fn uid_copy_set(&mut self, uid_set: &str, mailbox_name: &str) -> Result<()> {
+        let (_, tagged) = self.run_command(&format!(
+            "UID COPY {uid_set} {}",
             quote_imap_string(mailbox_name)
         ))?;
         parse_tagged_status(
@@ -1322,8 +1465,38 @@ impl<S: Read + Write> ImapSession<S> {
         )
     }
 
+    fn uid_move_set(&mut self, uid_set: &str, mailbox_name: &str) -> Result<()> {
+        let (_, tagged) = self.run_command(&format!(
+            "UID MOVE {uid_set} {}",
+            quote_imap_string(mailbox_name)
+        ))?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP UID MOVE",
+            TaggedErrorKind::Api,
+        )
+    }
+
     fn uid_store_flag(&mut self, uid: u64, flag: &str, enabled: bool) -> Result<()> {
         let command = format_uid_store_flag(uid, flag, enabled)?;
+        let (_, tagged) = self.run_command(&command)?;
+        parse_tagged_status(
+            &self.current_tag(),
+            &tagged,
+            "IMAP UID STORE",
+            TaggedErrorKind::Api,
+        )
+    }
+
+    fn uid_store_flags(&mut self, uid_set: &str, flag: &str, enabled: bool) -> Result<()> {
+        if !matches!(flag, "\\Seen" | "\\Flagged") {
+            return Err(YacliError::Validation("unsupported mail flag".into()));
+        }
+        let command = format!(
+            "UID STORE {uid_set} {}FLAGS.SILENT ({flag})",
+            if enabled { "+" } else { "-" }
+        );
         let (_, tagged) = self.run_command(&command)?;
         parse_tagged_status(
             &self.current_tag(),
@@ -3381,11 +3554,11 @@ mod tests {
         build_message_summary, build_outgoing_message, build_read_message, build_reply_target,
         build_xoauth2_payload, decode_modified_utf7, encode_modified_utf7,
         export_attachment_from_message, extract_message_content, finish_sent_copy,
-        format_uid_store_flag, inspect_invite_from_message, load_mail_attachments,
-        normalize_forward_subject, normalize_reply_subject, normalize_search_query,
-        parse_fetch_metadata, parse_imap_token, parse_list_line, parse_search_uids,
-        prepare_mail_submission, quote_imap_string, review_mail_submission, send_mail_message,
-        validate_folder_name, validate_mail_attachment_export_request,
+        format_mail_uid_set, format_uid_store_flag, inspect_invite_from_message,
+        load_mail_attachments, normalize_forward_subject, normalize_reply_subject,
+        normalize_search_query, parse_fetch_metadata, parse_imap_token, parse_list_line,
+        parse_search_uids, prepare_mail_submission, quote_imap_string, review_mail_submission,
+        send_mail_message, validate_folder_name, validate_mail_attachment_export_request,
         validate_mail_attachment_read_request, validate_mail_flag_update,
         validate_mail_page_offset, validate_mail_uid,
     };
@@ -3582,6 +3755,42 @@ mod tests {
                 .written()
                 .contains("A0001 UID MOVE 7 \"Archive\"\r\n")
         );
+    }
+
+    #[test]
+    fn folder_rename_quotes_names_and_rejects_identity() {
+        let mut renamed = ImapSession::from_stream(FakeStream::new("A0001 OK renamed\r\n"));
+        renamed.rename_mailbox("Старое", "Новое \"имя\"").unwrap();
+        assert!(
+            renamed
+                .reader
+                .get_ref()
+                .written()
+                .contains("A0001 RENAME \"Старое\" \"Новое \\\"имя\\\"\"\r\n")
+        );
+        assert!(super::validate_mail_folder_rename(" Same ", "Same").is_err());
+    }
+
+    #[test]
+    fn bulk_uid_set_is_bounded_unique_positive_and_sorted() {
+        assert_eq!(format_mail_uid_set(&[9, 2, 5]).unwrap(), "2,5,9");
+        assert!(format_mail_uid_set(&[]).is_err());
+        assert!(format_mail_uid_set(&[1, 1]).is_err());
+        assert!(format_mail_uid_set(&[0]).is_err());
+        assert!(format_mail_uid_set(&(1..=51).collect::<Vec<_>>()).is_err());
+    }
+
+    #[test]
+    fn bulk_uid_commands_use_uid_sets_and_safe_flags() {
+        let fake = FakeStream::new("A0001 OK selected\r\nA0002 OK moved\r\nA0003 OK stored\r\n");
+        let mut session = ImapSession::from_stream(fake);
+        session.select_mailbox("Inbox").unwrap();
+        session.uid_move_set("2,5,9", "Archive").unwrap();
+        session.uid_store_flags("2,5,9", "\\Seen", true).unwrap();
+        let written = session.reader.get_ref().written();
+        assert!(written.contains("A0002 UID MOVE 2,5,9 \"Archive\"\r\n"));
+        assert!(written.contains("A0003 UID STORE 2,5,9 +FLAGS.SILENT (\\Seen)\r\n"));
+        assert!(session.uid_store_flags("2,5", "\\Deleted", true).is_err());
     }
 
     #[test]

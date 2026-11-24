@@ -71,11 +71,12 @@ use crate::{
         validate_private_trash_path, validate_trash_restore_name,
     },
     mail::{
-        MailAttachmentExportRequest, MailAttachmentSelector, MailFlagUpdate,
-        MailInviteInspectRequest, copy_mail_message, create_mail_draft, create_mail_folder,
-        export_mail_attachment, inspect_mail_invite, list_mail_folders, list_mail_messages_page,
-        load_mail_attachments, move_mail_message, read_mail_message, review_mail_submission,
-        search_mail_messages_page, send_mail_message_with_sent_copy, update_mail_flags,
+        MailAttachmentExportRequest, MailAttachmentSelector, MailBulkAction, MailFlagUpdate,
+        MailInviteInspectRequest, apply_mail_bulk_action, copy_mail_message, create_mail_draft,
+        create_mail_folder, export_mail_attachment, inspect_mail_invite, list_mail_folders,
+        list_mail_messages_page, load_mail_attachments, move_mail_message, read_mail_message,
+        rename_mail_folder, review_mail_submission, search_mail_messages_page,
+        send_mail_message_with_sent_copy, update_mail_flags, validate_mail_folder_rename,
     },
 };
 use chrono::{DateTime, Utc};
@@ -1301,9 +1302,11 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             ui_enabled,
         ),
         tool("yacli.mail.folder.create", "Создать папку почтового ящика; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"}},"required":["folder"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.folder.rename", "Переименовать папку почтового ящика; сервер также переименует вложенные папки. Перед изменением требуется review.", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"},"new_folder":{"type":"string"}},"required":["folder","new_folder"],"additionalProperties":false}), None, ui_enabled),
         tool("yacli.mail.copy", "Скопировать одно письмо по постоянному UID в другую папку; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
         tool("yacli.mail.move", "Переместить одно письмо по постоянному UID в другую папку; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"source_folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"destination_folder":{"type":"string"}},"required":["uid","destination_folder"],"additionalProperties":false}), None, ui_enabled),
         tool("yacli.mail.flags", "Установить состояние прочитанности и отметку избранного для одного письма по постоянному UID; в DevCat требуется проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"},"uid":{"type":"integer","minimum":1},"seen":{"type":"boolean"},"flagged":{"type":"boolean"}},"required":["uid"],"additionalProperties":false}), None, ui_enabled),
+        tool("yacli.mail.bulk", "Выполнить одно массовое действие не более чем над 50 письмами; в DevCat требуется предварительная проверка.", json!({"type":"object","properties":{"account":{"type":"string"},"folder":{"type":"string"},"uids":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"integer","minimum":1}},"action":{"type":"string","enum":["mark_read","mark_unread","flag","unflag","copy","move"]},"destination_folder":{"type":"string"}},"required":["uids","action"],"additionalProperties":false}), None, ui_enabled),
         tool(
             "yacli.contacts.list",
             "Получить список контактов из отдельно настроенной адресной книги Яндекс CardDAV.",
@@ -2022,9 +2025,11 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
         }
         "yacli.mail.folders" => mail_folders(arguments.get("account").and_then(Value::as_str))?,
         "yacli.mail.folder.create" => mail_folder_create(&arguments)?,
+        "yacli.mail.folder.rename" => mail_folder_rename(&arguments)?,
         "yacli.mail.copy" => mail_copy_move(&arguments, false)?,
         "yacli.mail.move" => mail_copy_move(&arguments, true)?,
         "yacli.mail.flags" => mail_flags(&arguments)?,
+        "yacli.mail.bulk" => mail_bulk(&arguments)?,
         "yacli.contacts.list" => contacts_list(arguments.get("account").and_then(Value::as_str))?,
         "yacli.contacts.search" => contacts_search(
             arguments.get("account").and_then(Value::as_str),
@@ -2820,6 +2825,23 @@ fn mail_folder_create(args: &Value) -> Result<Value> {
     Ok(json!({"account":account,"folder":name,"created":true}))
 }
 
+fn mail_folder_rename(args: &Value) -> Result<Value> {
+    let folder = required_string(args, "folder")?;
+    let new_folder = required_string(args, "new_folder")?;
+    validate_mail_folder_rename(folder, new_folder)?;
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.mail.folder.rename", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"folder":folder,"new_folder":new_folder,"dry_run":true,"review_sha256":digest}),
+        );
+    }
+    let (account, auth, ctx) =
+        resolve_mail_private_context(args.get("account").and_then(Value::as_str))?;
+    rename_mail_folder(&ctx.imap_host, ctx.imap_port, auth, folder, new_folder)?;
+    Ok(json!({"account":account,"folder":folder,"new_folder":new_folder,"renamed":true}))
+}
+
 fn mail_copy_move(args: &Value, is_move: bool) -> Result<Value> {
     let uid = required_u64(args, "uid")?;
     let source = optional_string(args, "source_folder").unwrap_or("INBOX");
@@ -2886,6 +2908,58 @@ fn mail_flags(args: &Value) -> Result<Value> {
     update_mail_flags(&ctx.imap_host, ctx.imap_port, auth, folder, uid, update)?;
     Ok(
         json!({"account":account,"uid":uid,"folder":folder,"seen":update.seen,"flagged":update.flagged,"updated":true}),
+    )
+}
+
+fn mail_bulk(args: &Value) -> Result<Value> {
+    let folder = optional_string(args, "folder").unwrap_or("INBOX");
+    let uid_values = args
+        .get("uids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| YacliError::Validation("uids должен быть массивом UID".into()))?;
+    let uids = uid_values
+        .iter()
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                YacliError::Validation("каждый UID должен быть положительным целым".into())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let action_name = required_string(args, "action")?;
+    let action = match action_name {
+        "mark_read" => MailBulkAction::MarkRead,
+        "mark_unread" => MailBulkAction::MarkUnread,
+        "flag" => MailBulkAction::Flag,
+        "unflag" => MailBulkAction::Unflag,
+        "copy" => MailBulkAction::Copy,
+        "move" => MailBulkAction::Move,
+        _ => {
+            return Err(YacliError::Validation(
+                "неподдерживаемое массовое действие".into(),
+            ));
+        }
+    };
+    let destination = optional_string(args, "destination_folder");
+    if optional_bool(args, "dry_run") == Some(true) {
+        let digest = devcat::review_hash("yacli.mail.bulk", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"dry_run":true,"folder":folder,"uids":uids,"action":action_name,"destination_folder":destination,"review_sha256":digest}),
+        );
+    }
+    let (account, auth, ctx) =
+        resolve_mail_private_context(args.get("account").and_then(Value::as_str))?;
+    apply_mail_bulk_action(
+        &ctx.imap_host,
+        ctx.imap_port,
+        auth,
+        folder,
+        &uids,
+        action,
+        destination,
+    )?;
+    Ok(
+        json!({"account":account,"folder":folder,"count":uids.len(),"action":action_name,"destination_folder":destination,"updated":true}),
     )
 }
 
