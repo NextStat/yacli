@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::error::{Result, YacliError};
 
 const MAX_CARDDAV_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_VCARD_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Contact {
@@ -84,6 +85,191 @@ pub fn fetch_contacts(base_url: &str, email: &str, app_password: &str) -> Result
         YacliError::UnsupportedOperation("CardDAV response is not UTF-8 XML".into())
     })?;
     parse_carddav_multistatus(&xml)
+}
+
+pub fn create_contact(
+    base_url: &str,
+    email: &str,
+    app_password: &str,
+    vcard: &str,
+) -> Result<String> {
+    validate_vcard(vcard)?;
+    let collection = addressbook_url(base_url, email)?;
+    let uid = format!("yacli-{:032x}", rand::random::<u128>());
+    let card = with_uid(vcard, &uid)?;
+    let target = collection
+        .join(&format!("{uid}.vcf"))
+        .map_err(|_| YacliError::Config("invalid CardDAV resource URL".into()))?;
+    let response = carddav_client()?
+        .put(target)
+        .basic_auth(email, Some(app_password))
+        .header("If-None-Match", "*")
+        .header("Content-Type", "text/vcard; charset=utf-8")
+        .body(card)
+        .send()
+        .map_err(|_| YacliError::UnsupportedOperation("CardDAV create request failed".into()))?;
+    ensure_write_success(response.status().as_u16(), "create")?;
+    Ok(uid)
+}
+
+pub fn update_contact(
+    base_url: &str,
+    email: &str,
+    app_password: &str,
+    href: &str,
+    etag: &str,
+    vcard: &str,
+) -> Result<()> {
+    validate_vcard(vcard)?;
+    validate_etag(etag)?;
+    let target = safe_resource_url(base_url, href)?;
+    let response = carddav_client()?
+        .put(target)
+        .basic_auth(email, Some(app_password))
+        .header("If-Match", etag)
+        .header("Content-Type", "text/vcard; charset=utf-8")
+        .body(vcard.to_string())
+        .send()
+        .map_err(|_| YacliError::UnsupportedOperation("CardDAV update request failed".into()))?;
+    ensure_write_success(response.status().as_u16(), "update")
+}
+
+pub fn delete_contact(
+    base_url: &str,
+    email: &str,
+    app_password: &str,
+    href: &str,
+    etag: &str,
+) -> Result<()> {
+    validate_etag(etag)?;
+    let target = safe_resource_url(base_url, href)?;
+    let response = carddav_client()?
+        .delete(target)
+        .basic_auth(email, Some(app_password))
+        .header("If-Match", etag)
+        .send()
+        .map_err(|_| YacliError::UnsupportedOperation("CardDAV delete request failed".into()))?;
+    ensure_write_success(response.status().as_u16(), "delete")
+}
+
+fn carddav_client() -> Result<Client> {
+    Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|_| {
+            YacliError::UnsupportedOperation("CardDAV client initialization failed".into())
+        })
+}
+
+fn addressbook_url(base_url: &str, email: &str) -> Result<reqwest::Url> {
+    let mut base = reqwest::Url::parse(base_url)
+        .map_err(|_| YacliError::Config("invalid CardDAV base URL".into()))?;
+    if base.scheme() != "https" || base.host_str() != Some("carddav.yandex.ru") {
+        return Err(YacliError::Config(
+            "CardDAV URL must use the official https://carddav.yandex.ru origin".into(),
+        ));
+    }
+    base.set_path(&format!(
+        "/addressbook/{}/addressbook/",
+        url::form_urlencoded::byte_serialize(email.as_bytes()).collect::<String>()
+    ));
+    Ok(base)
+}
+
+fn safe_resource_url(base_url: &str, href: &str) -> Result<reqwest::Url> {
+    let base = reqwest::Url::parse(base_url)
+        .map_err(|_| YacliError::Config("invalid CardDAV base URL".into()))?;
+    if base.scheme() != "https" || base.host_str() != Some("carddav.yandex.ru") {
+        return Err(YacliError::Config(
+            "CardDAV URL must use the official https://carddav.yandex.ru origin".into(),
+        ));
+    }
+    if !href.starts_with("/addressbook/")
+        || href.contains('%')
+        || href.contains('\\')
+        || href.split('/').any(|part| part == "." || part == "..")
+    {
+        return Err(YacliError::Validation(
+            "CardDAV href is outside the expected addressbook path".into(),
+        ));
+    }
+    let target = base
+        .join(href)
+        .map_err(|_| YacliError::Validation("invalid CardDAV href".into()))?;
+    if target.origin() != base.origin()
+        || target.username() != ""
+        || target.password().is_some()
+        || target.path().contains("..")
+    {
+        return Err(YacliError::Validation(
+            "CardDAV href escapes the configured origin".into(),
+        ));
+    }
+    Ok(target)
+}
+
+fn validate_vcard(vcard: &str) -> Result<()> {
+    if vcard.len() > MAX_VCARD_BYTES
+        || !vcard.to_ascii_uppercase().contains("BEGIN:VCARD")
+        || !vcard.to_ascii_uppercase().contains("END:VCARD")
+        || vcard.chars().any(|ch| ch == '\0')
+    {
+        return Err(YacliError::Validation(
+            "vCard is invalid or exceeds 1 MiB".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_etag(etag: &str) -> Result<()> {
+    if etag.is_empty()
+        || etag.len() > 512
+        || etag == "*"
+        || etag.starts_with("W/")
+        || etag.chars().any(char::is_control)
+    {
+        return Err(YacliError::Validation(
+            "CardDAV operation requires a strong ETag".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn with_uid(vcard: &str, uid: &str) -> Result<String> {
+    let mut lines = vcard
+        .replace("\r\n", "\n")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if lines
+        .iter()
+        .any(|line| line.to_ascii_uppercase().starts_with("UID:"))
+    {
+        return Err(YacliError::Validation(
+            "new contact must not supply its own UID".into(),
+        ));
+    }
+    let begin = lines
+        .iter()
+        .position(|line| line.eq_ignore_ascii_case("BEGIN:VCARD"))
+        .ok_or_else(|| YacliError::Validation("vCard BEGIN:VCARD is required".into()))?;
+    lines.insert(begin + 1, format!("UID:{uid}"));
+    Ok(format!("{}\r\n", lines.join("\r\n")))
+}
+
+fn ensure_write_success(status: u16, action: &str) -> Result<()> {
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    if status == 412 || status == 409 {
+        return Err(YacliError::Api(format!(
+            "CardDAV {action} conflict; refresh the contact and review again"
+        )));
+    }
+    Err(YacliError::UnsupportedOperation(format!(
+        "CardDAV {action} returned HTTP {status}"
+    )))
 }
 
 fn parse_carddav_multistatus(xml: &str) -> Result<Vec<Contact>> {
@@ -318,5 +504,23 @@ mod tests {
             Some("/addressbook/user/contact.vcf")
         );
         assert_eq!(cards[0].etag.as_deref(), Some("\"tag-1\""));
+    }
+
+    #[test]
+    fn contact_mutations_require_safe_href_etag_and_vcard() {
+        assert!(safe_resource_url("https://carddav.yandex.ru", "/addressbook/u/a.vcf").is_ok());
+        for href in [
+            "https://evil.test/a.vcf",
+            "//evil.test/a.vcf",
+            "/addressbook/../private",
+        ] {
+            assert!(safe_resource_url("https://carddav.yandex.ru", href).is_err());
+        }
+        assert!(validate_etag("\"etag-1\"").is_ok());
+        assert!(validate_etag("*").is_err());
+        assert!(validate_etag("W/\"weak\"").is_err());
+        let card = with_uid("BEGIN:VCARD\nVERSION:3.0\nFN:Name\nEND:VCARD", "new-id").unwrap();
+        assert!(card.contains("UID:new-id"));
+        assert!(with_uid("BEGIN:VCARD\nUID:existing\nEND:VCARD", "new-id").is_err());
     }
 }
