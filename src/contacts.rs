@@ -1,7 +1,7 @@
 //! Parsing and searching vCard records returned by a CardDAV provider.
 //!
-//! Network access and credentials are intentionally kept out of this module so
-//! provider records can be validated independently before exposing them via MCP.
+//! Credentials are supplied by the account resolver; provider records are
+//! parsed here without exposing protocol details to MCP clients.
 
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
@@ -81,7 +81,11 @@ pub fn fetch_contacts(base_url: &str, email: &str, app_password: &str) -> Result
     let xml = String::from_utf8(bytes.to_vec()).map_err(|_| {
         YacliError::UnsupportedOperation("CardDAV response is not UTF-8 XML".into())
     })?;
-    let mut reader = quick_xml::Reader::from_str(&xml);
+    parse_carddav_multistatus(&xml)
+}
+
+fn parse_carddav_multistatus(xml: &str) -> Result<Vec<Contact>> {
+    let mut reader = quick_xml::Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut vcard = String::new();
     let mut cards = Vec::new();
@@ -261,5 +265,15 @@ mod tests {
         ] {
             assert!(fetch_contacts(origin, "owner@example.test", "synthetic-secret").is_err());
         }
+    }
+
+    #[test]
+    fn parses_carddav_multistatus_address_data() {
+        let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav"><d:response><d:propstat><d:prop><card:address-data>BEGIN:VCARD&#10;VERSION:3.0&#10;UID:9&#10;FN:Тест&#10;EMAIL:test@example.test&#10;END:VCARD</card:address-data></d:prop></d:propstat></d:response></d:multistatus>"#;
+        let cards = parse_carddav_multistatus(xml).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].uid.as_deref(), Some("9"));
+        assert_eq!(cards[0].name.as_deref(), Some("Тест"));
+        assert_eq!(cards[0].emails, ["test@example.test"]);
     }
 }
