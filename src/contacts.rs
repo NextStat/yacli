@@ -3,7 +3,14 @@
 //! Network access and credentials are intentionally kept out of this module so
 //! provider records can be validated independently before exposing them via MCP.
 
+use reqwest::blocking::Client;
+use reqwest::redirect::Policy;
 use serde::Serialize;
+use std::time::Duration;
+
+use crate::error::{Result, YacliError};
+
+const MAX_CARDDAV_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Contact {
@@ -13,6 +20,108 @@ pub struct Contact {
     pub phones: Vec<String>,
     pub organization: Option<String>,
     pub vcard: String,
+}
+
+/// Fetches the Yandex CardDAV address book using its documented addressbook
+/// endpoint and an independently provisioned Contacts app password.
+pub fn fetch_contacts(base_url: &str, email: &str, app_password: &str) -> Result<Vec<Contact>> {
+    let base = reqwest::Url::parse(base_url)
+        .map_err(|_| YacliError::Config("invalid CardDAV base URL".into()))?;
+    if base.scheme() != "https" || base.host_str() != Some("carddav.yandex.ru") {
+        return Err(YacliError::Config(
+            "CardDAV URL must use the official https://carddav.yandex.ru origin".into(),
+        ));
+    }
+    let mut url = base;
+    url.set_path(&format!(
+        "/addressbook/{}/addressbook/",
+        url::form_urlencoded::byte_serialize(email.as_bytes()).collect::<String>()
+    ));
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|_| {
+            YacliError::UnsupportedOperation("CardDAV client initialization failed".into())
+        })?;
+    let body = r#"<?xml version="1.0" encoding="utf-8" ?>
+<card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
+  <d:prop><d:getetag/><card:address-data/></d:prop>
+</card:addressbook-query>"#;
+    let response = client
+        .request(
+            reqwest::Method::from_bytes(b"REPORT").expect("REPORT method"),
+            url,
+        )
+        .basic_auth(email, Some(app_password))
+        .header("Depth", "1")
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .body(body)
+        .send()
+        .map_err(|_| YacliError::UnsupportedOperation("CardDAV request failed".into()))?;
+    if response.status().is_redirection() {
+        return Err(YacliError::UnsupportedOperation(
+            "CardDAV redirected; refusing to forward credentials".into(),
+        ));
+    }
+    if !response.status().is_success() {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "CardDAV provider returned HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|_| YacliError::UnsupportedOperation("CardDAV response read failed".into()))?;
+    if bytes.len() > MAX_CARDDAV_RESPONSE_BYTES {
+        return Err(YacliError::UnsupportedOperation(
+            "CardDAV response exceeds 8 MiB limit".into(),
+        ));
+    }
+    let xml = String::from_utf8(bytes.to_vec()).map_err(|_| {
+        YacliError::UnsupportedOperation("CardDAV response is not UTF-8 XML".into())
+    })?;
+    let mut reader = quick_xml::Reader::from_str(&xml);
+    reader.config_mut().trim_text(true);
+    let mut vcard = String::new();
+    let mut cards = Vec::new();
+    let mut in_address_data = false;
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Start(event))
+                if event.local_name().as_ref() == b"address-data" =>
+            {
+                in_address_data = true
+            }
+            Ok(quick_xml::events::Event::End(event))
+                if event.local_name().as_ref() == b"address-data" =>
+            {
+                in_address_data = false;
+                cards.extend(parse_vcards(&vcard));
+                vcard.clear();
+            }
+            Ok(quick_xml::events::Event::Text(event)) if in_address_data => {
+                if let Ok(text) = std::str::from_utf8(event.as_ref())
+                    && let Ok(text) = quick_xml::escape::unescape(text)
+                {
+                    vcard.push_str(&text);
+                }
+            }
+            Ok(quick_xml::events::Event::CData(event)) if in_address_data => {
+                if let Ok(text) = std::str::from_utf8(event.as_ref()) {
+                    vcard.push_str(&text);
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => {
+                return Err(YacliError::UnsupportedOperation(
+                    "invalid CardDAV XML response".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(cards)
 }
 
 pub fn parse_vcards(input: &str) -> Vec<Contact> {
