@@ -113,7 +113,7 @@ fn parse_carddav_multistatus(xml: &str) -> Result<Vec<Contact>> {
             }
             Ok(quick_xml::events::Event::CData(event)) if in_address_data => {
                 if let Ok(text) = std::str::from_utf8(event.as_ref()) {
-                    vcard.push_str(&text);
+                    vcard.push_str(text);
                 }
             }
             Ok(quick_xml::events::Event::Eof) => break,
