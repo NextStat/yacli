@@ -357,6 +357,15 @@ pub struct MailFlagUpdate {
 }
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub struct CreatedMailDraft {
+    pub folder: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub subject: String,
+    pub message_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct RepliedMail {
     pub original_uid: u64,
     pub recipient: String,
@@ -538,6 +547,39 @@ pub fn update_mail_flags(
     }
     let _ = session.logout();
     Ok(())
+}
+
+pub fn create_mail_draft(
+    imap_host: &str,
+    imap_port: u16,
+    auth: MailSessionAuth,
+    request: MailSendRequest,
+) -> Result<CreatedMailDraft> {
+    let session_auth = auth.clone();
+    let prepared = prepare_mail_submission(auth, request)?;
+    ensure_smtp_safe_submission(&prepared)?;
+    let mut session = open_authenticated_session(imap_host, imap_port, session_auth)?;
+    let draft_folder = session
+        .list_folders()?
+        .into_iter()
+        .find(|folder| {
+            folder
+                .attributes
+                .iter()
+                .any(|attr| attr.eq_ignore_ascii_case("\\Drafts"))
+        })
+        .ok_or_else(|| {
+            YacliError::Api("IMAP server did not advertise a \\Drafts mailbox".into())
+        })?;
+    session.append_draft(&draft_folder.raw_name, prepared.message.as_bytes())?;
+    let _ = session.logout();
+    Ok(CreatedMailDraft {
+        folder: draft_folder.name,
+        to: prepared.sent.to,
+        cc: prepared.sent.cc,
+        subject: prepared.sent.subject,
+        message_id: prepared.sent.message_id,
+    })
 }
 
 fn validate_mail_flag_update(update: MailFlagUpdate) -> Result<()> {
@@ -1303,9 +1345,23 @@ impl<S: Read + Write> ImapSession<S> {
     }
 
     fn append_message(&mut self, mailbox_name: &str, message: &[u8]) -> Result<()> {
+        self.append_message_with_flags(mailbox_name, None, message)
+    }
+
+    fn append_draft(&mut self, mailbox_name: &str, message: &[u8]) -> Result<()> {
+        self.append_message_with_flags(mailbox_name, Some("\\Draft"), message)
+    }
+
+    fn append_message_with_flags(
+        &mut self,
+        mailbox_name: &str,
+        flags: Option<&str>,
+        message: &[u8],
+    ) -> Result<()> {
         let tag = self.next_tag();
+        let flag_clause = flags.map(|flags| format!(" ({flags})")).unwrap_or_default();
         self.write_line(&format!(
-            "{tag} APPEND {} {{{}}}",
+            "{tag} APPEND {}{flag_clause} {{{}}}",
             quote_imap_string(mailbox_name),
             message.len()
         ))?;
@@ -3651,6 +3707,19 @@ mod tests {
 
         assert!(error.to_string().contains("IMAP APPEND failed"));
         assert_eq!(observer.written().matches("APPEND ").count(), 1);
+    }
+
+    #[test]
+    fn imap_draft_append_sets_only_draft_flag() {
+        let fake = FakeStream::new("+ continue\r\nA0001 OK appended\r\n");
+        let observer = fake.clone();
+        let mut session = ImapSession::from_stream(fake);
+        session
+            .append_draft("Drafts", b"Subject: hello\r\n\r\nbody")
+            .expect("append draft");
+        let writes = observer.written();
+        assert!(writes.contains("A0001 APPEND \"Drafts\" (\\Draft) {22}\r\n"));
+        assert_eq!(writes.matches("APPEND ").count(), 1);
     }
 
     #[test]

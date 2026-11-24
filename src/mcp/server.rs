@@ -69,10 +69,10 @@ use crate::{
     },
     mail::{
         MailAttachmentExportRequest, MailAttachmentSelector, MailFlagUpdate,
-        MailInviteInspectRequest, copy_mail_message, create_mail_folder, export_mail_attachment,
-        inspect_mail_invite, list_mail_folders, list_mail_messages_page, load_mail_attachments,
-        move_mail_message, read_mail_message, review_mail_submission, search_mail_messages_page,
-        send_mail_message_with_sent_copy, update_mail_flags,
+        MailInviteInspectRequest, copy_mail_message, create_mail_draft, create_mail_folder,
+        export_mail_attachment, inspect_mail_invite, list_mail_folders, list_mail_messages_page,
+        load_mail_attachments, move_mail_message, read_mail_message, review_mail_submission,
+        search_mail_messages_page, send_mail_message_with_sent_copy, update_mail_flags,
     },
 };
 use chrono::{DateTime, Utc};
@@ -1372,6 +1372,27 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             ui_enabled,
         ),
         tool(
+            "yacli.mail.draft.create",
+            "Create an unsent draft in the mailbox (requires dry-run review in DevCat).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "account": { "type": "string" },
+                    "to": { "type": "string" },
+                    "cc": { "type": "array", "items": { "type": "string" } },
+                    "bcc": { "type": "array", "items": { "type": "string" } },
+                    "subject": { "type": "string" },
+                    "text": { "type": "string" },
+                    "html": { "type": "string" },
+                    "attachments": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["to", "subject"],
+                "additionalProperties": false
+            }),
+            None,
+            ui_enabled,
+        ),
+        tool(
             "yacli.mail.send",
             "Send one mail message.",
             json!({
@@ -1939,6 +1960,7 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             required_u64(&arguments, "uid")?,
             optional_u64(&arguments, "max_bytes").unwrap_or(15 * 1024 * 1024),
         )?,
+        "yacli.mail.draft.create" => mail_draft_create(&arguments)?,
         "yacli.mail.send" => mail_send(
             arguments.get("account").and_then(Value::as_str),
             MailSendToolRequest {
@@ -2743,6 +2765,11 @@ fn mail_flags(args: &Value) -> Result<Value> {
         seen: optional_bool(args, "seen"),
         flagged: optional_bool(args, "flagged"),
     };
+    if update.seen.is_none() && update.flagged.is_none() {
+        return Err(YacliError::Validation(
+            "mail flag update must include seen or flagged".into(),
+        ));
+    }
     if optional_bool(args, "dry_run") == Some(true) {
         let digest = devcat::review_hash("yacli.mail.flags", args)?;
         devcat::record_review(digest.clone());
@@ -2986,6 +3013,44 @@ fn activity_undo(id: &str) -> Result<Value> {
         "entry": entry,
         "undo": applied,
     }))
+}
+
+fn mail_draft_create(args: &Value) -> Result<Value> {
+    let account = args.get("account").and_then(Value::as_str);
+    let to = required_string(args, "to")?.to_string();
+    let cc = string_list(args, "cc")?;
+    let bcc = string_list(args, "bcc")?;
+    let subject = required_string(args, "subject")?.to_string();
+    let text = optional_string_owned(args, "text");
+    let html = optional_string_owned(args, "html");
+    let attachment_paths = string_list(args, "attachments")?;
+    let (resolved_account, auth, context) = resolve_mail_private_context(account)?;
+    let attachments = load_mail_attachments(
+        &attachment_paths
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    )?;
+    let draft_request = crate::mail::MailSendRequest {
+        to: vec![to],
+        cc,
+        bcc,
+        subject,
+        text,
+        html,
+        attachments,
+        thread_headers: None,
+    };
+    if optional_bool(args, "dry_run") == Some(true) {
+        let review = review_mail_submission(auth, draft_request)?;
+        let digest = devcat::review_hash("yacli.mail.draft.create", args)?;
+        devcat::record_review(digest.clone());
+        return Ok(
+            json!({"dry_run":true,"operation":"mail.draft.create","account":resolved_account,"review":review,"review_sha256":digest}),
+        );
+    }
+    let draft = create_mail_draft(&context.imap_host, context.imap_port, auth, draft_request)?;
+    Ok(json!({"account":resolved_account,"created":true,"draft":draft}))
 }
 
 fn mail_send(account: Option<&str>, request: MailSendToolRequest) -> Result<Value> {
