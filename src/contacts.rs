@@ -71,8 +71,12 @@ pub fn search(contacts: &[Contact], query: &str) -> Vec<Contact> {
     contacts
         .iter()
         .filter(|contact| {
-            contact.name.iter().chain(contact.organization.iter())
-                .chain(contact.emails.iter()).chain(contact.phones.iter())
+            contact
+                .name
+                .iter()
+                .chain(contact.organization.iter())
+                .chain(contact.emails.iter())
+                .chain(contact.phones.iter())
                 .any(|value| value.to_lowercase().contains(&needle))
         })
         .cloned()
@@ -118,7 +122,9 @@ mod tests {
 
     #[test]
     fn parses_folded_vcard_and_escaped_values() {
-        let cards = parse_vcards("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:42\r\nFN:Иван\\, Иванов\r\nEMAIL;TYPE=work:ivan@example.test\r\nTEL;TYPE=cell:+100\r\nORG:Домашний\\nофис\r\nEND:VCARD\r\n");
+        let cards = parse_vcards(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:42\r\nFN:Иван\\, Иванов\r\nEMAIL;TYPE=work:ivan@example.test\r\nTEL;TYPE=cell:+100\r\nORG:Домашний\\nофис\r\nEND:VCARD\r\n",
+        );
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].name.as_deref(), Some("Иван, Иванов"));
         assert_eq!(cards[0].emails, ["ivan@example.test"]);
@@ -128,7 +134,9 @@ mod tests {
 
     #[test]
     fn searches_name_email_organization_and_phone_case_insensitively() {
-        let cards = parse_vcards("BEGIN:VCARD\nFN:Alice Smith\nEMAIL:alice@example.test\nORG:Example Corp\nTEL:+155500\nEND:VCARD\n");
+        let cards = parse_vcards(
+            "BEGIN:VCARD\nFN:Alice Smith\nEMAIL:alice@example.test\nORG:Example Corp\nTEL:+155500\nEND:VCARD\n",
+        );
         for query in ["ALICE", "example.test", "corp", "555"] {
             assert_eq!(search(&cards, query).len(), 1);
         }
