@@ -441,6 +441,18 @@ mod tests {
     }
 
     #[test]
+    fn contacts_tools_require_only_the_contacts_read_capability() {
+        assert_eq!(
+            required_capabilities("yacli.contacts.list"),
+            Some(["contacts.read"].as_slice())
+        );
+        assert_eq!(
+            required_capabilities("yacli.contacts.search"),
+            Some(["contacts.read"].as_slice())
+        );
+    }
+
+    #[test]
     fn rejects_traversal_forms() {
         for path in [
             "disk:/safe/../private",

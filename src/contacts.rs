@@ -251,4 +251,15 @@ mod tests {
         }
         assert!(search(&cards, "  ").is_empty());
     }
+
+    #[test]
+    fn rejects_non_yandex_and_non_https_origins_before_request() {
+        for origin in [
+            "http://carddav.yandex.ru",
+            "https://example.test",
+            "https://carddav.yandex.ru.evil.test",
+        ] {
+            assert!(fetch_contacts(origin, "owner@example.test", "synthetic-secret").is_err());
+        }
+    }
 }
