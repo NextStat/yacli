@@ -235,7 +235,73 @@ caldav_base_url = "https://caldav.yandex.ru"
 enabled = true
 auth_mode = "oauth"
 rest_base_url = "https://cloud-api.yandex.net"
+
+[accounts.mock.contacts]
+enabled = true
+carddav_base_url = "https://carddav.yandex.ru"
+credential_ref = "store:contacts"
 "#,
+    );
+}
+
+#[test]
+fn devcat_publishes_contacts_tools_only_with_explicit_read_capability() {
+    let temp = tempdir().expect("tempdir");
+    write_mock_mail_account(temp.path());
+    let input = [
+        initialize_request(false),
+        mcp_notification("notifications/initialized", json!({})),
+        mcp_request(2, "tools/list", json!({})),
+    ]
+    .concat();
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_DEVCAT_MODE", "1")
+        .env("YACLI_DEVCAT_ACCOUNT", "mock")
+        .env("YACLI_DEVCAT_CAPABILITIES", "mail.read,disk.read")
+        .args(["mcp"])
+        .write_stdin(input.clone())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tool list");
+    assert!(tools.iter().all(|tool| {
+        !tool["name"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("yacli.contacts.")
+    }));
+
+    let output = yacli()
+        .env("YACLI_CONFIG_DIR", temp.path())
+        .env("YACLI_DEVCAT_MODE", "1")
+        .env("YACLI_DEVCAT_ACCOUNT", "mock")
+        .env("YACLI_DEVCAT_CAPABILITIES", "contacts.read")
+        .args(["mcp"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let responses = parse_responses(&output);
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tool list");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.contacts.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "yacli.contacts.search")
     );
 }
 
