@@ -44,8 +44,8 @@ use crate::mail_link::{
 use crate::next_actions::next_actions_payload;
 use crate::onboarding::onboarding_resource_payload;
 use crate::runtime_context::{
-    auth_state, resolve_calendar_private_context, resolve_disk_private_context,
-    resolve_mail_private_context,
+    auth_state, resolve_calendar_private_context, resolve_contacts_private_context,
+    resolve_disk_private_context, resolve_mail_private_context,
 };
 use crate::suggestions::suggestions_payload;
 use crate::update::check_for_update;
@@ -56,6 +56,7 @@ use crate::{
         calendar_create_request_from_invites, create_calendar_event, delete_calendar_event,
         list_calendar_events, list_calendars, parse_event_window, review_calendar_event_creation,
     },
+    contacts::{fetch_contacts, search as search_contacts},
     disk::{
         DownloadedFile, PrivateDiskDownloadRequest, PrivateDiskListRequest,
         PrivateDiskMkdirRequest, PrivateDiskPublishRequest, PrivateDiskUnpublishRequest,
@@ -1294,6 +1295,20 @@ fn tool_definitions(ui_enabled: bool, roots_enabled: bool) -> Result<Vec<Value>>
             ui_enabled,
         ),
         tool(
+            "yacli.contacts.list",
+            "List contacts from the separately configured Yandex CardDAV address book.",
+            json!({"type":"object","properties":{"account":{"type":"string"}},"additionalProperties":false}),
+            None,
+            ui_enabled,
+        ),
+        tool(
+            "yacli.contacts.search",
+            "Search the separately configured Yandex CardDAV address book.",
+            json!({"type":"object","properties":{"account":{"type":"string"},"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
+            None,
+            ui_enabled,
+        ),
+        tool(
             "yacli.mail.list",
             "List messages from a folder.",
             json!({
@@ -1874,6 +1889,11 @@ fn call_tool(params: Value, ui_enabled: bool) -> Result<Value> {
             structured
         }
         "yacli.mail.folders" => mail_folders(arguments.get("account").and_then(Value::as_str))?,
+        "yacli.contacts.list" => contacts_list(arguments.get("account").and_then(Value::as_str))?,
+        "yacli.contacts.search" => contacts_search(
+            arguments.get("account").and_then(Value::as_str),
+            required_string(&arguments, "query")?,
+        )?,
         "yacli.mail.list" => mail_list(
             arguments.get("account").and_then(Value::as_str),
             optional_string(&arguments, "folder").unwrap_or("INBOX"),
@@ -2631,6 +2651,23 @@ fn mail_folders(account: Option<&str>) -> Result<Value> {
         "account": resolved_account,
         "items": folders,
     }))
+}
+
+fn contacts_list(account: Option<&str>) -> Result<Value> {
+    let (name, password, context) = resolve_contacts_private_context(account)?;
+    let items = fetch_contacts(&context.carddav_base_url, &context.email, &password)?;
+    Ok(json!({"account": name, "items": items}))
+}
+
+fn contacts_search(account: Option<&str>, query: &str) -> Result<Value> {
+    if query.trim().is_empty() {
+        return Err(YacliError::Validation(
+            "contacts search query must not be empty".into(),
+        ));
+    }
+    let (name, password, context) = resolve_contacts_private_context(account)?;
+    let contacts = fetch_contacts(&context.carddav_base_url, &context.email, &password)?;
+    Ok(json!({"account": name, "query": query, "items": search_contacts(&contacts, query)}))
 }
 
 fn mail_list(account: Option<&str>, folder: &str, limit: usize) -> Result<Value> {

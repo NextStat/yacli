@@ -151,6 +151,7 @@ fn required_capabilities(name: &str) -> Option<&'static [&'static str]> {
             Some(&["mail.read"])
         }
         "yacli.mail.send" | "yacli.mail.send_published_link" => Some(&["mail.send"]),
+        "yacli.contacts.list" | "yacli.contacts.search" => Some(&["contacts.read"]),
         "yacli.disk.info" | "yacli.disk.list" | "yacli.disk.read" => Some(&["disk.read"]),
         "yacli.disk.mkdir" | "yacli.disk.upload" => Some(&["disk.write"]),
         "yacli.disk.publish" | "yacli.disk.unpublish" => Some(&["disk.publish"]),
