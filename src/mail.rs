@@ -3224,8 +3224,8 @@ mod tests {
         load_mail_attachments, normalize_forward_subject, normalize_reply_subject,
         normalize_search_query, parse_fetch_metadata, parse_imap_token, parse_list_line,
         parse_search_uids, prepare_mail_submission, quote_imap_string, review_mail_submission,
-        send_mail_message, validate_mail_attachment_export_request,
-        validate_mail_attachment_read_request,
+        send_mail_message, validate_folder_name, validate_mail_attachment_export_request,
+        validate_mail_attachment_read_request, validate_mail_uid,
     };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -3388,6 +3388,45 @@ mod tests {
         fn flush(&mut self) -> IoResult<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn folder_create_and_uid_copy_move_emit_quoted_commands() {
+        let mut create = ImapSession::from_stream(FakeStream::new("A0001 OK created\r\n"));
+        create.create_mailbox("Архив").unwrap();
+        assert!(
+            create
+                .reader
+                .get_ref()
+                .written()
+                .contains("A0001 CREATE \"Архив\"\r\n")
+        );
+
+        let mut copy = ImapSession::from_stream(FakeStream::new("A0001 OK copied\r\n"));
+        copy.uid_copy(42, "Folder \"A\"").unwrap();
+        assert!(
+            copy.reader
+                .get_ref()
+                .written()
+                .contains("A0001 UID COPY 42 \"Folder \\\"A\\\"\"\r\n")
+        );
+
+        let mut moved = ImapSession::from_stream(FakeStream::new("A0001 OK moved\r\n"));
+        moved.uid_move(7, "Archive").unwrap();
+        assert!(
+            moved
+                .reader
+                .get_ref()
+                .written()
+                .contains("A0001 UID MOVE 7 \"Archive\"\r\n")
+        );
+    }
+
+    #[test]
+    fn mail_folder_and_uid_validation_rejects_unsafe_values() {
+        assert!(validate_folder_name(" \t ").is_err());
+        assert!(validate_folder_name("folder\r\nUID STORE 1 +FLAGS (\\Deleted)").is_err());
+        assert!(validate_mail_uid(0).is_err());
     }
 
     #[test]
