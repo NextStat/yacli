@@ -19,6 +19,8 @@ pub struct Contact {
     pub emails: Vec<String>,
     pub phones: Vec<String>,
     pub organization: Option<String>,
+    pub href: Option<String>,
+    pub etag: Option<String>,
     pub vcard: String,
 }
 
@@ -90,6 +92,9 @@ fn parse_carddav_multistatus(xml: &str) -> Result<Vec<Contact>> {
     let mut vcard = String::new();
     let mut cards = Vec::new();
     let mut in_address_data = false;
+    let mut capture: Option<&'static str> = None;
+    let mut current_href = None;
+    let mut current_etag = None;
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(event))
@@ -97,18 +102,49 @@ fn parse_carddav_multistatus(xml: &str) -> Result<Vec<Contact>> {
             {
                 in_address_data = true
             }
+            Ok(quick_xml::events::Event::Start(event))
+                if event.local_name().as_ref() == b"href" =>
+            {
+                capture = Some("href")
+            }
+            Ok(quick_xml::events::Event::Start(event))
+                if event.local_name().as_ref() == b"getetag" =>
+            {
+                capture = Some("etag")
+            }
             Ok(quick_xml::events::Event::End(event))
                 if event.local_name().as_ref() == b"address-data" =>
             {
                 in_address_data = false;
-                cards.extend(parse_vcards(&vcard));
+                for mut card in parse_vcards(&vcard) {
+                    card.href = current_href.take();
+                    card.etag = current_etag.take();
+                    cards.push(card);
+                }
                 vcard.clear();
+            }
+            Ok(quick_xml::events::Event::End(event))
+                if event.local_name().as_ref() == b"href"
+                    || event.local_name().as_ref() == b"getetag" =>
+            {
+                capture = None
             }
             Ok(quick_xml::events::Event::Text(event)) if in_address_data => {
                 if let Ok(text) = std::str::from_utf8(event.as_ref())
                     && let Ok(text) = quick_xml::escape::unescape(text)
                 {
                     vcard.push_str(&text);
+                }
+            }
+            Ok(quick_xml::events::Event::Text(event)) if capture.is_some() => {
+                if let Ok(raw) = std::str::from_utf8(event.as_ref())
+                    && let Ok(text) = quick_xml::escape::unescape(raw)
+                {
+                    match capture {
+                        Some("href") => current_href = Some(text.into_owned()),
+                        Some("etag") => current_etag = Some(text.into_owned()),
+                        _ => {}
+                    }
                 }
             }
             Ok(quick_xml::events::Event::CData(event)) if in_address_data => {
@@ -170,6 +206,8 @@ pub fn parse_vcards(input: &str) -> Vec<Contact> {
                 emails,
                 phones,
                 organization,
+                href: None,
+                etag: None,
                 vcard: format!("{}\nEND:VCARD", record.trim_end_matches('\n')),
             })
         })
@@ -269,11 +307,16 @@ mod tests {
 
     #[test]
     fn parses_carddav_multistatus_address_data() {
-        let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav"><d:response><d:propstat><d:prop><card:address-data>BEGIN:VCARD&#10;VERSION:3.0&#10;UID:9&#10;FN:Тест&#10;EMAIL:test@example.test&#10;END:VCARD</card:address-data></d:prop></d:propstat></d:response></d:multistatus>"#;
+        let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav"><d:response><d:href>/addressbook/user/contact.vcf</d:href><d:propstat><d:prop><d:getetag>"tag-1"</d:getetag><card:address-data>BEGIN:VCARD&#10;VERSION:3.0&#10;UID:9&#10;FN:Тест&#10;EMAIL:test@example.test&#10;END:VCARD</card:address-data></d:prop></d:propstat></d:response></d:multistatus>"#;
         let cards = parse_carddav_multistatus(xml).unwrap();
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].uid.as_deref(), Some("9"));
         assert_eq!(cards[0].name.as_deref(), Some("Тест"));
         assert_eq!(cards[0].emails, ["test@example.test"]);
+        assert_eq!(
+            cards[0].href.as_deref(),
+            Some("/addressbook/user/contact.vcf")
+        );
+        assert_eq!(cards[0].etag.as_deref(), Some("\"tag-1\""));
     }
 }
