@@ -29,6 +29,18 @@ pub struct AccountConfig {
     pub mail: MailConfig,
     pub calendar: CalendarConfig,
     pub disk: DiskConfig,
+    #[serde(default)]
+    pub contacts: ContactsConfig,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ContactsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_carddav_url")]
+    pub carddav_base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -142,10 +154,15 @@ impl AccountConfig {
                 rest_base_url: "https://cloud-api.yandex.net".to_string(),
                 credential_ref: input.disk_credential_ref,
             },
+            contacts: ContactsConfig::default(),
         }
     }
 }
 
 const fn default_version() -> u32 {
     1
+}
+
+fn default_carddav_url() -> String {
+    "https://carddav.yandex.ru".to_string()
 }

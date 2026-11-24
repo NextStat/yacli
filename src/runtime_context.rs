@@ -29,6 +29,12 @@ pub struct CalendarConnectionContext {
     pub caldav_base_url: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct ContactsConnectionContext {
+    pub email: String,
+    pub carddav_base_url: String,
+}
+
 #[derive(Clone, Copy)]
 enum CredentialReference<'a> {
     Env(&'a str),
@@ -207,6 +213,32 @@ pub fn resolve_calendar_private_context(
         CalendarConnectionContext {
             email: account.email.clone(),
             caldav_base_url: account.calendar.caldav_base_url.clone(),
+        },
+    ))
+}
+
+pub fn resolve_contacts_private_context(
+    account_name: Option<&str>,
+) -> Result<(String, String, ContactsConnectionContext)> {
+    let account_store = AccountStore::load()?;
+    let name = account_store.resolved_account_name(account_name)?;
+    let account = account_store.get_account(&name)?;
+    if !account.contacts.enabled {
+        return Err(YacliError::UnsupportedOperation(format!(
+            "contacts are not enabled for account {name}"
+        )));
+    }
+    let app_password = resolve_app_password_secret(
+        &name,
+        "contacts",
+        account.contacts.credential_ref.as_deref(),
+    )?;
+    Ok((
+        name,
+        app_password,
+        ContactsConnectionContext {
+            email: account.email.clone(),
+            carddav_base_url: account.contacts.carddav_base_url.clone(),
         },
     ))
 }
